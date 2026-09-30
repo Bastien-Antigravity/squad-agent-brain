@@ -1,0 +1,45 @@
+syntax = "proto3";
+
+package grpc_control;
+
+service SquadControlService {
+    rpc GetStatus(GetStatusRequest) returns (GetStatusResponse);
+    rpc RunCommand(RunCommandRequest) returns (RunCommandResponse);
+    rpc GetActiveMode(GetActiveModeRequest) returns (GetActiveModeResponse);
+    rpc SwitchMode(SwitchModeRequest) returns (SwitchModeResponse);
+}
+
+message GetStatusRequest {}
+
+message GetStatusResponse {
+    bool healthy = 1;
+    string status = 2;
+    string version = 3;
+    int64 timestamp = 4;
+}
+
+message RunCommandRequest {
+    string command = 1;
+    repeated string args = 2;
+}
+
+message RunCommandResponse {
+    bool success = 1;
+    string message = 2;
+    int64 timestamp = 3;
+}
+
+message GetActiveModeRequest {}
+
+message GetActiveModeResponse {
+    string mode = 1;
+}
+
+message SwitchModeRequest {
+    string mode = 1;
+}
+
+message SwitchModeResponse {
+    bool success = 1;
+    string message = 2;
+}

@@ -1,0 +1,35 @@
+# 🌍 Bastien-Antigravity Global GitIgnore Template
+
+# System Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+
+# IDEs & Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.fleet/
+.helix/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.env
+.venv/
+env/
+venv/
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+
+# Logs & Temp
+*.log
+logs/
+bin/

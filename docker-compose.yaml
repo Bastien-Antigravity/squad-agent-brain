@@ -1,0 +1,25 @@
+services:
+  base-scripts:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ghcr.io/bastien-antigravity/base-scripts:${TAG:-latest}
+    container_name: base-scripts
+    restart: unless-stopped
+    ports:
+      - "${HOST_IP:-127.0.0.1}:8085:8085"
+      - "${HOST_IP:-127.0.0.1}:8087:8087"
+    environment:
+      - BS_PORT=8085
+      - BS_GRPC_PORT=8087
+    volumes:
+      - ../:/app/obsidian-brain
+      - ./standalone.yaml:/app/standalone.yaml:ro
+    networks:
+      - teleremote-network
+    labels: [ com.centurylinklabs.watchtower.enable=true ]
+
+networks:
+  teleremote-network:
+    name: teleremote-network
+    external: true
