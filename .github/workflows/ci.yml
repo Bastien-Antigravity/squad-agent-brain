@@ -1,0 +1,12 @@
+# [FLEET-ARCHITECT] Continuous Integration
+name: Fleet CI
+on:
+  push:
+    branches: [ develop ]
+  pull_request:
+    branches: [ develop ]
+
+jobs:
+  fleet-ci:
+    uses: Bastien-Antigravity/fleet-operation-brain/.github/workflows/master-ci.yml@develop
+    secrets: inherit
