@@ -31,8 +31,8 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: |
-            ${{ env.REGISTRY }}/bastien-antigravity/squad-agent-brain
-            ${{ env.REGISTRY }}/bastien-antigravity/base-scripts
+            ${{ env.REGISTRY }}/Bastien-Antigravity/squad-agent-brain
+            ${{ env.REGISTRY }}/Bastien-Antigravity/base-scripts
           tags: |
             type=ref,event=branch
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
