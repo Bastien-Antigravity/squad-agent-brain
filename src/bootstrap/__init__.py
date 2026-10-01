@@ -78,6 +78,11 @@ logger = UniLog(
 )
 config.set_logger(logger)
 
+if config is None:
+    raise RuntimeError("08-Base-Scripts bootstrap failed to initialize configuration")
+if logger is None:
+    raise RuntimeError("08-Base-Scripts bootstrap failed to initialize UniLog logger")
+
 # 3. Lazy Database Schema and Tables Initialization
 try:
     from lib.pg_pool import get_pg_pool, resolve_schema_name

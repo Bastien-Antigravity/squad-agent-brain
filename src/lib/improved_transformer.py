@@ -33,18 +33,10 @@ class CodeTransformer:
 
     # -----------------------------------------------------------------------------
     def __init__(self, config: Optional[Any] = None, logger: Optional[Any] = None, name: Optional[str] = None):
-        if config is None:
-            try:
-                import src.bootstrap as bootstrap
-                config = getattr(bootstrap, "config", None)
-            except Exception:
-                config = None
-        if logger is None:
-            try:
-                import src.bootstrap as bootstrap
-                logger = getattr(bootstrap, "logger", None)
-            except Exception:
-                logger = None
+        if config is None or logger is None:
+            import src.bootstrap as bootstrap
+            config = config or bootstrap.config
+            logger = logger or bootstrap.logger
 
         self.config = config
         self.logger = logger
@@ -52,13 +44,9 @@ class CodeTransformer:
 
     # -----------------------------------------------------------------------------
     def _log(self, level: str, msg: str) -> None:
-        """Safely delegates logging to UniLog or standard stream."""
-        if self.logger and hasattr(self.logger, level):
-            getattr(self.logger, level)(f"{self.Name} : {msg}")
-        elif self.logger and hasattr(self.logger, "info"):
-            self.logger.info(f"[{level.upper()}] {self.Name} : {msg}")
-        else:
-            print(f"[{level.upper()}] {self.Name} : {msg}")
+        """Delegates logging directly to the UniLog engine."""
+        log_fn = getattr(self.logger, level, self.logger.info)
+        log_fn(f"{self.Name} : {msg}")
 
     # -----------------------------------------------------------------------------
     def transform(self, *, code: str, class_name: str = "GeneratedModule") -> str:
