@@ -33,6 +33,14 @@ def resolve_workspace_root() -> Path:
     for parent in [current] + list(current.parents):
         if (parent / "docker-deployment").exists() and (parent / "microservice-toolbox").exists():
             return parent
+        if (parent / "Bastien-Antigravity" / "docker-deployment").exists():
+            return parent / "Bastien-Antigravity"
+        try:
+            for s in parent.iterdir():
+                if s.is_dir() and (s / "docker-deployment").exists() and (s / "microservice-toolbox").exists():
+                    return s
+        except Exception:
+            pass
     return Path.cwd()
 
 # -----------------------------------------------------------------------------
@@ -980,10 +988,15 @@ clean:
     create_file(qo_dir / ".aiignore", "*\n", dry_run)
 
     # 8. standalone.yaml symlink
-    create_symlink(target_dir / "standalone.yaml", "../docker-deployment/modes/local/config/native.yaml", dry_run)
+    workspace_root = resolve_workspace_root()
+    native_yaml = workspace_root / "docker-deployment" / "modes" / "local" / "config" / "native.yaml"
+    if native_yaml.exists():
+        rel_link = os.path.relpath(native_yaml, target_dir)
+        create_symlink(target_dir / "standalone.yaml", rel_link, dry_run)
+    else:
+        create_symlink(target_dir / "standalone.yaml", "../docker-deployment/modes/local/config/native.yaml", dry_run)
 
     # 9. .github CI/CD Workflows and Dependabot (from 05-Fleet-Operation/04-Templates)
-    workspace_root = resolve_workspace_root()
     templates_dir = workspace_root / "obsidian-brain" / "05-Fleet-Operation" / "04-Templates"
 
     ci_template_path = templates_dir / "Microservice" / "ci.yml"
@@ -1094,6 +1107,7 @@ def main() -> None:
     parser.add_argument("--port", "-p", type=int, default=8090, help="Default capability listen port")
     parser.add_argument("--desc", "-d", default="Ecosystem microservice component", help="Short mission description")
     parser.add_argument("--dest", help="Destination path (defaults to ../<name>)")
+    parser.add_argument("--brain", help="Target knowledge brain directory (defaults to domain brain or obsidian-brain)")
     parser.add_argument("--dry-run", action="store_true", help="Preview file fabrication without writing to disk")
 
     args = parser.parse_args()
@@ -1112,7 +1126,14 @@ def main() -> None:
 
     workspace_root = resolve_workspace_root()
     target_dir = Path(args.dest).resolve() if args.dest else workspace_root / name
-    brain_dir = workspace_root / "obsidian-brain"
+    if args.brain:
+        brain_dir = Path(args.brain).resolve()
+    elif (target_dir.parent / "trading-brain").exists():
+        brain_dir = target_dir.parent / "trading-brain"
+    elif (Path.cwd() / "02-Business-BDD").exists():
+        brain_dir = Path.cwd()
+    else:
+        brain_dir = workspace_root / "obsidian-brain"
 
     print(f"\n🚀 Fabricating microservice '{name}' ({lang}) at {target_dir}...")
 

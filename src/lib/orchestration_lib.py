@@ -87,7 +87,16 @@ def resolve_vault_and_workspace(script_file: str) -> Tuple[Path, Path]:
         if not vault_root:
             vault_root = current
             
-    workspace_root = vault_root.parent
+    workspace_root = None
+    for p in [vault_root] + list(vault_root.parents):
+        if (p / "docker-deployment").exists() and (p / "microservice-toolbox").exists():
+            workspace_root = p
+            break
+        if (p / "Bastien-Antigravity" / "docker-deployment").exists():
+            workspace_root = p / "Bastien-Antigravity"
+            break
+    if not workspace_root:
+        workspace_root = vault_root.parent
     return vault_root, workspace_root
 
 # -----------------------------------------------------------------------------

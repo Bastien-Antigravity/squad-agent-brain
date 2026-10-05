@@ -12,6 +12,8 @@ services:
     environment:
       - BS_PORT=8085
       - BS_GRPC_PORT=8087
+      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN:-}
+      - DISCORD_CHANNEL_ID=${DISCORD_CHANNEL_ID:-}
     volumes:
       - ../:/app/obsidian-brain
       - ./standalone.yaml:/app/standalone.yaml:ro

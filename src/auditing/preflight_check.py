@@ -129,6 +129,8 @@ def _check_mode_consistency() -> Tuple[str, List[str]]:
     
     session_state_path = VAULT_DIR / "00-AI-Orchestration" / "AI-Session-State.md"
     mode_manual_path = VAULT_DIR / "00-AI-Orchestration" / "Config" / "MODE-MANUAL.md"
+    if not mode_manual_path.exists():
+        mode_manual_path = VAULT_DIR / "00-AI-Orchestration" / "MODE-MANUAL.md"
     
     if not session_state_path.exists() or not mode_manual_path.exists():
         messages.append("Mode files not found — skipping consistency check.")
@@ -180,8 +182,12 @@ def _check_inventory_portability() -> Tuple[str, List[str]]:
     # Updated path to match submodule structure
     inventory_path = VAULT_DIR / "05-Fleet-Operation" / "00-Repo-Control" / "inventory.json"
     if not inventory_path.exists():
-        messages.append("inventory.json not found — skipping portability check.")
-        return "YELLOW", messages
+        fallback = WORKSPACE_ROOT / "obsidian-brain" / "05-Fleet-Operation" / "00-Repo-Control" / "inventory.json"
+        if fallback.exists():
+            inventory_path = fallback
+        else:
+            messages.append("inventory.json not found — skipping portability check.")
+            return "YELLOW", messages
     
     import json
     with open(inventory_path, "r", encoding="utf-8") as f:
@@ -225,18 +231,20 @@ def _check_essential_files() -> Tuple[str, List[str]]:
     Verifies that critical ecosystem files exist.
     """
     messages = []
+    mode_manual_ok = (VAULT_DIR / "00-AI-Orchestration" / "Config" / "MODE-MANUAL.md").exists() or (VAULT_DIR / "00-AI-Orchestration" / "MODE-MANUAL.md").exists()
+    inv_path = VAULT_DIR / "05-Fleet-Operation" / "00-Repo-Control" / "inventory.json"
+    if not inv_path.exists():
+        inv_path = WORKSPACE_ROOT / "obsidian-brain" / "05-Fleet-Operation" / "00-Repo-Control" / "inventory.json"
+    
     essential = [
-        ("AI-Init.md", VAULT_DIR / "00-AI-Orchestration" / "AI-Init.md"),
-        ("AI-Session-State.md", VAULT_DIR / "00-AI-Orchestration" / "AI-Session-State.md"),
-        ("MODE-MANUAL.md", VAULT_DIR / "00-AI-Orchestration" / "Config" / "MODE-MANUAL.md"),
-        ("Ecosystem-Map-MOC.md", VAULT_DIR / "Ecosystem-Map-MOC.md"),
-        ("inventory.json", VAULT_DIR / "05-Fleet-Operation" / "00-Repo-Control" / "inventory.json"),
+        ("AI-Init.md", (VAULT_DIR / "00-AI-Orchestration" / "AI-Init.md").exists()),
+        ("AI-Session-State.md", (VAULT_DIR / "00-AI-Orchestration" / "AI-Session-State.md").exists()),
+        ("MODE-MANUAL.md", mode_manual_ok),
+        ("Ecosystem-Map-MOC.md", (VAULT_DIR / "Ecosystem-Map-MOC.md").exists()),
+        ("inventory.json", inv_path.exists()),
     ]
     
-    missing = []
-    for name, path in essential:
-        if not path.exists():
-            missing.append(name)
+    missing = [name for name, ok in essential if not ok]
     
     if missing:
         messages.append("Missing essential files: {0}".format(", ".join(missing)))
@@ -323,8 +331,12 @@ def _check_manifest_elements() -> Tuple[str, List[str]]:
     messages = []
     manifest_path = VAULT_DIR / "00-AI-Orchestration" / "Config" / "process-manifest.json"
     if not manifest_path.exists():
-        messages.append("process-manifest.json not found.")
-        return "RED", messages
+        fallback = WORKSPACE_ROOT / "obsidian-brain" / "00-AI-Orchestration" / "Config" / "process-manifest.json"
+        if fallback.exists():
+            manifest_path = fallback
+        else:
+            messages.append("process-manifest.json not found.")
+            return "RED", messages
 
     import json
     try:
@@ -346,7 +358,9 @@ def _check_manifest_elements() -> Tuple[str, List[str]]:
                 total_checked += 1
                 full_path = VAULT_DIR / assoc_file
                 if not full_path.exists():
-                    missing_files.append("{0} ({1}): missing {2}".format(name, category, assoc_file))
+                    fallback_path = WORKSPACE_ROOT / "obsidian-brain" / assoc_file
+                    if not fallback_path.exists():
+                        missing_files.append("{0} ({1}): missing {2}".format(name, category, assoc_file))
 
     if missing_files:
         messages.append("Ecosystem drift: {0} manifest elements have missing files:".format(len(missing_files)))

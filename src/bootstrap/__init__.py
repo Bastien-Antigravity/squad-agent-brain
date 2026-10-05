@@ -21,15 +21,21 @@ from pathlib import Path
 # 1. Path & Virtual Environment Bootstrapping
 # Inject microservice-toolbox path dynamically so we can import bootstrap_microservice
 _self_dir = Path(__file__).resolve()
-_workspace_root = None
+_toolbox_env = Path(sys.path[0]).parent if "MICROSERVICE_TOOLBOX_PATH" in sys.path else None
 for parent in [_self_dir] + list(_self_dir.parents):
     if (parent / "microservice-toolbox").exists():
         _workspace_root = parent
+        break
+    if (parent / "Bastien-Antigravity" / "microservice-toolbox").exists():
+        _workspace_root = parent / "Bastien-Antigravity"
         break
 if not _workspace_root:
     for p in [Path.cwd()] + list(Path.cwd().parents):
         if (p / "microservice-toolbox").exists():
             _workspace_root = p
+            break
+        if (p / "Bastien-Antigravity" / "microservice-toolbox").exists():
+            _workspace_root = p / "Bastien-Antigravity"
             break
 if not _workspace_root:
     _workspace_root = _self_dir.parent.parent.parent.parent.parent

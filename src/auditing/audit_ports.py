@@ -128,7 +128,11 @@ def load_registry_ports(vault_root: Path) -> Tuple[Path, Dict[str, Any], Dict[st
     """Loads services from service-registry.json."""
     registry_path = vault_root / "05-Fleet-Operation" / "00-Repo-Control" / "service-registry.json"
     if not registry_path.exists():
-        raise FileNotFoundError(f"service-registry.json not found: {registry_path}")
+        fallback = WORKSPACE_ROOT / "obsidian-brain" / "05-Fleet-Operation" / "00-Repo-Control" / "service-registry.json"
+        if fallback.exists():
+            registry_path = fallback
+        else:
+            raise FileNotFoundError(f"service-registry.json not found: {registry_path}")
         
     with open(registry_path, "r", encoding="utf-8") as f:
         data = json.load(f)

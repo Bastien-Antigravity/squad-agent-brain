@@ -90,7 +90,7 @@ def scaffold_brain(target_name: str, target_path: Path, vault_root: Path, dry_ru
         else:
             d.mkdir(parents=True, exist_ok=True)
 
-    # 2. Copy "DNA" (Role Prompts and Base-Scripts) from canonical vault root
+    # 2. Copy "DNA" (Role Prompts, Base-Scripts, Governance Config, Repo Control & Tech Stack)
     logger.info("ScaffoldNewBrain : Copying AI Squad DNA...")
     role_prompts_src = vault_root / "07-Core-KMS" / "Role-Prompts"
     if role_prompts_src.exists():
@@ -113,11 +113,46 @@ def scaffold_brain(target_name: str, target_path: Path, vault_root: Path, dry_ru
                 ignore=shutilIgnorePatterns(".venv*", "__pycache__", "*.pyc", ".pytest_cache*", ".git*")
             )
 
+    config_src = vault_root / "00-AI-Orchestration" / "Config"
+    if config_src.exists():
+        dest_config = target_path / "00-AI-Orchestration" / "Config"
+        if dry_run:
+            logger.info(f"   [DRY-RUN] Would copy {config_src} -> {dest_config}")
+        else:
+            shutilCopytree(config_src, dest_config, dirs_exist_ok=True)
+
+    repo_control_src = vault_root / "05-Fleet-Operation" / "00-Repo-Control"
+    if repo_control_src.exists():
+        dest_repo_control = target_path / "05-Fleet-Operation" / "00-Repo-Control"
+        if dry_run:
+            logger.info(f"   [DRY-RUN] Would copy {repo_control_src} -> {dest_repo_control}")
+        else:
+            shutilCopytree(repo_control_src, dest_repo_control, dirs_exist_ok=True)
+
+    tech_stack_src = vault_root / "03-Tech-Stack"
+    if tech_stack_src.exists():
+        dest_tech_stack = target_path / "03-Tech-Stack"
+        if dry_run:
+            logger.info(f"   [DRY-RUN] Would copy {tech_stack_src} -> {dest_tech_stack}")
+        else:
+            shutilCopytree(tech_stack_src, dest_tech_stack, dirs_exist_ok=True)
+
     # 3. Create Root Ecosystem Files
     logger.info("ScaffoldNewBrain : Creating root ecosystem files...")
     
     # standalone.yaml symlink
-    create_symlink(target_path / "standalone.yaml", "../docker-deployment/modes/local/config/native.yaml", dry_run)
+    native_yaml = vault_root.parent / "docker-deployment" / "modes" / "local" / "config" / "native.yaml"
+    if not native_yaml.exists():
+        for p in [vault_root] + list(vault_root.parents):
+            candidate = p / "docker-deployment" / "modes" / "local" / "config" / "native.yaml"
+            if candidate.exists():
+                native_yaml = candidate
+                break
+    if native_yaml.exists():
+        rel_link = os.path.relpath(native_yaml, target_path)
+        create_symlink(target_path / "standalone.yaml", rel_link, dry_run)
+    else:
+        create_symlink(target_path / "standalone.yaml", "../docker-deployment/modes/local/config/native.yaml", dry_run)
 
     # VERSION.txt
     create_file(target_path / "VERSION.txt", "1.0.0\n", dry_run)
@@ -330,6 +365,12 @@ Human-readable overview and quick-start reference for this domain vault.
     if not dry_run:
         env = os.environ.copy()
         toolbox_py = vault_root.parent / "microservice-toolbox" / "python"
+        if not toolbox_py.exists():
+            for p in [vault_root] + list(vault_root.parents):
+                candidate = p / "microservice-toolbox" / "python"
+                if candidate.exists():
+                    toolbox_py = candidate
+                    break
         scripts_dir = target_path / "08-Base-Scripts"
         pythonpath_entries = [str(scripts_dir), str(scripts_dir / "src")]
         if toolbox_py.exists():
