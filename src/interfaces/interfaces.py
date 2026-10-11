@@ -97,10 +97,10 @@ class LocalEventBus:
     def subscribe(cls, topic: str, callback: Callable[[Dict[str, Any]], Awaitable[None]], role: Optional[str] = None):
         subs = cls._get_subscribers()
         topics_to_sub = []
-        if topic == "antigravity.squad.chat" and role:
+        if topic in ("antigravity.squad.chat", "bastien-antigravity.squad.chat") and role:
             topics_to_sub.append(f"{topic}.broadcast")
             topics_to_sub.append(f"{topic}.agent.{role}")
-        elif topic == "antigravity.squad.chat" and not role:
+        elif topic in ("antigravity.squad.chat", "bastien-antigravity.squad.chat") and not role:
             topics_to_sub.append(f"{topic}.*")
         else:
             topics_to_sub.append(topic)
@@ -121,20 +121,20 @@ class LocalEventBus:
 
         # Map targets for local fallback
         targets = []
-        if topic == "antigravity.squad.chat":
+        if topic in ("antigravity.squad.chat", "bastien-antigravity.squad.chat"):
             content = payload.get("content", "").lower()
             sender = payload.get("sender")
             
             tags = re.findall(r'@([a-zA-Z0-9_-]+)', content)
             for tag in tags:
                 role = tag.lower()
-                targets.append(f"antigravity.squad.chat.agent.{role}")
+                targets.append(f"{topic}.agent.{role}")
                 
             if sender == "user" and "orchestrator" not in tags:
-                targets.append("antigravity.squad.chat.agent.orchestrator")
+                targets.append(f"{topic}.agent.orchestrator")
                 
             if not targets:
-                targets.append("antigravity.squad.chat.broadcast")
+                targets.append(f"{topic}.broadcast")
         else:
             targets = [topic]
 
@@ -144,9 +144,9 @@ class LocalEventBus:
             callbacks_to_trigger.extend(subs.get(target, []))
             
         # Also trigger subscribers of wildcard or base topic
-        if topic == "antigravity.squad.chat":
-            callbacks_to_trigger.extend(subs.get("antigravity.squad.chat.*", []))
-            callbacks_to_trigger.extend(subs.get("antigravity.squad.chat", []))
+        if topic in ("antigravity.squad.chat", "bastien-antigravity.squad.chat"):
+            callbacks_to_trigger.extend(subs.get(f"{topic}.*", []))
+            callbacks_to_trigger.extend(subs.get(topic, []))
 
         # Deduplicate callbacks
         seen_cbs = set()
@@ -180,7 +180,7 @@ class DualSquadEventBus(SquadEventBus):
             self.cfg = NatsConfig(
                 servers=[nats_cfg],
                 client_id="python_agent_squad",
-                subject_prefix="antigravity",
+                subject_prefix="bastien-antigravity",
                 connect_timeout=0.5,
                 reconnect_wait=1.0,
                 max_reconnects=1
@@ -214,20 +214,20 @@ class DualSquadEventBus(SquadEventBus):
         if self.nats_connected:
             # Determine NATS subjects to publish to
             targets = []
-            if topic == "antigravity.squad.chat":
+            if topic in ("antigravity.squad.chat", "bastien-antigravity.squad.chat"):
                 content = payload.get("content", "").lower()
                 sender = payload.get("sender")
                 
                 tags = re.findall(r'@([a-zA-Z0-9_-]+)', content)
                 for tag in tags:
                     role = tag.lower()
-                    targets.append(f"antigravity.squad.chat.agent.{role}")
+                    targets.append(f"{topic}.agent.{role}")
                     
                 if sender == "user" and "orchestrator" not in tags:
-                    targets.append("antigravity.squad.chat.agent.orchestrator")
+                    targets.append(f"{topic}.agent.orchestrator")
                     
                 if not targets:
-                    targets.append("antigravity.squad.chat.broadcast")
+                    targets.append(f"{topic}.broadcast")
             else:
                 targets = [topic]
 
@@ -260,10 +260,10 @@ class DualSquadEventBus(SquadEventBus):
                     self.logger.error(f"SquadEventBus subscriber failed to process NATS payload: {e}")
             
             topics_to_sub = []
-            if topic == "antigravity.squad.chat" and role:
+            if topic in ("antigravity.squad.chat", "bastien-antigravity.squad.chat") and role:
                 topics_to_sub.append(f"{topic}.broadcast")
                 topics_to_sub.append(f"{topic}.agent.{role}")
-            elif topic == "antigravity.squad.chat" and not role:
+            elif topic in ("antigravity.squad.chat", "bastien-antigravity.squad.chat") and not role:
                 topics_to_sub.append(f"{topic}.*")
             else:
                 topics_to_sub.append(topic)

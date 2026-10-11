@@ -912,7 +912,7 @@ def start_engine() -> None:
         else:
             nats_servers = []
     client_id = nats_cap.get("client_id", "python_agent_squad")
-    subject_prefix = nats_cap.get("subject_prefix", "antigravity")
+    subject_prefix = nats_cap.get("subject_prefix", "bastien-antigravity")
     
     nats_cfg = NatsConfig(
         servers=nats_servers,
