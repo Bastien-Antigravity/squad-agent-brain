@@ -7,8 +7,8 @@ tags:
 - '#type/overview'
 - '#state/active'
 - '#zone/3-fleet'
+- '#ai/ignore'
 ---
-
 # 🏗️ Architecture Overview: base-scripts
 
 `08-Base-Scripts` is the operational command-and-control (C2) engine room, AI squad orchestrator, and fleet governance automation hub for the Bastien-Antigravity ecosystem.

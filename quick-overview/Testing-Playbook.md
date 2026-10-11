@@ -7,8 +7,8 @@ tags:
 - '#type/playbook'
 - '#state/active'
 - '#zone/3-fleet'
+- '#ai/ignore'
 ---
-
 # 🧪 Testing Playbook: base-scripts
 
 ## Running Unit Tests

@@ -7,8 +7,8 @@ tags:
 - '#type/overview'
 - '#state/active'
 - '#zone/3-fleet'
+- '#ai/ignore'
 ---
-
 # 📌 General & Miscellaneous: base-scripts
 
 ## Virtual Environment

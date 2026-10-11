@@ -96,7 +96,9 @@ def register_mfe_with_web_interface(config, logger, bs_ip, bs_port):
     req_data = json.dumps(payload).encode("utf-8")
     
     logger.info(f"OpenMFE: Starting base-scripts auto-registration loop to {reg_url}")
-    for i in range(15):
+    backoff = 2.0
+    max_backoff = 15.0
+    while True:
         try:
             req = urllib.request.Request(
                 reg_url, 
@@ -110,11 +112,11 @@ def register_mfe_with_web_interface(config, logger, bs_ip, bs_port):
                     logger.info(f"OpenMFE: Successfully registered base-scripts MFE at {reg_url}")
                     return
                 else:
-                    logger.warning(f"OpenMFE: Registration attempt {i+1} failed with status {status}")
+                    logger.warning(f"OpenMFE: Registration attempt failed with status {status}; retrying in {backoff:.1f}s...")
         except Exception as e:
-            logger.warning(f"OpenMFE: Registration attempt {i+1} failed: {e}")
-        time.sleep(3)
-    logger.warning("OpenMFE: Failed to register base-scripts MFE after 15 attempts")
+            logger.warning(f"OpenMFE: Registration attempt failed ({e}); retrying in {backoff:.1f}s...")
+        time.sleep(backoff)
+        backoff = min(backoff * 1.5, max_backoff)
 
 # -----------------------------------------------------------------------------
 
