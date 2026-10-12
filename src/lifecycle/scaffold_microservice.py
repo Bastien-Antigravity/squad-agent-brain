@@ -833,7 +833,7 @@ status: active
 > "1. Read the ecosystem map in **[[Ecosystem-Map-MOC]]**."
 > "2. Load project constraints from **[[AI-Project-DNA]]**."
 > "3. Restore session state from **[[AI-Session-State]]**."
-> "4. **Sentinel Audit**: Run `python3 08-Base-Scripts/main.py preflight-check` and resolve any drift."
+> "4. **Sentinel Audit**: Run `python3 08-Squad-Agent/main.py preflight-check` and resolve any drift."
 > "5. **Squad Protocol**: You are now the **Lead Developer**. Identify and hire the required **Specialists** from `07-Core-KMS/Role-Prompts/03-Developer/Squad/`."
 """
     create_file(target_dir / "AI-Init.md", init_md, dry_run)
@@ -1232,7 +1232,7 @@ def main() -> None:
          "master_branch": "develop",
          "repo_type": "level1-microservice"
        }}
-       (Or run: python3 obsidian-brain/08-Base-Scripts/main.py build-inventory)
+       (Or run: python3 obsidian-brain/08-Squad-Agent/main.py build-inventory)
 """)
     print("8. [UI & Remote Integration] (Optional / If Interactive):")
     print("   - OpenMFE: Auto-registers with web-interface at http://127.0.0.1:5000/api/v1/register")

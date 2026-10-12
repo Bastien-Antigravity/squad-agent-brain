@@ -43,11 +43,11 @@ else
 fi
 
 if [ -f "./.venv/bin/python3" ]; then
-    ./.venv/bin/python3 ./08-Base-Scripts/main.py persona-extractor --daemon > /dev/null 2>&1 &
+    ./.venv/bin/python3 ./08-Squad-Agent/main.py persona-extractor --daemon > /dev/null 2>&1 &
 elif [ -f "./.venv/Scripts/python.exe" ]; then
-    ./.venv/Scripts/python.exe ./08-Base-Scripts/main.py persona-extractor --daemon > /dev/null 2>&1 &
+    ./.venv/Scripts/python.exe ./08-Squad-Agent/main.py persona-extractor --daemon > /dev/null 2>&1 &
 else
-    python3 ./08-Base-Scripts/main.py persona-extractor --daemon > /dev/null 2>&1 &
+    python3 ./08-Squad-Agent/main.py persona-extractor --daemon > /dev/null 2>&1 &
 fi
 """
 
@@ -56,15 +56,15 @@ fi
 cd "$(dirname "$0")/../.."
 
 if [ -f "./09-RAG-Engine/.venv/bin/python3" ]; then
-    ./09-RAG-Engine/.venv/bin/python3 ./08-Base-Scripts/main.py ensure-frontmatter --check
+    ./09-RAG-Engine/.venv/bin/python3 ./08-Squad-Agent/main.py ensure-frontmatter --check
 elif [ -f "./09-RAG-Engine/.venv/Scripts/python.exe" ]; then
-    ./09-RAG-Engine/.venv/Scripts/python.exe ./08-Base-Scripts/main.py ensure-frontmatter --check
+    ./09-RAG-Engine/.venv/Scripts/python.exe ./08-Squad-Agent/main.py ensure-frontmatter --check
 elif [ -f "./.venv/bin/python3" ]; then
-    ./.venv/bin/python3 ./08-Base-Scripts/main.py ensure-frontmatter --check
+    ./.venv/bin/python3 ./08-Squad-Agent/main.py ensure-frontmatter --check
 elif [ -f "./.venv/Scripts/python.exe" ]; then
-    ./.venv/Scripts/python.exe ./08-Base-Scripts/main.py ensure-frontmatter --check
+    ./.venv/Scripts/python.exe ./08-Squad-Agent/main.py ensure-frontmatter --check
 else
-    python3 ./08-Base-Scripts/main.py ensure-frontmatter --check
+    python3 ./08-Squad-Agent/main.py ensure-frontmatter --check
 fi
 """
 

@@ -9,9 +9,9 @@ tags:
 - '#zone/3-fleet'
 - '#ai/ignore'
 ---
-# 🕹️ Bastien-Antigravity: Base Scripts
+# 🕹️ Bastien-Antigravity: Squad Agent
 
-This directory contains the core operational scripts for the Bastien-Antigravity AI Squad and Knowledge Management System (KMS). It acts as the "Engine Room" for the entire ecosystem.
+This directory contains the core operational scripts and AI squad orchestration daemon for the Bastien-Antigravity AI Squad and Knowledge Management System (KMS). It acts as the "Engine Room" for the entire ecosystem.
 
 ---
 
@@ -27,7 +27,7 @@ pip install -r requirements.txt
 ### 2. Launch the AI Squad
 The primary entry point is the unified CLI router `main.py`. It initializes the environment, synchronizes personas, and launches your preferred AI client.
 ```bash
-python3 08-Base-Scripts/main.py start-squad
+python3 08-Squad-Agent/main.py start-squad
 ```
 
 ---
@@ -38,21 +38,21 @@ All tools are unified under the `main.py` router:
 
 | Command | Purpose |
 | :--- | :--- |
-| `python3 08-Base-Scripts/main.py start-squad` | **Main Orchestrator**. Handles pre-session audits, role sync, event bus, and launches daemons. |
-| `python3 08-Base-Scripts/main.py preflight-check` | **Preflight Gate**. Verifies essential files, submodules, inventory, modes, and port drift. |
-| `python3 08-Base-Scripts/main.py audit-ports` | **Port Invariant Auditor**. Checks 4 architectural layers for zero port drift. |
-| `python3 08-Base-Scripts/main.py validate-compliance` | **Mechanical Code Compliance**. Verifies shebang/encoding, Triple-Block headers, dividers, ports, and mock pollution. |
-| `python3 08-Base-Scripts/main.py format-compliance` | **Auto-Compliance Refactorer**. AST-based transformer repairing headers, dividers, and imports (`--fix`). |
-| `python3 08-Base-Scripts/main.py build-inventory` | **Inventory Builder**. Scans workspace repositories and regenerates `inventory.json`. |
-| `python3 08-Base-Scripts/main.py fleet-commander` | **Fleet Manager**. Performs mass Git operations, status inspection, and branch tracking across fleet. |
-| `python3 08-Base-Scripts/main.py switch-mode` | **Protocol Switcher**. Atomically toggles between Spec-First, Labs, and Fleet modes. |
-| `python3 08-Base-Scripts/main.py check-coherence` | **Integrity Auditor**. Ensures runtime agent skills are 100% coherent with vault prompts. |
-| `python3 08-Base-Scripts/main.py ensure-frontmatter` | **Doc Taxonomist**. Enforces YAML frontmatter schema and tag taxonomy on markdown notes. |
-| `python3 08-Base-Scripts/main.py persona-extractor` | **RAG Telemetry Helper**. Scans codebase metrics (Go, Rust, Python) for AI context. |
-| `python3 08-Base-Scripts/main.py knowledge-compressor` | **Memory Distiller**. Distills recent session logs into structured decision patterns. |
-| `python3 08-Base-Scripts/main.py scaffold-microservice` | **Scaffolder**. Generates standard-compliant Go, Rust, or Python microservices with full scaffolding. |
-| `python3 08-Base-Scripts/main.py scaffold-new-brain` | **Vault Generator**. Creates new repositories or vault structures following standard DNA. |
-| `python3 08-Base-Scripts/main.py joint-audit-purger` | **Dark Matter Purger**. Identifies orphan notes without links and generates deletion checklists. |
+| `python3 08-Squad-Agent/main.py start-squad` | **Main Orchestrator**. Handles pre-session audits, role sync, event bus, and launches daemons. |
+| `python3 08-Squad-Agent/main.py preflight-check` | **Preflight Gate**. Verifies essential files, submodules, inventory, modes, and port drift. |
+| `python3 08-Squad-Agent/main.py audit-ports` | **Port Invariant Auditor**. Checks 4 architectural layers for zero port drift. |
+| `python3 08-Squad-Agent/main.py validate-compliance` | **Mechanical Code Compliance**. Verifies shebang/encoding, Triple-Block headers, dividers, ports, and mock pollution. |
+| `python3 08-Squad-Agent/main.py format-compliance` | **Auto-Compliance Refactorer**. AST-based transformer repairing headers, dividers, and imports (`--fix`). |
+| `python3 08-Squad-Agent/main.py build-inventory` | **Inventory Builder**. Scans workspace repositories and regenerates `inventory.json`. |
+| `python3 08-Squad-Agent/main.py fleet-commander` | **Fleet Manager**. Performs mass Git operations, status inspection, and branch tracking across fleet. |
+| `python3 08-Squad-Agent/main.py switch-mode` | **Protocol Switcher**. Atomically toggles between Spec-First, Labs, and Fleet modes. |
+| `python3 08-Squad-Agent/main.py check-coherence` | **Integrity Auditor**. Ensures runtime agent skills are 100% coherent with vault prompts. |
+| `python3 08-Squad-Agent/main.py ensure-frontmatter` | **Doc Taxonomist**. Enforces YAML frontmatter schema and tag taxonomy on markdown notes. |
+| `python3 08-Squad-Agent/main.py persona-extractor` | **RAG Telemetry Helper**. Scans codebase metrics (Go, Rust, Python) for AI context. |
+| `python3 08-Squad-Agent/main.py knowledge-compressor` | **Memory Distiller**. Distills recent session logs into structured decision patterns. |
+| `python3 08-Squad-Agent/main.py scaffold-microservice` | **Scaffolder**. Generates standard-compliant Go, Rust, or Python microservices with full scaffolding. |
+| `python3 08-Squad-Agent/main.py scaffold-new-brain` | **Vault Generator**. Creates new repositories or vault structures following standard DNA. |
+| `python3 08-Squad-Agent/main.py joint-audit-purger` | **Dark Matter Purger**. Identifies orphan notes without links and generates deletion checklists. |
 
 ---
 

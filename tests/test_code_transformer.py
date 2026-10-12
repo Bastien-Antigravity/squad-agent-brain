@@ -19,7 +19,7 @@ import tempfile
 import sys
 from pathlib import Path
 
-# Add 08-Base-Scripts to sys.path
+# Add 08-Squad-Agent to sys.path
 _self_dir = Path(__file__).resolve().parent.parent
 if str(_self_dir) not in sys.path:
     sys.path.insert(0, str(_self_dir))

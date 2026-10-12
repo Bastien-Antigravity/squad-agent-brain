@@ -4,7 +4,7 @@
 """
 ESSENTIAL PROCESS:
 Scans the workspace and reliably generates inventory.json for the Fleet Manager.
-Native first-class Engine Room implementation in 08-Base-Scripts.
+Native first-class Engine Room implementation in 08-Squad-Agent.
 
 DATA FLOW:
 1. Resolves vault & workspace roots via orchestration_lib.

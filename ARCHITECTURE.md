@@ -9,9 +9,9 @@ tags:
 - '#zone/3-fleet'
 ---
 
-# 🏗️ Architecture: Base Scripts
+# 🏗️ Architecture: Squad Agent
 
-The `08-Base-Scripts` repository follows a **Command-and-Control (C2)** architecture pattern designed for high-autonomy AI orchestration, compliance enforcement, and fleet management.
+The `08-Squad-Agent` repository follows a **Command-and-Control (C2)** architecture pattern designed for high-autonomy AI orchestration, compliance enforcement, and fleet management.
 
 ---
 

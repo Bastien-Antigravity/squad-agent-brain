@@ -3,7 +3,7 @@
 
 """
 ESSENTIAL PROCESS:
-Root-level environment bootstrapper and singleton manager for 08-Base-Scripts.
+Root-level environment bootstrapper and singleton manager for 08-Squad-Agent.
 Sets up system path, redirects virtualenv execution, and instantiates the application 
 configuration loader and the UniLog logging engine exactly once.
 
@@ -22,6 +22,7 @@ from pathlib import Path
 # Inject microservice-toolbox path dynamically so we can import bootstrap_microservice
 _self_dir = Path(__file__).resolve()
 _toolbox_env = Path(sys.path[0]).parent if "MICROSERVICE_TOOLBOX_PATH" in sys.path else None
+_workspace_root = None
 for parent in [_self_dir] + list(_self_dir.parents):
     if (parent / "microservice-toolbox").exists():
         _workspace_root = parent
@@ -45,7 +46,7 @@ if _toolbox_path.exists() and str(_toolbox_path) not in sys.path:
     sys.path.insert(0, str(_toolbox_path))
 
 from microservice_toolbox.utils.bootstrap import bootstrap_microservice
-bootstrap_microservice(__file__, app_name="base_scripts")
+bootstrap_microservice(__file__, app_name="squad_agent")
 
 # -----------------------------------------------------------------------------
 # 2. Singleton Instantiation (Config & Logger)
@@ -67,12 +68,12 @@ _lvl = "debug" if ("-v" in sys.argv or "--verbose" in sys.argv) else "info"
 _config_handle = getattr(config, "_handle", 0) or 0
 
 # Determine app_name matching the command name argument
-_app_name = "base_scripts"
+_app_name = "squad_agent"
 if len(sys.argv) >= 2:
     # First argument is the subcommand when routing through main.py
     cmd_arg = sys.argv[1].replace("-", "_").lower()
     if cmd_arg != "main.py":
-        _app_name = f"base_scripts_{cmd_arg}"
+        _app_name = f"squad_agent_{cmd_arg}"
 
 from microservice_toolbox.logger import UniLog
 logger = UniLog(

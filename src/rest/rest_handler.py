@@ -43,7 +43,7 @@ class SquadRESTHandler:
         token = os.environ.get("GITHUB_TOKEN", "").strip()
         if not token and hasattr(self.controller, "config") and self.controller.config:
             try:
-                cap_token = getattr(self.controller.config, "data", {}).get("capabilities", {}).get("base_scripts", {}).get("github", {}).get("token", "")
+                cap_token = getattr(self.controller.config, "data", {}).get("capabilities", {}).get("squad_agent", {}).get("github", {}).get("token", "")
                 if isinstance(cap_token, str) and not cap_token.startswith("${"):
                     token = cap_token.strip()
             except Exception:
@@ -57,7 +57,7 @@ class SquadRESTHandler:
         user = os.environ.get("GITHUB_USER", "").strip()
         if not user and hasattr(self.controller, "config") and self.controller.config:
             try:
-                cap_user = getattr(self.controller.config, "data", {}).get("capabilities", {}).get("base_scripts", {}).get("github", {}).get("user", "")
+                cap_user = getattr(self.controller.config, "data", {}).get("capabilities", {}).get("squad_agent", {}).get("github", {}).get("user", "")
                 if isinstance(cap_user, str) and not cap_user.startswith("${"):
                     user = cap_user.strip()
             except Exception:

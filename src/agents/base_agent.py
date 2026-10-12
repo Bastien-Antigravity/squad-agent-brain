@@ -152,7 +152,7 @@ class BaseAgent:
         self.model_name = os.environ.get("GEMINI_MODEL")
         
         if self.config and hasattr(self.config, "data") and isinstance(self.config.data, dict):
-            cap = self.config.data.get("capabilities", {}).get("base_scripts", {})
+            cap = self.config.data.get("capabilities", {}).get("squad_agent", {})
             if not self.api_key:
                 raw_key = cap.get("gemini_api_key")
                 if raw_key:
@@ -369,7 +369,7 @@ class BaseAgent:
             rag_store = RAGMemoryStore(
                 config=self.config,
                 logger=self.logger,
-                tenant="08-Base-Scripts",
+                tenant="08-Squad-Agent",
                 client=self.config.data.get("rag_client")
             )
             loop = asyncio.get_running_loop()
@@ -524,7 +524,7 @@ class BaseAgent:
             conn = self.pool.getconn()
             try:
                 with conn.cursor() as cursor:
-                    cursor.execute('SET search_path TO "08-Base-Scripts", public')
+                    cursor.execute('SET search_path TO "08-Squad-Agent", public')
                     # Apply chronological sliding window: fetch last 15 messages and reverse order
                     cursor.execute(
                         "SELECT sender, content, tool_calls FROM squad_chat_logs WHERE session_id = %s ORDER BY created_at DESC LIMIT 15",
@@ -553,7 +553,7 @@ class BaseAgent:
             conn = self.pool.getconn()
             try:
                 with conn.cursor() as cursor:
-                    cursor.execute('SET search_path TO "08-Base-Scripts", public')
+                    cursor.execute('SET search_path TO "08-Squad-Agent", public')
                     cursor.execute(
                         "INSERT INTO squad_chat_logs (session_id, sender, content, tool_calls) VALUES (%s, %s, %s, %s)",
                         (session_id, self.role_name, content, json.dumps(tool_calls or []))

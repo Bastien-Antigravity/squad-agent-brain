@@ -59,7 +59,7 @@ def init_routes(controller, logger):
 
 # -----------------------------------------------------------------------------
 
-def register_mfe_with_web_interface(config, logger, bs_ip, bs_port):
+def register_mfe_with_web_interface(config, logger, sa_ip, sa_port):
     """
     Auto-registration daemon that POSTs our MFE definition to the central web-interface.
     """
@@ -84,18 +84,18 @@ def register_mfe_with_web_interface(config, logger, bs_ip, bs_port):
     web_port = int(web_cap["port"])
 
     reg_url = f"http://{web_ip}:{web_port}/api/v1/register"
-    mfe_url = f"http://{bs_ip}:{bs_port}/static/mfe.js"
+    mfe_url = f"http://{sa_ip}:{sa_port}/static/mfe.js"
     
     payload = {
-        "name": "base-scripts",
-        "tag": "base-scripts-mfe",
+        "name": "squad-agent",
+        "tag": "squad-agent-mfe",
         "url": mfe_url,
         "navTitle": "🚀 Squad Control"
     }
     
     req_data = json.dumps(payload).encode("utf-8")
     
-    logger.info(f"OpenMFE: Starting base-scripts auto-registration loop to {reg_url}")
+    logger.info(f"OpenMFE: Starting squad-agent auto-registration loop to {reg_url}")
     backoff = 2.0
     max_backoff = 15.0
     while True:
@@ -109,7 +109,7 @@ def register_mfe_with_web_interface(config, logger, bs_ip, bs_port):
             with urllib.request.urlopen(req, timeout=3) as resp:
                 status = resp.status
                 if 200 <= status < 300:
-                    logger.info(f"OpenMFE: Successfully registered base-scripts MFE at {reg_url}")
+                    logger.info(f"OpenMFE: Successfully registered squad-agent MFE at {reg_url}")
                     return
                 else:
                     logger.warning(f"OpenMFE: Registration attempt failed with status {status}; retrying in {backoff:.1f}s...")

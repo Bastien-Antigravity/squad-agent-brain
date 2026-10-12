@@ -1,17 +1,19 @@
 services:
-  base-scripts:
+  squad-agent:
     build:
       context: .
       dockerfile: Dockerfile
-    image: ghcr.io/bastien-antigravity/base-scripts:${TAG:-latest}
-    container_name: base-scripts
+    image: ghcr.io/bastien-antigravity/squad-agent-brain:${TAG:-latest}
+    container_name: squad-agent
     restart: unless-stopped
     ports:
       - "${HOST_IP:-127.0.0.1}:8085:8085"
       - "${HOST_IP:-127.0.0.1}:8087:8087"
     environment:
-      - BS_PORT=8085
-      - BS_GRPC_PORT=8087
+      - SA_PORT=8085
+      - SA_GRPC_PORT=8087
+      - SA_PORT=8085
+      - SA_GRPC_PORT=8087
       - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN:-}
       - DISCORD_CHANNEL_ID=${DISCORD_CHANNEL_ID:-}
     volumes:

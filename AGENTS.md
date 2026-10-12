@@ -1,27 +1,27 @@
 ---
-microservice: base-scripts
+microservice: squad-agent
 type: overview
 status: active
 tags:
-- '#service/base-scripts'
+- '#service/squad-agent'
 - '#type/overview'
 - '#state/active'
 - '#zone/3-fleet'
 ---
-# AGENTS.md: 08-Base-Scripts
+# AGENTS.md: 08-Squad-Agent
 
 ## Service Mission & Architecture Role
-`08-Base-Scripts` is the operational engine room, autonomous AI squad coordinator, and fleet governance automation hub for the Bastien-Antigravity ecosystem. It exposes a unified CLI router (`main.py`) providing commands for ecosystem health audits, fleet-wide git and architecture management, automated microservice scaffolding, and AI persona synchronization.
+`08-Squad-Agent` is the operational engine room, autonomous AI squad coordinator, and fleet governance automation hub for the Bastien-Antigravity ecosystem. It exposes a unified CLI router (`main.py`) providing commands for ecosystem health audits, fleet-wide git and architecture management, automated microservice scaffolding, and AI persona synchronization.
 
-- **Exposed Capability**: `base_scripts`
-  - **REST & OpenMFE Web**: Port `8085` (`capabilities.base_scripts.port`)
-  - **gRPC Squad Control**: Port `8087` (`capabilities.base_scripts.grpc_port`)
+- **Exposed Capability**: `squad_agent`
+  - **REST & OpenMFE Web**: Port `8085` (`capabilities.squad_agent.port`)
+  - **gRPC Squad Control**: Port `8087` (`capabilities.squad_agent.grpc_port`)
   - **OpenMFE Dynamic Registration**: Auto-registers with `web-interface` (`127.0.0.1:5000` via `/api/v1/register`)
-- **Unified CLI Entrypoint**: `python3 08-Base-Scripts/main.py <command> [args...]`
+- **Unified CLI Entrypoint**: `python3 08-Squad-Agent/main.py <command> [args...]`
 - **Execution Environment**: Vault Python virtual environment (`.venv`) initialized via `src/bootstrap` using `microservice-toolbox` Python bindings.
 - **RAG Engine Integration**: Paired with [`09-RAG-Engine`](../09-RAG-Engine) for semantic context retrieval, interface discovery, and AST code queries.
 - **Shared Libraries**: `microservice-toolbox`, `universal-logger`, `distributed-config`
-- **Database Dependency**: PostgreSQL with dynamic schema `08-Base-Scripts` in `obsidiandb`
+- **Database Dependency**: PostgreSQL with dynamic schema `08-Squad-Agent` in `obsidiandb`
 - **Configuration Link**: `standalone.yaml -> ../docker-deployment/modes/local/config/native.yaml`
 
 ---
@@ -102,7 +102,7 @@ flowchart LR
    - Query RAG for existing interfaces, protocols, and ADRs.
    - Confirm compliance with `03-Tech-Stack/02-Project-Architecture/` standards (`11-Microservice-Integration-Standard.md`, `12-Docker-Deployment-Standards.md`).
 3. **Automated Scaffolding (`scaffold-microservice`)**:
-   - Run `python3 08-Base-Scripts/main.py scaffold-microservice --name <service-name> --lang <go|python|rust>` to generate the clean skeleton and all required root files.
+   - Run `python3 08-Squad-Agent/main.py scaffold-microservice --name <service-name> --lang <go|python|rust>` to generate the clean skeleton and all required root files.
 4. **Implementation via Ecosystem SDKs**:
    - Use `microservice-toolbox` for `BootstrapService`, configuration, and lifecycle management.
    - Use `universal-logger` for structured logging.
@@ -116,7 +116,7 @@ flowchart LR
    - 6. If UI/API exists, register OpenMFE with `web-interface` (port 5000) or C2 with `tele-remote` (port 1863).
 6. **Verification & Preflight Audit**:
    - Run unit tests: `go test -v ./...` / `pytest` / `cargo test`.
-   - Run preflight check: `python3 08-Base-Scripts/main.py preflight-check`.
+   - Run preflight check: `python3 08-Squad-Agent/main.py preflight-check`.
    - Update `AI-Session-State.md`.
 
 ---

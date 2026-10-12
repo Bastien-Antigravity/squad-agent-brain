@@ -17,7 +17,7 @@ KEY PARAMETERS:
 import sys
 from pathlib import Path
 
-# Add 08-Base-Scripts root to sys.path so we can import src.*
+# Add 08-Squad-Agent root to sys.path so we can import src.*
 _self_dir = Path(__file__).resolve().parent
 if str(_self_dir) not in sys.path:
     sys.path.insert(0, str(_self_dir))
@@ -65,7 +65,7 @@ COMMANDS_MAP = {
 # -----------------------------------------------------------------------------
 
 def print_usage():
-    print("Usage: python3 08-Base-Scripts/main.py <command> [args...]")
+    print("Usage: python3 08-Squad-Agent/main.py <command> [args...]")
     print("\nAvailable commands:")
     for cmd in sorted(COMMANDS_MAP.keys()):
         print(f"  - {cmd}")

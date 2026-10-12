@@ -78,7 +78,7 @@ def scaffold_brain(target_name: str, target_path: Path, vault_root: Path, dry_ru
         "05-Fleet-Operation",
         "06-Microservices",
         "07-Core-KMS/Role-Prompts",
-        "08-Base-Scripts",
+        "08-Squad-Agent",
         "99-Humans",
         "quick-overview",
     ]
@@ -100,14 +100,16 @@ def scaffold_brain(target_name: str, target_path: Path, vault_root: Path, dry_ru
         else:
             shutilCopytree(role_prompts_src, dest_prompts, dirs_exist_ok=True)
     
-    base_scripts_src = vault_root / "08-Base-Scripts"
-    if base_scripts_src.exists():
-        dest_scripts = target_path / "08-Base-Scripts"
+    squad_agent_src = vault_root / "08-Squad-Agent"
+    if not squad_agent_src.exists():
+        squad_agent_src = vault_root / "08-Base-Scripts"
+    if squad_agent_src.exists():
+        dest_scripts = target_path / "08-Squad-Agent"
         if dry_run:
-            logger.info(f"   [DRY-RUN] Would copy {base_scripts_src} -> {dest_scripts}")
+            logger.info(f"   [DRY-RUN] Would copy {squad_agent_src} -> {dest_scripts}")
         else:
             shutilCopytree(
-                base_scripts_src,
+                squad_agent_src,
                 dest_scripts,
                 dirs_exist_ok=True,
                 ignore=shutilIgnorePatterns(".venv*", "__pycache__", "*.pyc", ".pytest_cache*", ".git*")
@@ -141,18 +143,7 @@ def scaffold_brain(target_name: str, target_path: Path, vault_root: Path, dry_ru
     logger.info("ScaffoldNewBrain : Creating root ecosystem files...")
     
     # standalone.yaml symlink
-    native_yaml = vault_root.parent / "docker-deployment" / "modes" / "local" / "config" / "native.yaml"
-    if not native_yaml.exists():
-        for p in [vault_root] + list(vault_root.parents):
-            candidate = p / "docker-deployment" / "modes" / "local" / "config" / "native.yaml"
-            if candidate.exists():
-                native_yaml = candidate
-                break
-    if native_yaml.exists():
-        rel_link = os.path.relpath(native_yaml, target_path)
-        create_symlink(target_path / "standalone.yaml", rel_link, dry_run)
-    else:
-        create_symlink(target_path / "standalone.yaml", "../docker-deployment/modes/local/config/native.yaml", dry_run)
+    create_symlink(target_path / "standalone.yaml", "../docker-deployment/modes/local/config/native.yaml", dry_run)
 
     # VERSION.txt
     create_file(target_path / "VERSION.txt", "1.0.0\n", dry_run)
@@ -210,20 +201,20 @@ tags:
   - `03-Tech-Stack`: Technical standards, networking protocols, domain blueprints
   - `06-Microservices`: Service specification sheets, endpoint registries, capability maps
   - `07-Core-KMS`: Operational prompts, key management references
-  - `08-Base-Scripts`: AI squad operational engine room, CLI utilities (`main.py`)
+  - `08-Squad-Agent`: AI squad operational engine room, CLI utilities (`main.py`)
 - **Configuration Link**: `standalone.yaml -> ../docker-deployment/modes/local/config/native.yaml`
 
 ## Key Commands & Verification
 ```bash
 # Run ecosystem preflight check
-python3 08-Base-Scripts/main.py preflight-check
+python3 08-Squad-Agent/main.py preflight-check
 
 # Scaffold a new microservice
-python3 08-Base-Scripts/main.py scaffold-microservice --name <name> --lang <go|python|rust>
+python3 08-Squad-Agent/main.py scaffold-microservice --name <name> --lang <go|python|rust>
 
 # Check vault frontmatter & coherence
-python3 08-Base-Scripts/main.py ensure-frontmatter
-python3 08-Base-Scripts/main.py check-coherence
+python3 08-Squad-Agent/main.py ensure-frontmatter
+python3 08-Squad-Agent/main.py check-coherence
 ```
 
 ## AI Development & Integration Guidelines
@@ -247,7 +238,7 @@ Bastien-Antigravity Ecosystem Knowledge Vault and Domain Orchestration Hub.
 - `03-Tech-Stack`: Architecture standards and protocols
 - `06-Microservices`: Microservice hubs and registries
 - `07-Core-KMS`: Security policies and squad role prompts
-- `08-Base-Scripts`: Fleet management and scaffolding automation
+- `08-Squad-Agent`: Fleet management and scaffolding automation
 """
     create_file(target_path / "README.md", readme_content, dry_run)
 
@@ -371,7 +362,7 @@ Human-readable overview and quick-start reference for this domain vault.
                 if candidate.exists():
                     toolbox_py = candidate
                     break
-        scripts_dir = target_path / "08-Base-Scripts"
+        scripts_dir = target_path / "08-Squad-Agent"
         pythonpath_entries = [str(scripts_dir), str(scripts_dir / "src")]
         if toolbox_py.exists():
             pythonpath_entries.append(str(toolbox_py))
@@ -379,11 +370,11 @@ Human-readable overview and quick-start reference for this domain vault.
             pythonpath_entries.append(env["PYTHONPATH"])
         env["PYTHONPATH"] = ":".join(pythonpath_entries)
 
-        convert_script = target_path / "08-Base-Scripts" / "main.py"
+        convert_script = scripts_dir / "main.py"
         if convert_script.exists():
-            subprocessRun([sysExecutable, "08-Base-Scripts/main.py", "convert-agents"], cwd=target_path, env=env)
+            subprocessRun([sysExecutable, str(convert_script), "convert-agents"], cwd=target_path, env=env)
         else:
-            fallback_convert = target_path / "08-Base-Scripts" / "src" / "fleet" / "convert_agents.py"
+            fallback_convert = scripts_dir / "src" / "fleet" / "convert_agents.py"
             if fallback_convert.exists():
                 subprocessRun([sysExecutable, str(fallback_convert)], cwd=target_path, env=env)
 

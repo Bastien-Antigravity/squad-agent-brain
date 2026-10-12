@@ -9,9 +9,9 @@ tags:
 - '#zone/3-fleet'
 - '#ai/ignore'
 ---
-# 🏗️ Architecture Overview: base-scripts
+# 🏗️ Architecture Overview: squad-agent
 
-`08-Base-Scripts` is the operational command-and-control (C2) engine room, AI squad orchestrator, and fleet governance automation hub for the Bastien-Antigravity ecosystem.
+`08-Squad-Agent` is the operational command-and-control (C2) engine room, AI squad orchestrator, and fleet governance automation hub for the Bastien-Antigravity ecosystem.
 
 ## Subsystems
 
@@ -23,11 +23,11 @@ tags:
    - `controller.py`: `CommandController` executing subcommands, managing conversational short-term/PostgreSQL memory, and handling multi-channel chat (Web, Discord, Telegram).
 
 3. **OpenMFE Web & REST Server (`src/web/`, `src/rest/`)**:
-   - Exposes REST routes on port `8085` (`capabilities.base_scripts.port`).
+   - Exposes REST routes on port `8085` (`capabilities.squad_agent.port`).
    - Serves the OpenMFE micro-frontend (`/static/mfe.js`) and auto-registers with `web-interface` on port `5000` via `/api/v1/register`.
 
 4. **gRPC SquadControl Service (`src/grpc_control/`)**:
-   - Exposes `SquadControlService` on port `8087` (`capabilities.base_scripts.grpc_port`) for IPC status queries, subcommand execution, and mode switching.
+   - Exposes `SquadControlService` on port `8087` (`capabilities.squad_agent.grpc_port`) for IPC status queries, subcommand execution, and mode switching.
 
 5. **Auditing & Governance (`src/auditing/`)**:
    - `audit_ports.py`: 4-layer verification engine detecting port drift between `native.yaml`, `docker-compose.yaml`, `service-registry.json`, and markdown documentation.

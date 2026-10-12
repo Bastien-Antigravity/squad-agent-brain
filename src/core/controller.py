@@ -266,7 +266,7 @@ class CommandController(Command):
                 conn = self.pool.getconn()
                 try:
                     with conn.cursor() as cursor:
-                        cursor.execute('SET search_path TO "08-Base-Scripts", public')
+                        cursor.execute('SET search_path TO "08-Squad-Agent", public')
                         cursor.execute(
                             "SELECT sender, content, tool_calls, created_at FROM squad_chat_logs WHERE session_id = %s ORDER BY created_at ASC",
                             (session_id,)
@@ -323,7 +323,7 @@ class CommandController(Command):
                 conn = self.pool.getconn()
                 try:
                     with conn.cursor() as cursor:
-                        cursor.execute('SET search_path TO "08-Base-Scripts", public')
+                        cursor.execute('SET search_path TO "08-Squad-Agent", public')
                         cursor.execute(
                             "INSERT INTO squad_chat_logs (session_id, sender, content, tool_calls) VALUES (%s, %s, %s, %s)",
                             (session_id, "user", message, "[]")

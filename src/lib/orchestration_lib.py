@@ -71,7 +71,7 @@ def resolve_vault_and_workspace(script_file: str) -> Tuple[Path, Path]:
     current = Path(script_file).resolve().parent
     vault_root = None
     for parent in [current] + list(current.parents):
-        if (parent / "08-Base-Scripts").is_dir() and (parent / "00-AI-Orchestration").is_dir():
+        if (parent / "08-Squad-Agent").is_dir() and (parent / "00-AI-Orchestration").is_dir():
             vault_root = parent
             break
         if parent.name == "obsidian-brain" or parent.name.endswith("-brain"):
@@ -79,9 +79,9 @@ def resolve_vault_and_workspace(script_file: str) -> Tuple[Path, Path]:
             break
             
     if not vault_root:
-        # Fallback to parent of script dir if run directly from 08-Base-Scripts
+        # Fallback to parent of script dir if run directly from 08-Squad-Agent
         for parent in [current] + list(current.parents):
-            if parent.name == "08-Base-Scripts" or parent.name == "Scripts":
+            if parent.name == "08-Squad-Agent" or parent.name == "Scripts":
                 vault_root = parent.parent
                 break
         if not vault_root:

@@ -82,7 +82,7 @@ class TestScaffoldBrain(unittest.TestCase):
             "06-Microservices",
             "07-Core-KMS",
             "07-Core-KMS/Role-Prompts",
-            "08-Base-Scripts",
+            "08-Squad-Agent",
             "99-Humans",
             "quick-overview",
         ]

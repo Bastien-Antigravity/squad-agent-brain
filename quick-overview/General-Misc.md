@@ -9,13 +9,13 @@ tags:
 - '#zone/3-fleet'
 - '#ai/ignore'
 ---
-# 📌 General & Miscellaneous: base-scripts
+# 📌 General & Miscellaneous: squad-agent
 
 ## Virtual Environment
 Dependencies are isolated in `.venv`. The bootstrapper in `src/bootstrap/__init__.py` automatically sets up `sys.path` to include `microservice-toolbox/python`.
 
 ## Database Isolation
-When running daemon or stateful operations, the database connection pool uses `obsidiandb` and isolates table schemas under `"08-Base-Scripts"`.
+When running daemon or stateful operations, the database connection pool uses `obsidiandb` and isolates table schemas under `"08-Squad-Agent"`.
 
 ## Ports Allocation
 - **8085**: HTTP REST & OpenMFE Web UI

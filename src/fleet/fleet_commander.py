@@ -4,7 +4,7 @@
 """
 ESSENTIAL PROCESS:
 Fleet Commander - Unified Fleet Git, Synchronization, and Architectural Compliance.
-Native first-class Engine Room orchestrator in 08-Base-Scripts.
+Native first-class Engine Room orchestrator in 08-Squad-Agent.
 
 DATA FLOW:
 1. Loads registered repositories from inventory.json (SSoT).

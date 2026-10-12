@@ -17,6 +17,6 @@ tags:
 - [x] Implement OpenMFE dashboard on port 8085 with dynamic auto-registration to web-interface (port 5000)
 - [x] Add gRPC SquadControl service on port 8087
 - [x] Add dynamic Telegram management interface
-- [x] Integrate PostgreSQL memory store with schema isolation (`08-Base-Scripts`)
+- [x] Integrate PostgreSQL memory store with schema isolation (`08-Squad-Agent`)
 - [ ] Add end-to-end integration tests in `sandbox-testing`
 - [ ] Implement NATS JetStream event publishing for fleet state mutations

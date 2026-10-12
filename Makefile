@@ -8,7 +8,7 @@ version:
 	@echo $(VERSION)
 
 test:
-	@echo "Running tests for 08-Base-Scripts (version $(VERSION))..."
+	@echo "Running tests for 08-Squad-Agent (version $(VERSION))..."
 	pytest tests/
 
 run:

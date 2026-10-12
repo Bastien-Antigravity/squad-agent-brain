@@ -49,7 +49,7 @@ try:
     from switch_mode import apply_mode_protocol, MODES
     from mission_help import MissionHelper
 except ImportError:
-    print("❌ Error: Could not find required launcher modules in 08-Base-Scripts/")
+    print("❌ Error: Could not find required launcher modules in 08-Squad-Agent/")
     sysExit(1)
 
 # -----------------------------------------------------------------------------------------------
@@ -537,7 +537,7 @@ def check_session_health(mode_choice: str) -> None:
             for repo_name, count in dirty_repos_info:
                 print(f"  - {repo_name} ({count} file(s) dirty)")
             print("\nIn Mode 3 (Fleet-Commander), startup is STRICTLY BLOCKED to prevent multi-repository drift.")
-            print(f"Please run 'python3 ./{osPathBasename(vault_root)}/08-Base-Scripts/close_mission.py' to verify and sign-off.")
+            print(f"Please run 'python3 ./{osPathBasename(vault_root)}/08-Squad-Agent/close_mission.py' to verify and sign-off.")
             print("="*60)
             print("🛑"*30 + "\n")
             sysExit(1)
@@ -551,7 +551,7 @@ def check_session_health(mode_choice: str) -> None:
             for repo_name, count in dirty_repos_info:
                 print(f"  - {repo_name} ({count} file(s) dirty)")
             print("\nMode 1 (Spec-First) REQUIRES a clean state for architectural integrity.")
-            print(f"Mandate: Run 'python3 ./{osPathBasename(vault_root)}/08-Base-Scripts/close_mission.py' or stash changes.")
+            print(f"Mandate: Run 'python3 ./{osPathBasename(vault_root)}/08-Squad-Agent/close_mission.py' or stash changes.")
             print("="*60)
             print("⚠️"*30 + "\n")
             
@@ -860,26 +860,26 @@ def start_engine() -> None:
     logger = bootstrap.logger
     config = bootstrap.config
 
-    prevent_double_start("base_scripts_daemon", logger=logger)
+    prevent_double_start("squad_agent_daemon", logger=logger)
     logger.info("Initializing Squad Control Daemon...")
 
     # Create controller instance
     controller = CommandController(config=config, logger=logger)
 
     # 1. Resolve host and ports strictly from config capability (no fallbacks)
-    bs_cap = config.data.get("capabilities", {}).get("base_scripts")
-    if not bs_cap or not isinstance(bs_cap, dict):
-        raise RuntimeError("Missing required capability 'capabilities.base_scripts' in configuration.")
-    if "port" not in bs_cap:
-        raise RuntimeError("Missing required port 'capabilities.base_scripts.port' in configuration.")
-    if "grpc_port" not in bs_cap:
-        raise RuntimeError("Missing required gRPC port 'capabilities.base_scripts.grpc_port' in configuration.")
-    if "ip" not in bs_cap:
-        raise RuntimeError("Missing required host IP 'capabilities.base_scripts.ip' in configuration.")
+    sa_cap = config.data.get("capabilities", {}).get("squad_agent")
+    if not sa_cap or not isinstance(sa_cap, dict):
+        raise RuntimeError("Missing required capability 'capabilities.squad_agent' in configuration.")
+    if "port" not in sa_cap:
+        raise RuntimeError("Missing required port 'capabilities.squad_agent.port' in configuration.")
+    if "grpc_port" not in sa_cap:
+        raise RuntimeError("Missing required gRPC port 'capabilities.squad_agent.grpc_port' in configuration.")
+    if "ip" not in sa_cap:
+        raise RuntimeError("Missing required host IP 'capabilities.squad_agent.ip' in configuration.")
 
-    host = str(bs_cap["ip"])
-    port = int(bs_cap["port"])
-    grpc_port = int(bs_cap["grpc_port"])
+    host = str(sa_cap["ip"])
+    port = int(sa_cap["port"])
+    grpc_port = int(sa_cap["grpc_port"])
 
     # 2. Get/Create Event Loop
     try:

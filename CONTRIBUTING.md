@@ -8,7 +8,7 @@ tags:
 - '#state/active'
 - '#zone/3-fleet'
 ---
-# 🤝 Contributing to 08-Base-Scripts
+# 🤝 Contributing to 08-Squad-Agent
 
 Welcome to the **Engine Room** of the Bastien-Antigravity AI Squad and Knowledge Management System.
 

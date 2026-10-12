@@ -3,7 +3,7 @@
 
 """
 ESSENTIAL PROCESS:
-Integration tests for the complete microservice scaffolding lifecycle in 08-Base-Scripts.
+Integration tests for the complete microservice scaffolding lifecycle in 08-Squad-Agent.
 
 DATA FLOW:
 1. Input: Temporary directory targets, mock service specifications.

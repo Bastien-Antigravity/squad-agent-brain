@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding:utf-8
 
-"""Interfaces package for 08-Base-Scripts."""
+"""Interfaces package for 08-Squad-Agent."""
 
 from .command import Command
 from .auditor import Auditor

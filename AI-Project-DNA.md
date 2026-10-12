@@ -22,7 +22,7 @@ tags:
 ## 🛠 Technical Constraints
 - **Pattern**: Layered CLI subcommands (`COMMANDS_MAP`), Facade & Interface decoupling.
 - **Bootstrap**: Initialized via `microservice-toolbox` Python bindings (`bootstrap_microservice`, `load_config`, `UniLog`).
-- **Database**: PostgreSQL with schema isolation (`08-Base-Scripts` in `obsidiandb`).
+- **Database**: PostgreSQL with schema isolation (`08-Squad-Agent` in `obsidiandb`).
 - **Network**: Port `8085` (REST/OpenMFE), Port `8087` (gRPC SquadControl). Auto-registers MFE with `web-interface` on port `5000`.
 
 ## 👥 Roles & Responsibilities

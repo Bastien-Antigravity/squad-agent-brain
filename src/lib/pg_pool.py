@@ -126,7 +126,7 @@ def resolve_schema_name(script_file: str) -> str:
     Walks up the path hierarchy to find the repository root directory name.
     """
     path = Path(script_file).resolve()
-    target_repos = ["08-Base-Scripts", "01-Strategic-Nexus", "09-RAG-Engine", "watchdog-agent"]
+    target_repos = ["08-Squad-Agent", "01-Strategic-Nexus", "09-RAG-Engine", "watchdog-agent"]
     for parent in [path] + list(path.parents):
         if parent.name in target_repos:
             return parent.name

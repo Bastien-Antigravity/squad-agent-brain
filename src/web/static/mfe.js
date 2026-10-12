@@ -1,4 +1,4 @@
-class BaseScriptsMFE extends HTMLElement {
+class SquadAgentMFE extends HTMLElement {
     constructor() {
         super();
         this.baseUrl = '';
@@ -9,8 +9,8 @@ class BaseScriptsMFE extends HTMLElement {
         this.chatEventSource = null;
 
         // Session & Delivery Tracking State
-        this.activeSessionId = localStorage.getItem('base_scripts_active_session') || 'squad_sync_session';
-        this.sessions = JSON.parse(localStorage.getItem('base_scripts_session_list') || '["squad_sync_session", "feature_dev_1", "qa_audit_1"]');
+        this.activeSessionId = localStorage.getItem('squad_agent_active_session') || localStorage.getItem('base_scripts_active_session') || 'squad_sync_session';
+        this.sessions = JSON.parse(localStorage.getItem('squad_agent_session_list') || localStorage.getItem('base_scripts_session_list') || '["squad_sync_session", "feature_dev_1", "qa_audit_1"]');
         if (!this.sessions.includes(this.activeSessionId)) {
             this.sessions.unshift(this.activeSessionId);
         }
@@ -22,11 +22,11 @@ class BaseScriptsMFE extends HTMLElement {
         if (this.baseUrl.endsWith('/')) {
             this.baseUrl = this.baseUrl.slice(0, -1);
         }
-        
+
         this.renderSkeleton();
         await this.loadAll();
         this.setupEventListeners();
-        
+
         // Start streaming collaborative chat for active session
         this.renderSessionList();
         await this.loadChatHistory(this.activeSessionId);
@@ -824,7 +824,7 @@ class BaseScriptsMFE extends HTMLElement {
             btn.addEventListener('click', () => {
                 tabBtns.forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
-                
+
                 const tab = btn.dataset.tab;
                 this.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
                 this.querySelector(`#tab-${tab}`).classList.add('active');
@@ -860,7 +860,7 @@ class BaseScriptsMFE extends HTMLElement {
                     const cleanName = sessionName.trim().replace(/\s+/g, '_');
                     if (!this.sessions.includes(cleanName)) {
                         this.sessions.push(cleanName);
-                        localStorage.setItem('base_scripts_session_list', JSON.stringify(this.sessions));
+                        localStorage.setItem('squad_agent_session_list', JSON.stringify(this.sessions));
                     }
                     this.switchSession(cleanName);
                 }
@@ -918,9 +918,9 @@ class BaseScriptsMFE extends HTMLElement {
     async switchSession(sessionId) {
         if (this.activeSessionId === sessionId) return;
         this.activeSessionId = sessionId;
-        localStorage.setItem('base_scripts_active_session', sessionId);
+        localStorage.setItem('squad_agent_active_session', sessionId);
         this.renderSessionList();
-        
+
         // Load history and reconnect SSE
         await this.loadChatHistory(this.activeSessionId);
         this.startChatStream(this.activeSessionId);
@@ -1031,7 +1031,7 @@ class BaseScriptsMFE extends HTMLElement {
         if (this.chatEventSource) {
             this.chatEventSource.close();
         }
-        
+
         this.chatEventSource = new EventSource(`${this.baseUrl}/api/v1/squad/chat/stream/${sessionId}`);
         this.chatEventSource.onmessage = (event) => {
             try {
@@ -1204,7 +1204,7 @@ class BaseScriptsMFE extends HTMLElement {
     appendChatMessage(msg) {
         const chatMessages = this.querySelector('#chat-messages');
         if (!chatMessages) return;
-        
+
         // Prevent duplicate user messages if already rendered dynamically via handleUserSend
         if (msg.sender === 'user' && msg.id && this.querySelector(`#${msg.id}`)) {
             return;
@@ -1222,11 +1222,11 @@ class BaseScriptsMFE extends HTMLElement {
             'fleetcommander': '🛰️'
         };
         const avatar = avatars[msg.sender] || '🤖';
-        
+
         const bubble = document.createElement('div');
         if (msg.id) bubble.id = msg.id;
         bubble.className = `chat-bubble ${msg.sender || 'system'}`;
-        
+
         let statusBadgeHtml = '';
         if (msg.sender === 'user') {
             const st = msg.status || 'delivered';
@@ -1261,7 +1261,7 @@ class BaseScriptsMFE extends HTMLElement {
                 `;
             });
         }
-        
+
         bubble.innerHTML = `
             <span class="chat-avatar">${avatar}</span>
             <div class="chat-content">
@@ -1273,7 +1273,7 @@ class BaseScriptsMFE extends HTMLElement {
                 ${toolCallsHtml}
             </div>
         `;
-        
+
         chatMessages.appendChild(bubble);
         chatMessages.scrollTop = chatMessages.scrollHeight;
     }
@@ -1283,7 +1283,7 @@ class BaseScriptsMFE extends HTMLElement {
         const statusText = this.querySelector('#status-text');
         const dot = this.querySelector('.squad-dot');
         const isGhConfigured = this.statusData.github_configured !== false;
-        
+
         if (badge && statusText && dot) {
             if (!isGhConfigured) {
                 dot.className = 'squad-dot offline';
@@ -1404,5 +1404,5 @@ class BaseScriptsMFE extends HTMLElement {
     }
 }
 
-customElements.define('base-scripts-mfe', BaseScriptsMFE);
+customElements.define('squad-agent-mfe', SquadAgentMFE);
 
