@@ -486,7 +486,7 @@ class BaseAgent:
 
         if self.role_name == "orchestrator":
             if "status" in last_msg.lower() or "check" in last_msg.lower():
-                answer_text = "🤖 **[Orchestrator]** Hello! I have initiated a status check across all base scripts services. The system is healthy and responsive. Let me loop in the developer and QA agents to verify details. @developer @qa"
+                answer_text = "🤖 **[Orchestrator]** Hello! I have initiated a status check across all squad agent services. The system is healthy and responsive. Let me loop in the developer and QA agents to verify details. @developer @qa"
             else:
                 answer_text = f"🤖 **[Orchestrator]** Understood. I am coordinating the squad to address your request: '{last_msg}'. @developer, please review the workspace files. @qa, prepare the verification tests."
         elif self.role_name == "developer":

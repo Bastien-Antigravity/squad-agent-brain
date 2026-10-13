@@ -126,7 +126,7 @@ def SetupTelegram(config: Any, controller: Any, logger: Any) -> Optional[TeleCli
         logger.info(f"TeleRemote capability not configured or could not resolve address ({e}). Skipping SetupTelegram.")
         return None
 
-    logger.info(f"📡 Initializing dynamic Telegram Client for Base Scripts connecting to {host}:{port}...")
+    logger.info(f"📡 Initializing dynamic Telegram Client for Squad Agent connecting to {host}:{port}...")
     tc = TeleClient("Squad Control", host, port, logger)
     mgr = MenuManager(tc, controller, logger, config)
 

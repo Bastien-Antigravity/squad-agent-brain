@@ -108,7 +108,7 @@ class SquadRESTHandler:
             if not self.is_github_configured():
                 raise HTTPException(
                     status_code=403, 
-                    detail="Base Script Agents Squad is disabled: GITHUB_TOKEN environment variable is not configured."
+                    detail="Squad Agent is disabled: GITHUB_TOKEN environment variable is not configured."
                 )
             try:
                 body = await request.json()
@@ -131,7 +131,7 @@ class SquadRESTHandler:
             if not self.is_github_configured():
                 raise HTTPException(
                     status_code=403, 
-                    detail="Base Script Agents Squad is disabled: GITHUB_TOKEN environment variable is not configured."
+                    detail="Squad Agent is disabled: GITHUB_TOKEN environment variable is not configured."
                 )
             # Prevent infinite loop or squad-agent recursion
             if cmd_name == "squad-agent":
@@ -222,7 +222,7 @@ class SquadRESTHandler:
             if not self.is_github_configured():
                 raise HTTPException(
                     status_code=403, 
-                    detail="Base Script Agents Squad is disabled: GITHUB_TOKEN environment variable is not configured."
+                    detail="Squad Agent is disabled: GITHUB_TOKEN environment variable is not configured."
                 )
             try:
                 body = await request.json()

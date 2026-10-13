@@ -3,7 +3,7 @@ microservice: squad-agent
 type: session-state
 status: active
 last-updated: 2026-09-16
-Mission-ID: SQUAD-BASE-SCRIPTS-AUDIT-2026-09-16
+Mission-ID: SQUAD-AGENT-AUDIT-2026-09-16
 tags:
 - '#tech/python'
 - '#zone/3-fleet'

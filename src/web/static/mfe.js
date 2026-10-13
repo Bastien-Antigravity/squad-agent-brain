@@ -693,7 +693,7 @@ class SquadAgentMFE extends HTMLElement {
                     </div>
                 </div>
 
-                <!-- GitHub Token Banner on Base-Script Page -->
+                <!-- GitHub Token Banner on Squad-Agent Page -->
                 <div id="github-token-banner" class="squad-github-banner" role="alert">
                     <div class="squad-github-banner__icon">
                         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -705,7 +705,7 @@ class SquadAgentMFE extends HTMLElement {
                     <div class="squad-github-banner__content">
                         <div class="squad-github-banner__title">⚠️ GitHub Authentication Token ($GITHUB_TOKEN) Missing &mdash; Squad Disabled</div>
                         <div class="squad-github-banner__desc">
-                            The Base Script Agents Squad has been deactivated because <code>GITHUB_TOKEN</code> is not configured in the host environment. Git operations, code generation, and autonomous squad agents require authenticated GitHub access. Configure <code>export GITHUB_TOKEN="ghp_..."</code> (or <code>setx GITHUB_TOKEN "ghp_..."</code> on Windows) in your OS environment to enable the squad.
+                            The Squad Agent has been deactivated because <code>GITHUB_TOKEN</code> is not configured in the host environment. Git operations, code generation, and autonomous squad agents require authenticated GitHub access. Configure <code>export GITHUB_TOKEN="ghp_..."</code> (or <code>setx GITHUB_TOKEN "ghp_..."</code> on Windows) in your OS environment to enable the squad.
                         </div>
                     </div>
                 </div>
@@ -928,7 +928,7 @@ class SquadAgentMFE extends HTMLElement {
 
     async switchMode(mode) {
         if (this.statusData.github_configured === false) {
-            this.printTerminalLine('[ERROR] Cannot switch mode: Base Script Agents Squad is disabled (missing GITHUB_TOKEN).', 'error');
+            this.printTerminalLine('[ERROR] Cannot switch mode: Squad Agent is disabled (missing GITHUB_TOKEN).', 'error');
             return;
         }
         try {
@@ -954,7 +954,7 @@ class SquadAgentMFE extends HTMLElement {
 
     runCommand(cmdName) {
         if (this.statusData.github_configured === false) {
-            this.printTerminalLine(`[ERROR] Cannot execute "${cmdName}": Base Script Agents Squad is disabled (missing GITHUB_TOKEN).`, 'error');
+            this.printTerminalLine(`[ERROR] Cannot execute "${cmdName}": Squad Agent is disabled (missing GITHUB_TOKEN).`, 'error');
             return;
         }
         if (this.eventSource) {
@@ -1055,7 +1055,7 @@ class SquadAgentMFE extends HTMLElement {
         if (this.statusData.github_configured === false) {
             this.appendChatMessage({
                 sender: 'system',
-                content: '⚠️ Base Script Agents Squad is disabled: GITHUB_TOKEN is not configured.'
+                content: '⚠️ Squad Agent is disabled: GITHUB_TOKEN is not configured.'
             });
             return;
         }
@@ -1296,7 +1296,7 @@ class SquadAgentMFE extends HTMLElement {
             }
         }
 
-        // Toggle GitHub Token Alert Banner on Base-Script Page
+        // Toggle GitHub Token Alert Banner on Squad-Agent Page
         const ghBanner = this.querySelector('#github-token-banner');
         if (ghBanner) {
             ghBanner.style.display = isGhConfigured ? 'none' : 'flex';

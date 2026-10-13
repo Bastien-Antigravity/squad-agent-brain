@@ -4,7 +4,7 @@
 """
 ESSENTIAL PROCESS:
 Legacy bootstrap wrapper delegating bootstrapping capabilities to microservice-toolbox utils/bootstrap.
-Ensures zero-code-change backwards compatibility for legacy base scripts.
+Ensures zero-code-change bootstrapping capabilities for squad agent scripts.
 
 DATA FLOW:
 1. Resolves workspace root containing microservice-toolbox.

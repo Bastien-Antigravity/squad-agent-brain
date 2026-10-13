@@ -32,7 +32,7 @@ jobs:
         with:
           images: |
             ${{ env.REGISTRY }}/Bastien-Antigravity/squad-agent-brain
-            ${{ env.REGISTRY }}/Bastien-Antigravity/base-scripts
+            ${{ env.REGISTRY }}/Bastien-Antigravity/squad-agent
           tags: |
             type=ref,event=branch
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}

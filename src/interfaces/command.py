@@ -3,7 +3,7 @@
 
 """
 ESSENTIAL PROCESS:
-Command Interface defining the abstract contract for all executable CLI commands in base scripts.
+Command Interface defining the abstract contract for all executable CLI commands in Squad Agent.
 
 DATA FLOW:
 None (Abstract Base Interface).

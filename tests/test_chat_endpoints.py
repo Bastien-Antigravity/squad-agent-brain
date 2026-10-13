@@ -106,17 +106,17 @@ class TestSquadChatRESTEndpoints(unittest.TestCase):
             # Command execution stream
             resp_run = self.client.get("/api/v1/squad/run/preflight-check")
             self.assertEqual(resp_run.status_code, 403)
-            self.assertIn("Base Script Agents Squad is disabled", resp_run.json().get("detail", ""))
+            self.assertIn("Squad Agent is disabled", resp_run.json().get("detail", ""))
 
             # Mode switcher
             resp_mode = self.client.post("/api/v1/squad/active-mode", json={"mode": "1"})
             self.assertEqual(resp_mode.status_code, 403)
-            self.assertIn("Base Script Agents Squad is disabled", resp_mode.json().get("detail", ""))
+            self.assertIn("Squad Agent is disabled", resp_mode.json().get("detail", ""))
 
             # Chat posting
             resp_chat = self.client.post("/api/v1/squad/chat/test_session", json={"message": "hello"})
             self.assertEqual(resp_chat.status_code, 403)
-            self.assertIn("Base Script Agents Squad is disabled", resp_chat.json().get("detail", ""))
+            self.assertIn("Squad Agent is disabled", resp_chat.json().get("detail", ""))
         finally:
             if old_token is not None:
                 os.environ["GITHUB_TOKEN"] = old_token
