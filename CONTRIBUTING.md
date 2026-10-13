@@ -83,4 +83,4 @@ COMMANDS_MAP = {
 AI client wrappers are stored inside the [src/clients/](src/clients) directory.
 
 1. Implement the client's API connection and session management logic.
-2. Register the client inside the `CLIENTS` mapping in `registry.py` to make it accessible to `start-squad`.
+2. Register the client inside the `CLIENTS` mapping in `registry.py` to make it accessible to `squad-agent`.

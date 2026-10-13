@@ -9,18 +9,18 @@ tags:
 - '#zone/3-fleet'
 - '#ai/ignore'
 ---
-# 🧪 Testing Playbook: base-scripts
+# 🧪 Testing Playbook: squad-agent
 
 ## Running Unit Tests
 ```bash
 # Execute full pytest suite inside the virtual environment
-.venv/bin/pytest tests/
+.venv/bin/python -m pytest tests/
 
 # Run specific test file
-.venv/bin/pytest tests/test_scaffold_microservice.py
+.venv/bin/python -m pytest tests/test_scaffold_microservice.py
 
 # Run with verbose output
-.venv/bin/pytest -v tests/
+.venv/bin/python -m pytest -v tests/
 ```
 
 ## Running Operational Verifications

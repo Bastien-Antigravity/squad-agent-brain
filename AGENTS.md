@@ -31,7 +31,7 @@ tags:
 All operational scripts are invoked through the central `main.py` router:
 
 ### 1. Squad Lifecycle & Scaffolding
-- `start-squad`: Main orchestrator. Runs preflight audits, synchronizes agent roles, and boots the AI squad environment.
+- `squad-agent`: Main orchestrator. Runs preflight audits, synchronizes agent roles, and boots the AI squad environment.
 - `scaffold-microservice`: **Automated Microservice Generator**. Scaffolds new Go, Python, or Rust microservices with standard directories, the 12 mandatory root files & folders, BDD spec stubs, and registration snippets.
 - `scaffold-new-brain`: Generates a new standardized Obsidian documentation vault.
 - `switch-mode`: Protocol switcher toggling between Spec-First, Labs, and Fleet operational modes.

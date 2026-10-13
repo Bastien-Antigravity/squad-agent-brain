@@ -85,7 +85,7 @@ class MenuManager:
             cmd_name = cmd["name"]
             cmd_desc = cmd["description"]
             
-            if cmd_name == "start-squad":
+            if cmd_name == "squad-agent":
                 continue
 
             def make_cmd_callback(c_name):

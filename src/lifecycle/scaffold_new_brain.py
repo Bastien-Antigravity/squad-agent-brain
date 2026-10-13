@@ -10,7 +10,7 @@ and baking the AI Squad DNA into .agents/skills.
 DATA FLOW:
 1. Inputs project name and destination path via CLI arguments or user prompts.
 2. Creates the 2-Digit standard directory hierarchy (00-99).
-3. Copies Role-Prompts and Base-Scripts from the parent brain vault root.
+3. Copies Role-Prompts and Squad-Agent from the parent brain vault root.
 4. Generates AGENTS.md, README.md, VERSION.txt, .gitignore, standalone.yaml symlink.
 5. Injects compliant YAML frontmatter into AI-Project-DNA, AI-Session-State, AI-Init, and Ecosystem-Map-MOC.
 6. Invokes convert_agents.py to initialize subagents and skills in the new target.
@@ -90,7 +90,7 @@ def scaffold_brain(target_name: str, target_path: Path, vault_root: Path, dry_ru
         else:
             d.mkdir(parents=True, exist_ok=True)
 
-    # 2. Copy "DNA" (Role Prompts, Base-Scripts, Governance Config, Repo Control & Tech Stack)
+    # 2. Copy "DNA" (Role Prompts, Squad-Agent, Governance Config, Repo Control & Tech Stack)
     logger.info("ScaffoldNewBrain : Copying AI Squad DNA...")
     role_prompts_src = vault_root / "07-Core-KMS" / "Role-Prompts"
     if role_prompts_src.exists():
@@ -101,8 +101,6 @@ def scaffold_brain(target_name: str, target_path: Path, vault_root: Path, dry_ru
             shutilCopytree(role_prompts_src, dest_prompts, dirs_exist_ok=True)
     
     squad_agent_src = vault_root / "08-Squad-Agent"
-    if not squad_agent_src.exists():
-        squad_agent_src = vault_root / "08-Base-Scripts"
     if squad_agent_src.exists():
         dest_scripts = target_path / "08-Squad-Agent"
         if dry_run:

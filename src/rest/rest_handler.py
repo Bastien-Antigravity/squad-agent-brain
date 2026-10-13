@@ -133,9 +133,9 @@ class SquadRESTHandler:
                     status_code=403, 
                     detail="Base Script Agents Squad is disabled: GITHUB_TOKEN environment variable is not configured."
                 )
-            # Prevent infinite loop or start-squad recursion
-            if cmd_name == "start-squad":
-                raise HTTPException(status_code=400, detail="Cannot recursively invoke start-squad daemon.")
+            # Prevent infinite loop or squad-agent recursion
+            if cmd_name == "squad-agent":
+                raise HTTPException(status_code=400, detail="Cannot recursively invoke squad-agent daemon.")
 
             async def event_generator():
                 yield f"data: [START] Initiating execution of command: {cmd_name} {args}\n\n"

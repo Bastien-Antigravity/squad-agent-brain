@@ -86,9 +86,9 @@ logger = UniLog(
 config.set_logger(logger)
 
 if config is None:
-    raise RuntimeError("08-Base-Scripts bootstrap failed to initialize configuration")
+    raise RuntimeError("08-Squad-Agent bootstrap failed to initialize configuration")
 if logger is None:
-    raise RuntimeError("08-Base-Scripts bootstrap failed to initialize UniLog logger")
+    raise RuntimeError("08-Squad-Agent bootstrap failed to initialize UniLog logger")
 
 # 3. Lazy Database Schema and Tables Initialization
 try:

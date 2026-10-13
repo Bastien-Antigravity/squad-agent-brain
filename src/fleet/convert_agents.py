@@ -43,7 +43,7 @@ from glob import glob as globGlob
 
 def main() -> None:
     # Resolve roots dynamically using the shared vault/workspace helper
-    # (script is in vault_root/08-Base-Scripts or vault_root/20-Scripts)
+    # (script is in vault_root/08-Squad-Agent)
     # vault_root and workspace_root are already resolved at import time.
 
     # Precedence:

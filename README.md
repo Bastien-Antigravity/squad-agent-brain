@@ -27,7 +27,7 @@ pip install -r requirements.txt
 ### 2. Launch the AI Squad
 The primary entry point is the unified CLI router `main.py`. It initializes the environment, synchronizes personas, and launches your preferred AI client.
 ```bash
-python3 08-Squad-Agent/main.py start-squad
+python3 08-Squad-Agent/main.py squad-agent
 ```
 
 ---
@@ -38,7 +38,7 @@ All tools are unified under the `main.py` router:
 
 | Command | Purpose |
 | :--- | :--- |
-| `python3 08-Squad-Agent/main.py start-squad` | **Main Orchestrator**. Handles pre-session audits, role sync, event bus, and launches daemons. |
+| `python3 08-Squad-Agent/main.py squad-agent` | **Main Orchestrator**. Handles pre-session audits, role sync, event bus, and launches daemons. |
 | `python3 08-Squad-Agent/main.py preflight-check` | **Preflight Gate**. Verifies essential files, submodules, inventory, modes, and port drift. |
 | `python3 08-Squad-Agent/main.py audit-ports` | **Port Invariant Auditor**. Checks 4 architectural layers for zero port drift. |
 | `python3 08-Squad-Agent/main.py validate-compliance` | **Mechanical Code Compliance**. Verifies shebang/encoding, Triple-Block headers, dividers, ports, and mock pollution. |
@@ -72,7 +72,7 @@ All tools are unified under the `main.py` router:
 ## 🛡️ Governance & Safety
 Most scripts include a **Bootstrap** phase that resolves the vault root and ensures the correct Python environment and library paths are loaded.
 
-- **Preflight Checks**: `main.py start-squad` runs a mandatory audit before every session.
+- **Preflight Checks**: `main.py squad-agent` runs a mandatory audit before every session.
 - **Mode Guardrails**: Enforcement of `MODE-MANUAL.md` rules is handled by `switch-mode`.
 - **Hard-Stop State**: Every session-ending script updates `AI-Session-State.md` to prevent context loss.
 

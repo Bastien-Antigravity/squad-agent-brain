@@ -9,8 +9,8 @@ class SquadAgentMFE extends HTMLElement {
         this.chatEventSource = null;
 
         // Session & Delivery Tracking State
-        this.activeSessionId = localStorage.getItem('squad_agent_active_session') || localStorage.getItem('base_scripts_active_session') || 'squad_sync_session';
-        this.sessions = JSON.parse(localStorage.getItem('squad_agent_session_list') || localStorage.getItem('base_scripts_session_list') || '["squad_sync_session", "feature_dev_1", "qa_audit_1"]');
+        this.activeSessionId = localStorage.getItem('squad_agent_active_session') || 'squad_sync_session';
+        this.sessions = JSON.parse(localStorage.getItem('squad_agent_session_list') || '["squad_sync_session", "feature_dev_1", "qa_audit_1"]');
         if (!this.sessions.includes(this.activeSessionId)) {
             this.sessions.unshift(this.activeSessionId);
         }
@@ -1329,7 +1329,7 @@ class SquadAgentMFE extends HTMLElement {
         if (list && this.commands.length > 0) {
             list.innerHTML = '';
             this.commands.forEach(cmd => {
-                if (cmd.name === 'start-squad') return;
+                if (cmd.name === 'squad-agent') return;
 
                 const item = document.createElement('div');
                 item.className = 'cmd-item';

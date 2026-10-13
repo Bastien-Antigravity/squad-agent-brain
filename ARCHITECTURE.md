@@ -19,7 +19,7 @@ The `08-Squad-Agent` repository follows a **Command-and-Control (C2)** architect
 
 ### 1. The Core Orchestration Layer (`src/core/`)
 - **`main.py`**: The unified CLI entry point router. Directs commands to categorized modules under `src/`.
-- **`start_squad.py`**: The central squad orchestrator managing:
+- **`main.py squad-agent`** (backed by `src/core/start_squad.py`): The central squad orchestrator managing:
     1. **Preflight**: Validates inventory, modes, and configurations.
     2. **Sync**: Rebuilds runtime `.agents/` definitions from vault role prompts (`convert_agents.py`).
     3. **Protocol**: Locks the session into an active Mode (`switch_mode.py`).

@@ -22,9 +22,9 @@ import unittest
 from pathlib import Path
 import yaml
 
-BASE_SCRIPTS_DIR = Path(__file__).resolve().parent.parent
-if str(BASE_SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(BASE_SCRIPTS_DIR))
+SQUAD_AGENT_DIR = Path(__file__).resolve().parent.parent
+if str(SQUAD_AGENT_DIR) not in sys.path:
+    sys.path.insert(0, str(SQUAD_AGENT_DIR))
 
 from src.lifecycle.scaffold_microservice import (
     generate_go_scaffold,

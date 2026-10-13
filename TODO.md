@@ -1,15 +1,15 @@
 ---
-microservice: base-scripts
+microservice: squad-agent
 type: task
 status: active
 tags:
-- '#service/base-scripts'
+- '#service/squad-agent'
 - '#type/task'
 - '#state/active'
 - '#zone/3-fleet'
 ---
 
-# 📝 TODO: base-scripts
+# 📝 TODO: squad-agent
 
 - [x] Implement central CLI command router in `main.py`
 - [x] Implement 4-layer port drift verification engine (`audit-ports`)

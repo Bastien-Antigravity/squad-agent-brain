@@ -1,15 +1,15 @@
 ---
-microservice: base-scripts
+microservice: squad-agent
 type: note
 status: active
 tags:
-- '#service/base-scripts'
+- '#service/squad-agent'
 - '#type/note'
 - '#state/active'
 - '#zone/3-fleet'
 ---
 
-# 🧬 Project DNA: base-scripts
+# 🧬 Project DNA: squad-agent
 
 ## Metadata
 - Version: 0.0.1

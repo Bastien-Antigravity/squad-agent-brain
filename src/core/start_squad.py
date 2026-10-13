@@ -44,7 +44,7 @@ from datetime import datetime
 
 try:
     from lib.orchestration_lib import get_logger
-    logger = get_logger("StartSquad")
+    logger = get_logger("SquadAgent")
     
     from switch_mode import apply_mode_protocol, MODES
     from mission_help import MissionHelper

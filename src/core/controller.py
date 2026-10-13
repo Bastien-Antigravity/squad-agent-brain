@@ -160,7 +160,7 @@ class CommandController(Command):
         """Returns a list of available subcommands and their descriptions."""
         from main import COMMANDS_MAP
         descriptions = {
-            "start-squad": "Launches the persistent background agent daemon and WebSocket/REST API web services to orchestrate the AI squad.",
+            "squad-agent": "Launches the persistent background agent daemon and WebSocket/REST API web services to orchestrate the AI squad.",
             "convert-agents": "Compiles raw markdown persona templates from the KMS/Nexus vaults into standardized Gemini skills definitions.",
             "ensure-frontmatter": "Enforces structure on vault notes by validating and injecting missing metadata and YAML frontmatter.",
             "fleet-commander": "Audits compliance across the fleet microservices, auto-formats BDD notes, and runs standardized Git branch pushes.",
@@ -197,8 +197,8 @@ class CommandController(Command):
 
     async def run_subcommand_async(self, cmd_name: str, args: List[str]) -> tuple[bool, str]:
         """Triggers a subcommand in a non-blocking background task."""
-        if cmd_name == "start-squad":
-            return False, "Cannot trigger start-squad asynchronously (already running)."
+        if cmd_name == "squad-agent":
+            return False, "Cannot trigger squad-agent asynchronously (already running)."
         
         from main import COMMANDS_MAP
         if cmd_name not in COMMANDS_MAP:

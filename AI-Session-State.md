@@ -1,5 +1,5 @@
 ---
-microservice: base-scripts
+microservice: squad-agent
 type: session-state
 status: active
 last-updated: 2026-09-16
@@ -7,12 +7,12 @@ Mission-ID: SQUAD-BASE-SCRIPTS-AUDIT-2026-09-16
 tags:
 - '#tech/python'
 - '#zone/3-fleet'
-- '#service/base-scripts'
+- '#service/squad-agent'
 - '#type/session-state'
 - '#state/active'
 ---
 
-# 🛠️ Base Scripts - AI Session & State
+# 🛠️ Squad Agent - AI Session & State
 
 ## 🎯 Active Status
 - **Current Mission**: Automated microservice scaffolding hardening, single source of truth inventory enforcement, and 21-agent squad coherence.

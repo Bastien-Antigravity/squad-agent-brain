@@ -1,15 +1,15 @@
 ---
-microservice: base-scripts
+microservice: squad-agent
 type: overview
 status: active
 tags:
-- '#service/base-scripts'
+- '#service/squad-agent'
 - '#type/overview'
 - '#state/active'
 - '#zone/3-fleet'
 - '#ai/ignore'
 ---
-# 🚀 Features & Behavior: base-scripts
+# 🚀 Features & Behavior: squad-agent
 
 ## Key Capabilities
 

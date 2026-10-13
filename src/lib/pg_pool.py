@@ -3,7 +3,7 @@
 
 """
 ESSENTIAL PROCESS: pg_pool
-  Shared PostgreSQL connection pool manager for 08-Base-Scripts.
+  Shared PostgreSQL connection pool manager for 08-Squad-Agent.
   Ensures dynamic creation of the obsidiandb database and manages thread-safe pool instances.
 
 DATA FLOW:

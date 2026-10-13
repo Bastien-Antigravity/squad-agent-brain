@@ -51,7 +51,7 @@ COMMANDS_MAP = {
     "persona-extractor": "extraction.persona_extractor",
     "scaffold-microservice": "lifecycle.scaffold_microservice",
     "scaffold-new-brain": "lifecycle.scaffold_new_brain",
-    "start-squad": "core.start_squad",
+    "squad-agent": "core.start_squad",
     "switch-mode": "core.switch_mode",
     "unlock-vault": "lifecycle.unlock_vault",
     "check-coherence": "auditing.check_coherence",

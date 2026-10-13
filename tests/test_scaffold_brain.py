@@ -21,10 +21,10 @@ import unittest
 from pathlib import Path
 import yaml
 
-# Add 08-Base-Scripts to sys.path
-BASE_SCRIPTS_DIR = Path(__file__).resolve().parent.parent
-if str(BASE_SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(BASE_SCRIPTS_DIR))
+# Add 08-Squad-Agent to sys.path
+SQUAD_AGENT_DIR = Path(__file__).resolve().parent.parent
+if str(SQUAD_AGENT_DIR) not in sys.path:
+    sys.path.insert(0, str(SQUAD_AGENT_DIR))
 
 from src.lifecycle.scaffold_new_brain import scaffold_brain, create_file, create_symlink
 from src.lib.orchestration_lib import resolve_vault_and_workspace

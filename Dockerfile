@@ -45,4 +45,4 @@ COPY . .
 
 # Set entrypoint
 ENTRYPOINT ["python", "main.py"]
-CMD ["start-squad", "--daemon"]
+CMD ["squad-agent", "--daemon"]
