@@ -42,7 +42,11 @@ else
     PYTHONPATH="./09-RAG-Engine" python3 ./09-RAG-Engine/main.py index > /dev/null 2>&1 &
 fi
 
-if [ -f "./.venv/bin/python3" ]; then
+if [ -f "./08-Squad-Agent/.venv/bin/python3" ]; then
+    ./08-Squad-Agent/.venv/bin/python3 ./08-Squad-Agent/main.py persona-extractor --daemon > /dev/null 2>&1 &
+elif [ -f "./08-Squad-Agent/.venv/Scripts/python.exe" ]; then
+    ./08-Squad-Agent/.venv/Scripts/python.exe ./08-Squad-Agent/main.py persona-extractor --daemon > /dev/null 2>&1 &
+elif [ -f "./.venv/bin/python3" ]; then
     ./.venv/bin/python3 ./08-Squad-Agent/main.py persona-extractor --daemon > /dev/null 2>&1 &
 elif [ -f "./.venv/Scripts/python.exe" ]; then
     ./.venv/Scripts/python.exe ./08-Squad-Agent/main.py persona-extractor --daemon > /dev/null 2>&1 &
@@ -55,7 +59,11 @@ fi
 
 cd "$(dirname "$0")/../.."
 
-if [ -f "./09-RAG-Engine/.venv/bin/python3" ]; then
+if [ -f "./08-Squad-Agent/.venv/bin/python3" ]; then
+    ./08-Squad-Agent/.venv/bin/python3 ./08-Squad-Agent/main.py ensure-frontmatter --check
+elif [ -f "./08-Squad-Agent/.venv/Scripts/python.exe" ]; then
+    ./08-Squad-Agent/.venv/Scripts/python.exe ./08-Squad-Agent/main.py ensure-frontmatter --check
+elif [ -f "./09-RAG-Engine/.venv/bin/python3" ]; then
     ./09-RAG-Engine/.venv/bin/python3 ./08-Squad-Agent/main.py ensure-frontmatter --check
 elif [ -f "./09-RAG-Engine/.venv/Scripts/python.exe" ]; then
     ./09-RAG-Engine/.venv/Scripts/python.exe ./08-Squad-Agent/main.py ensure-frontmatter --check
