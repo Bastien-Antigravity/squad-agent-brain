@@ -14,7 +14,7 @@ DATA FLOW:
 
 KEY PARAMETERS:
 - nats_cfg: NatsConfig instance or connection string URI.
-- logger: UniLog or compatible ILogger instance.
+- logger: UniLog or compatible Logger instance.
 """
 
 import json
