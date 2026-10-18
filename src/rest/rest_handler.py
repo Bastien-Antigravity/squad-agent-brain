@@ -77,7 +77,7 @@ class SquadRESTHandler:
             return {
                 "healthy": status_info.get("healthy", True) and gh_configured,
                 "status": status_info.get("status", "running") if gh_configured else "disabled",
-                "version": status_info.get("version", "1.0.0"),
+                "version": status_info.get("version", "0.0.1"),
                 "timestamp": status_info.get("timestamp", int(time.time())),
                 "github_configured": gh_configured,
                 "github_user": self.get_github_user()

@@ -43,9 +43,22 @@ class CommandController(Command):
         self.logger = ensure_safe_logger(logger)
         self.schema = resolve_schema_name(__file__)
         self.pool = get_pg_pool(config=self.config, logger=self.logger)
-        self.memory = self._setup_memory()
         from pathlib import Path
         self.repo_root = Path(__file__).resolve().parent.parent.parent
+        self.version = self._load_version()
+        self.memory = self._setup_memory()
+
+    # -----------------------------------------------------------------------------------------------
+
+    def _load_version(self) -> str:
+        """Loads version dynamically from microservice-toolbox / VERSION.txt."""
+        if hasattr(self.config, "get_version"):
+            return self.config.get_version()
+        try:
+            from microservice_toolbox.version import get_version
+            return get_version(caller_file=__file__)
+        except Exception:
+            return "0.0.1"
 
     # -----------------------------------------------------------------------------------------------
 
@@ -119,7 +132,7 @@ class CommandController(Command):
         return {
             "healthy": True,
             "status": "Healthy",
-            "version": "1.0.0",
+            "version": self.version,
             "timestamp": int(time.time())
         }
 

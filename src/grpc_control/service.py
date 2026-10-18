@@ -40,7 +40,7 @@ class SquadControlServiceImpl(squad_control_pb2_grpc.SquadControlServiceServicer
         return squad_control_pb2.GetStatusResponse(
             healthy=status.get("healthy", True),
             status=status.get("status", "running"),
-            version=status.get("version", "1.0.0"),
+            version=status.get("version", "0.0.1"),
             timestamp=status.get("timestamp", int(time.time()))
         )
 

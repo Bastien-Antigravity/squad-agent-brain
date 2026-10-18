@@ -111,7 +111,7 @@ func main() {{
 	appConfig, appLogger := toolbox_bootstrap.BootstrapService("{name}")
 	defer appLogger.Close()
 
-	appLogger.Info("Starting {name} under profile: %s", appConfig.Profile)
+	appLogger.Info("Starting {name} (version %s) under profile: %s", appConfig.GetVersion(), appConfig.Profile)
 
 	// 2. Resolve Service Listen Address
 	addr, err := appConfig.GetListenAddr("{cap_name}")
@@ -192,9 +192,19 @@ func NewController(appConfig *toolbox_config.AppConfig, logger unilog_interfaces
 
 // -----------------------------------------------------------------------------
 
+// Version returns the dynamically resolved version of the service from microservice-toolbox.
+func (c *Controller) Version() string {{
+	if c.appConfig != nil {{
+		return c.appConfig.GetVersion()
+	}}
+	return "0.0.1"
+}}
+
+// -----------------------------------------------------------------------------
+
 // Start initializes internal workers and listens on the given address.
 func (c *Controller) Start(addr string) error {{
-	c.logger.Info("{name} controller running on %s", addr)
+	c.logger.Info("{name} (version %s) controller running on %s", c.Version(), addr)
 	return nil
 }}
 
@@ -345,11 +355,30 @@ def generate_rust_scaffold(target_dir: Path, name: str, port: int, desc: str, dr
     """Generates the Rust microservice skeleton and source files."""
     cap_name = name.replace("-", "_")
 
+    # 0. build.rs (Dynamic Versioning Standard from VERSION.txt)
+    build_rs = f"""// =============================================================================
+// ESSENTIAL PROCESS:
+// Dynamic version resolution build script for {name}.
+// Reads VERSION.txt from repository root as single source of truth.
+// =============================================================================
+
+fn main() {{
+    let version = std::fs::read_to_string("VERSION.txt")
+        .or_else(|_| std::fs::read_to_string("../VERSION.txt"))
+        .unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_string());
+    println!("cargo:rustc-env=APP_VERSION={{}}", version.trim());
+    println!("cargo:rerun-if-changed=VERSION.txt");
+    println!("cargo:rerun-if-changed=../VERSION.txt");
+}}
+"""
+    create_file(target_dir / "build.rs", build_rs, dry_run)
+
     # 1. Cargo.toml
     cargo_toml = f"""[package]
 name = "{name}"
 version = "0.0.1"
 edition = "2021"
+build = "build.rs"
 description = "{desc}"
 
 [dependencies]
@@ -382,11 +411,13 @@ tokio-test = "0.4"
 
 mod core;
 
+pub const VERSION: &str = env!("APP_VERSION");
+
 // -----------------------------------------------------------------------------
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {{
-    println!("Starting {name} (version 0.0.1)...");
+    println!("Starting {name} (version {{}})...", VERSION);
 
     let ctrl = core::Controller::new("{name}");
     ctrl.start("127.0.0.1:{port}").await?;
@@ -497,10 +528,10 @@ def main():
     # Load layered configuration (CLI > local YAML > native.yaml > ENV)
     config = load_config("standalone")
     logger = UniLog(app_name="{name}", config_profile="standalone")
-    logger.info("Starting {name} (starter template)...")
 
     # Instantiate and start the example worker controller
     controller = Controller(config=config, logger=logger)
+    logger.info(f"Starting {name} (version {{config.get_version()}}) under profile: {{config.profile}}...")
     controller.start()
 
 if __name__ == "__main__":
@@ -549,10 +580,21 @@ class Controller:
         self.config = config
         self.logger = logger
         self.Name = name or self.__class__.__name__
+        self.version = self._load_version()
+
+    def _load_version(self) -> str:
+        \"\"\"Loads version dynamically from microservice-toolbox / VERSION.txt.\"\"\"
+        if hasattr(self.config, "get_version"):
+            return self.config.get_version()
+        try:
+            from microservice_toolbox.version import get_version
+            return get_version(caller_file=__file__)
+        except Exception:
+            return "0.0.1"
 
     def start(self) -> None:
         # Example starter logic - replace with actual background workers
-        self.logger.info(f"{{self.Name}} : [DUMMY] Controller started successfully.")
+        self.logger.info(f"{{self.Name}} (version {{self.version}}) : [DUMMY] Controller started successfully.")
 
     def stop(self) -> None:
         # Example cleanup logic - replace with actual worker teardown
@@ -917,6 +959,7 @@ See [AGENTS.md](AGENTS.md) for technical specifications, capability ports, and A
     # 7. Makefile (Dynamic Versioning Standard - Go, Rust, C++ compiled projects)
     if lang == "go":
         makefile = f"""VERSION ?= $(shell cat VERSION.txt 2>/dev/null || echo "0.0.1")
+LDFLAGS := -s -w -X 'github.com/Bastien-Antigravity/microservice-toolbox/go/pkg/version.BuildVersion=$(VERSION)'
 
 .PHONY: all build test race vet version clean run
 
@@ -928,7 +971,7 @@ version:
 build:
 \t@echo "Building {name} (version $(VERSION))..."
 \t@mkdir -p bin
-\tgo build -ldflags="-s -w" -o bin/{name} ./cmd/{name}
+\tgo build -ldflags="$(LDFLAGS)" -o bin/{name} ./cmd/{name}
 
 test:
 \t@echo "Running tests for {name} (version $(VERSION))..."

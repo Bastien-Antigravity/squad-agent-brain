@@ -57,6 +57,8 @@ COMMANDS_MAP = {
     "check-coherence": "auditing.check_coherence",
     "map-feats": "fleet.map_feats",
     "fix-feats": "fleet.fix_feats",
+    "fleet-version": "fleet.fleet_version",
+    "bump-version": "fleet.fleet_version",
     "controller": "core.controller",
     "discord-client": "clients.discord_client",
     "format-compliance": "lib.improved_transformer"

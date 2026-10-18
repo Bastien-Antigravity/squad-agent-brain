@@ -144,7 +144,7 @@ def scaffold_brain(target_name: str, target_path: Path, vault_root: Path, dry_ru
     create_symlink(target_path / "standalone.yaml", "../docker-deployment/modes/local/config/native.yaml", dry_run)
 
     # VERSION.txt
-    create_file(target_path / "VERSION.txt", "1.0.0\n", dry_run)
+    create_file(target_path / "VERSION.txt", "0.0.1\n", dry_run)
 
     # .gitignore
     gitignore_content = """# Environments

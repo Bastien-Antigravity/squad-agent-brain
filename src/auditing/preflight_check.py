@@ -382,6 +382,33 @@ def _check_ports_and_capabilities() -> Tuple[str, List[str]]:
     except Exception as e:
         return "RED", ["Port audit execution failed: {0}".format(e)]
 
+def _check_versioning_integrity() -> Tuple[str, List[str]]:
+    """
+    Verifies that all fleet repositories maintain valid, non-empty VERSION.txt
+    files adhering to semantic versioning without DNA drift.
+    """
+    messages = []
+    try:
+        from fleet.fleet_version import resolve_target_repos, inspect_repo_version
+        targets = resolve_target_repos(VAULT_DIR, WORKSPACE_ROOT, None)
+        drifts = []
+        for name, p in targets:
+            info = inspect_repo_version(p)
+            st = info.get("status")
+            if st != "OK":
+                drifts.append(f"{name}: {st} (VERSION.txt='{info.get('version_txt')}', DNA='{info.get('dna_version')}')")
+        
+        if drifts:
+            messages.append(f"Versioning drift: {len(drifts)} repositories have invalid or drifting versions:")
+            for d in drifts:
+                messages.append(f"  - {d}")
+            return "YELLOW", messages
+        
+        messages.append(f"All {len(targets)} fleet repositories adhere to dynamic semver specifications.")
+        return "GREEN", messages
+    except Exception as e:
+        return "RED", [f"Versioning integrity check failed: {e}"]
+
 # ### MAIN ###
 
 def run_preflight(quiet: bool = False) -> bool:
@@ -397,6 +424,7 @@ def run_preflight(quiet: bool = False) -> bool:
         ("Spec-Code Parity", _check_spec_parity),
         ("Process Manifest Check", _check_manifest_elements),
         ("4-Layer Port Drift Check", _check_ports_and_capabilities),
+        ("Dynamic Versioning Integrity", _check_versioning_integrity),
     ]
     
     overall = "GREEN"
