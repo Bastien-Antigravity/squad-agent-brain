@@ -46,16 +46,21 @@ def get_pg_pool(*, config: Any, logger: Any) -> Optional[Any]:
         logger.warning("SharedPool : psycopg2-binary is not installed in the active environment.")
         return None
 
-    # Retrieve database configurations
-    timescale_db = config.data.get("capabilities", {}).get("timescale_db", {})
-    if not timescale_db:
-        logger.warning("SharedPool : timescale_db capability missing in configuration.")
+    # Retrieve database configurations via standard dynamic address accessor (zero silent fallback)
+    try:
+        db_addr = config.get_listen_addr("timescale_db")
+        host, port_str = db_addr.split(":")
+        port = int(port_str)
+    except Exception as e:
+        logger.warning(f"SharedPool : Failed to resolve capability 'timescale_db' listen address ({e}).")
         return None
 
-    host = timescale_db.get("ip", "127.0.0.1")
-    port = int(timescale_db.get("port", 5432))
-    user = timescale_db.get("user", "dbuser")
-    password = timescale_db.get("password", "dbuser")
+    timescale_db = config.data.get("capabilities", {}).get("timescale_db", {})
+    user = timescale_db.get("user")
+    password = timescale_db.get("password")
+    if not user or not password:
+        logger.warning("SharedPool : Missing required database credentials in capability 'timescale_db'.")
+        return None
     db_name = "obsidiandb"
 
     # Decrypt password if supported

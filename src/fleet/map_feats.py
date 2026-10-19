@@ -18,16 +18,19 @@ from pathlib import Path
 from os import walk as osWalk
 from os.path import join as osPathJoin, exists as osPathExists
 import re
-from lib.bootstrap import ensure_virtualenv, prepend_venv_bin, ensure_import_paths
+try:
+    from microservice_toolbox.utils.bootstrap import bootstrap_microservice
+except ImportError:
+    for parent in Path(__file__).resolve().parents:
+        toolbox_py = parent / "microservice-toolbox" / "python"
+        if toolbox_py.exists():
+            sys.path.insert(0, str(toolbox_py))
+            break
+    from microservice_toolbox.utils.bootstrap import bootstrap_microservice
+
+bootstrap_microservice(__file__, app_name="squad_agent_map_feats")
+
 from lib.orchestration_lib import setup_terminal, resolve_vault_and_workspace, get_logger
-
-# -----------------------------------------------------------------------------------------------
-
-# Setup paths and environment
-_self_dir = Path(__file__).resolve().parent
-_vault_root = ensure_virtualenv(str(_self_dir))
-prepend_venv_bin(_vault_root)
-ensure_import_paths(_self_dir, _vault_root)
 
 setup_terminal()
 VAULT_ROOT, WORKSPACE_ROOT = resolve_vault_and_workspace(__file__)
@@ -84,9 +87,9 @@ class MapFeatsCommand(Command):
         # Print report
         logger.info("📋 Microservice to Behavior Spec mapping:")
         for ms, feats in sorted(mapping.items()):
-            print(f"[{ms}]")
+            logger.info(f"[{ms}]")
             for feat in feats:
-                print(f"  - {feat}")
+                logger.info(f"  - {feat}")
 
 def main() -> None:
     cmd = MapFeatsCommand()

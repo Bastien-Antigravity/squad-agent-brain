@@ -32,13 +32,17 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-_self_dir = Path(__file__).resolve().parent
-_src_dir = _self_dir.parent
-_project_dir = _src_dir.parent
-if str(_src_dir) not in sys.path:
-    sys.path.insert(0, str(_src_dir))
-if str(_project_dir) not in sys.path:
-    sys.path.insert(0, str(_project_dir))
+try:
+    from microservice_toolbox.utils.bootstrap import bootstrap_microservice
+except ImportError:
+    for parent in Path(__file__).resolve().parents:
+        toolbox_py = parent / "microservice-toolbox" / "python"
+        if toolbox_py.exists():
+            sys.path.insert(0, str(toolbox_py))
+            break
+    from microservice_toolbox.utils.bootstrap import bootstrap_microservice
+
+bootstrap_microservice(__file__, app_name="squad_agent_fleet_version")
 
 from lib.orchestration_lib import (
     C_BOLD,

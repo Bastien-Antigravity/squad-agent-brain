@@ -42,5 +42,6 @@ from microservice_toolbox.utils.bootstrap import (
     ensure_virtualenv as ensure_virtualenv,
     prepend_venv_bin as prepend_venv_bin,
     ensure_import_paths as ensure_import_paths,
-    redirect_working_directory as redirect_working_directory
+    redirect_working_directory as redirect_working_directory,
+    bootstrap_microservice as bootstrap_microservice
 )

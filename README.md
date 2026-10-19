@@ -17,11 +17,14 @@ This directory contains the core operational scripts and AI squad orchestration 
 
 ## 🚀 Quick Start
 
-### 1. Installation
+### 1. Installation & Environment Setup
 The scripts depend on the virtual environment located in the vault root.
 ```bash
 # From the obsidian-brain root
 pip install -r requirements.txt
+
+# Export your GitHub token (mandatory for OpenMFE Web UI and REST API status)
+export GITHUB_TOKEN="ghp_your_personal_access_token"
 ```
 
 ### 2. Launch the AI Squad
@@ -32,27 +35,45 @@ python3 08-Squad-Agent/main.py squad-agent
 
 ---
 
-## 🛠️ Core Toolset
+## 🛠️ Core Toolset (33 Commands)
 
-All tools are unified under the `main.py` router:
+All tools are unified under the `main.py` router (`python3 08-Squad-Agent/main.py <command>`):
 
 | Command | Purpose |
 | :--- | :--- |
-| `python3 08-Squad-Agent/main.py squad-agent` | **Main Orchestrator**. Handles pre-session audits, role sync, event bus, and launches daemons. |
-| `python3 08-Squad-Agent/main.py preflight-check` | **Preflight Gate**. Verifies essential files, submodules, inventory, modes, and port drift. |
-| `python3 08-Squad-Agent/main.py audit-ports` | **Port Invariant Auditor**. Checks 4 architectural layers for zero port drift. |
-| `python3 08-Squad-Agent/main.py validate-compliance` | **Mechanical Code Compliance**. Verifies shebang/encoding, Triple-Block headers, dividers, ports, and mock pollution. |
-| `python3 08-Squad-Agent/main.py format-compliance` | **Auto-Compliance Refactorer**. AST-based transformer repairing headers, dividers, and imports (`--fix`). |
-| `python3 08-Squad-Agent/main.py build-inventory` | **Inventory Builder**. Scans workspace repositories and regenerates `inventory.json`. |
-| `python3 08-Squad-Agent/main.py fleet-commander` | **Fleet Manager**. Performs mass Git operations, status inspection, and branch tracking across fleet. |
-| `python3 08-Squad-Agent/main.py switch-mode` | **Protocol Switcher**. Atomically toggles between Spec-First, Labs, and Fleet modes. |
-| `python3 08-Squad-Agent/main.py check-coherence` | **Integrity Auditor**. Ensures runtime agent skills are 100% coherent with vault prompts. |
-| `python3 08-Squad-Agent/main.py ensure-frontmatter` | **Doc Taxonomist**. Enforces YAML frontmatter schema and tag taxonomy on markdown notes. |
-| `python3 08-Squad-Agent/main.py persona-extractor` | **RAG Telemetry Helper**. Scans codebase metrics (Go, Rust, Python) for AI context. |
-| `python3 08-Squad-Agent/main.py knowledge-compressor` | **Memory Distiller**. Distills recent session logs into structured decision patterns. |
-| `python3 08-Squad-Agent/main.py scaffold-microservice` | **Scaffolder**. Generates standard-compliant Go, Rust, or Python microservices with full scaffolding. |
-| `python3 08-Squad-Agent/main.py scaffold-new-brain` | **Vault Generator**. Creates new repositories or vault structures following standard DNA. |
-| `python3 08-Squad-Agent/main.py joint-audit-purger` | **Dark Matter Purger**. Identifies orphan notes without links and generates deletion checklists. |
+| `squad-agent` | **Main Orchestrator**. Handles pre-session audits, role sync, event bus, and launches daemons. |
+| `preflight-check` | **Preflight Gate**. Verifies essential files, submodules, inventory, modes, dynamic semver, and port drift. |
+| `audit-ports` | **Port Invariant Auditor**. Checks 4 architectural layers for zero port drift. |
+| `validate-compliance` | **Mechanical Code Compliance**. Verifies shebang/encoding, Triple-Block headers, dividers, ports, and mock pollution. |
+| `format-compliance` | **Auto-Compliance Refactorer**. AST-based transformer repairing headers, dividers, and imports (`--fix`). |
+| `check-coherence` | **Integrity Auditor**. Ensures runtime agent skills are 100% coherent with vault role prompts across 21 personas. |
+| `ensure-frontmatter` | **Doc Taxonomist**. Enforces YAML frontmatter schema and tag taxonomy on markdown notes. |
+| `hardening-yaml` | **YAML Hardener**. Enforces folder zone taxonomy rules on YAML configurations. |
+| `build-inventory` | **Inventory Builder**. Scans workspace repositories and regenerates `05-Fleet-Operation/inventory.json`. |
+| `fleet-commander` | **Fleet Manager**. Performs mass Git operations, status inspection, and branch tracking across fleet. |
+| `fleet-refresh` | **Fleet Synchronizer**. Synchronizes local branches, submodules, and repository workspace state. |
+| `fleet-init-update` | **Init Propagator**. Distributes standardized `AI-Init.md` instructions across fleet repositories. |
+| `fleet-version` | **Semver Auditor**. Verifies dynamic semantic versioning across all 14 repositories against `VERSION.txt`. |
+| `bump-version` | **Semver Bumper**. Increments semver (`patch`, `minor`, `major`) across fleet repositories. |
+| `switch-mode` | **Protocol Switcher**. Atomically toggles between Spec-First, Labs, and Fleet modes. |
+| `scaffold-microservice` | **Microservice Generator**. Generates standard Go, Rust, or Python microservices with all 12 root files. |
+| `scaffold-new-brain` | **Vault Generator**. Creates new repositories or vault structures following standard DNA. |
+| `init-new-brain` | **Vault Reset**. Resets project variables, purges inbox tasks, and initializes session state. |
+| `unlock-vault` | **KMS Unlocker**. Removes KMS lock protections on sensitive vault files for updates. |
+| `install-git-hooks` | **Git Hooks Installer**. Registers Git hooks to validate file syntax and frontmatter alignment. |
+| `mission-help` | **Help System**. Displays detailed subcommand usage and structural layout guides. |
+| `agent-dispatcher` | **Task Dispatcher**. Routes tasks to specific AI agent personas based on frontmatter or semantic keywords. |
+| `controller` | **Command Router**. Manages backend execution, subprocess spawning, and memory coordination. |
+| `discord-client` | **Discord Client**. Connects Discord chat channels to the unified squad command controller. |
+| `map-feats` | **BDD Feature Mapper**. Crawls specifications to map microservices to behavioral feature files. |
+| `fix-feats` | **BDD Feature Normalizer**. Standardizes BDD spec files with missing domain tags and hub links. |
+| `close-mission` | **Mission Sign-off**. Validates git branches, dirty repositories, and session sign-off seal. |
+| `convert-agents` | **Persona Compiler**. Compiles 21 role prompts from KMS/Nexus into runtime Antigravity skills. |
+| `brain-health-audit` | **Vault Health Audit**. Scans notes for missing links, broken tags, and orphaned files. |
+| `knowledge-compressor` | **Memory Distiller**. Distills recent session logs into structured decision patterns. |
+| `persona-extractor` | **RAG Telemetry Helper**. Scans codebase metrics (Go, Rust, Python) for AI context. |
+| `joint-audit-purger` | **Dark Matter Purger**. Identifies orphan notes without links and generates deletion checklists. |
+| `maintenance-skill` | **System Maintenance**. Runs routine index checks, compacts databases, and audits system metadata. |
 
 ---
 

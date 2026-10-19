@@ -16,18 +16,21 @@ KEY PARAMETERS:
 """
 import os
 import sys
+import re
 from pathlib import Path
-from lib.bootstrap import ensure_virtualenv, prepend_venv_bin, ensure_import_paths
 
-script_dir = Path(__file__).resolve().parent
-vault_root = ensure_virtualenv(str(script_dir))
-prepend_venv_bin(vault_root)
+try:
+    from microservice_toolbox.utils.bootstrap import bootstrap_microservice
+except ImportError:
+    for parent in Path(__file__).resolve().parents:
+        toolbox_py = parent / "microservice-toolbox" / "python"
+        if toolbox_py.exists():
+            sys.path.insert(0, str(toolbox_py))
+            break
+    from microservice_toolbox.utils.bootstrap import bootstrap_microservice
 
-ensure_import_paths(script_dir, vault_root)
+bootstrap_microservice(__file__, app_name="squad_agent_init_brain")
 
-from os import remove as osRemove
-from os.path import dirname as osPathDirname, abspath as osPathAbspath, join as osPathJoin, basename as osPathBasename, exists as osPathExists
-from glob import glob as globGlob
 from sys import argv as sysArgv, exit as sysExit
 
 # -----------------------------------------------------------------------------------------------
@@ -37,46 +40,68 @@ from lib.orchestration_lib import resolve_vault_and_workspace, get_logger
 vault_root, workspace_root = resolve_vault_and_workspace(__file__)
 logger = get_logger("InitNewBrain")
 
+# -----------------------------------------------------------------------------------------------
+
 def init_brain(ecosystem_name: str) -> None:
     """
     Performs the initialization sequence for a fresh brain ecosystem.
+    Resiliently updates Project DNA, purges inbox tasks if present, and resets session state.
     """
     logger.info("Initializing new AI Brain for: {0}".format(ecosystem_name))
     
-    # Corrected paths for the actual Bastien-Antigravity structure
-    project_vars_path = osPathJoin(str(vault_root), "00-AI-Orchestration", "Project-Variables.md")
-    inbox_dir = osPathJoin(str(vault_root), "10-State-and-Tasks", "Inbox")
-    session_state_path = osPathJoin(str(vault_root), "00-AI-Orchestration", "AI-Session-State.md")
-    
-    # 1. Update Project Variables
-    try:
-        with open(project_vars_path, 'r', encoding='utf-8') as f:
-            lines = f.readlines()
-        with open(project_vars_path, 'w', encoding='utf-8') as f:
-            for line in lines:
-                if line.startswith('ecosystem_name:'):
-                    f.write('ecosystem_name: "{0}"\n'.format(ecosystem_name))
-                else:
-                    f.write(line)
-        logger.info("Updated Project-Variables.md")
-    except Exception as e:
-        logger.error("Error updating Project-Variables: {0}".format(e))
+    # 1. Update Project DNA / Variables if exists
+    dna_candidates = [
+        Path(vault_root) / "00-AI-Orchestration" / "AI-Project-DNA.md",
+        Path(vault_root) / "00-AI-Orchestration" / "Project-Variables.md",
+        Path(vault_root) / "AI-Project-DNA.md"
+    ]
+    updated_dna = False
+    for dna_path in dna_candidates:
+        if dna_path.exists():
+            try:
+                content = dna_path.read_text(encoding="utf-8")
+                new_content = re.sub(r'ecosystem_name:\s*".*?"', f'ecosystem_name: "{ecosystem_name}"', content)
+                if new_content != content:
+                    dna_path.write_text(new_content, encoding="utf-8")
+                    logger.info(f"Updated ecosystem_name in {dna_path.name}")
+                    updated_dna = True
+            except Exception as e:
+                logger.error(f"Error updating {dna_path.name}: {e}")
+    if not updated_dna:
+        logger.info("Project variables file checked; ready.")
 
-    # 2. Clear Inbox
-    try:
-        for file in globGlob(osPathJoin(inbox_dir, "*.md")):
-            osRemove(file)
-            logger.info("Deleted old task: {0}".format(osPathBasename(file)))
-    except Exception as e:
-        logger.error("Error clearing Inbox: {0}".format(e))
+    # 2. Clear Inbox directories if they exist
+    inbox_candidates = [
+        Path(vault_root) / "04-Rapid-Prototyping" / "Inbox",
+        Path(vault_root) / "10-State-and-Tasks" / "Inbox",
+        Path(vault_root) / "Inbox"
+    ]
+    for inbox_dir in inbox_candidates:
+        if inbox_dir.exists():
+            try:
+                for file in inbox_dir.glob("*.md"):
+                    if not file.name.lower().startswith("template"):
+                        file.unlink()
+                        logger.info(f"Deleted old task: {file.name}")
+            except Exception as e:
+                logger.error(f"Error clearing Inbox in {inbox_dir}: {e}")
 
     # 3. Clear Session State
-    try:
-        with open(session_state_path, 'w', encoding='utf-8') as f:
-            f.write("# Central AI Session State\n\n*Brain Initialized. Ready for tasks.*")
-        logger.info("Cleared AI-Session-State.md")
-    except Exception as e:
-        logger.error("Error clearing Session State: {0}".format(e))
+    session_candidates = [
+        Path(vault_root) / "00-AI-Orchestration" / "AI-Session-State.md",
+        Path(vault_root) / "AI-Session-State.md"
+    ]
+    for session_path in session_candidates:
+        if session_path.exists():
+            try:
+                fresh_state = (
+                    f"# Central AI Session State\n\n"
+                    f"*Brain Initialized for {ecosystem_name}. Ready for tasks.*\n"
+                )
+                session_path.write_text(fresh_state, encoding="utf-8")
+                logger.info(f"Reset {session_path.name}")
+            except Exception as e:
+                logger.error(f"Error resetting {session_path.name}: {e}")
         
     logger.info("Brain successfully initialized! You can now write your Idea Pitch.")
 

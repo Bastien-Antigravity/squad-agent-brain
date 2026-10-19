@@ -43,7 +43,7 @@ from datetime import datetime
 
 
 try:
-    from lib.orchestration_lib import get_logger
+    from lib.orchestration_lib import get_logger, get_config
     logger = get_logger("SquadAgent")
     
     from switch_mode import apply_mode_protocol, MODES
@@ -777,17 +777,25 @@ def ensure_background_services() -> None:
     """
     Checks if the web-interface (MFE portal) and tele-remote (Telegram gateway)
     services are running, and launches them in the background if they are not.
+    Strictly enforces fail-fast dynamic port resolution via ecosystem config.
     """
     import socket
     from subprocess import Popen, DEVNULL
     
     workspace_root_path = Path(vault_root).parent
+    config = get_config()
     
-    # 1. Check & Launch web-interface (MFE Portal) on port 5000
-    web_port = 5000
+    # 1. Resolve & Check Web Interface (MFE Portal) via dynamic config (Fail-Fast)
+    web_addr = config.get_listen_addr("web_interface")
+    if not web_addr or ":" not in web_addr:
+        logger.critical("Fatal: capabilities.web_interface.port is unresolvable from configuration (fail-fast violation).")
+        raise RuntimeError("Fail-fast: Unresolvable capabilities.web_interface address in ecosystem config")
+    web_host, web_port_str = web_addr.split(":", 1)
+    web_port = int(web_port_str)
+    
     web_running = False
     try:
-        with socket.create_connection(("127.0.0.1", web_port), timeout=0.5):
+        with socket.create_connection((web_host, web_port), timeout=0.5):
             web_running = True
     except Exception:
         web_running = False
@@ -796,7 +804,7 @@ def ensure_background_services() -> None:
         web_dir = workspace_root_path / "web-interface"
         web_bin = web_dir / "web-interface"
         if web_bin.exists():
-            logger.info("🚀 Launching Web Interface (MFE Portal) in background...")
+            logger.info(f"🚀 Launching Web Interface (MFE Portal) on port {web_port} in background...")
             log_session_event("Launching Web Interface in background.")
             try:
                 # Spawn in background, change directory to web_dir
@@ -811,13 +819,19 @@ def ensure_background_services() -> None:
         else:
             logger.warning(f"Web Interface binary not found at {web_bin}")
     else:
-        logger.info("✅ Web Interface (MFE Portal) is already running.")
+        logger.info(f"✅ Web Interface (MFE Portal) is already running on port {web_port}.")
 
-    # 2. Check & Launch tele-remote (Telegram gateway) on port 1863
-    tele_port = 1863
+    # 2. Resolve & Check Tele-Remote (Telegram gateway) via dynamic config (Fail-Fast)
+    tele_addr = config.get_listen_addr("tele_remote")
+    if not tele_addr or ":" not in tele_addr:
+        logger.critical("Fatal: capabilities.tele_remote.port is unresolvable from configuration (fail-fast violation).")
+        raise RuntimeError("Fail-fast: Unresolvable capabilities.tele_remote address in ecosystem config")
+    tele_host, tele_port_str = tele_addr.split(":", 1)
+    tele_port = int(tele_port_str)
+    
     tele_running = False
     try:
-        with socket.create_connection(("127.0.0.1", tele_port), timeout=0.5):
+        with socket.create_connection((tele_host, tele_port), timeout=0.5):
             tele_running = True
     except Exception:
         tele_running = False
@@ -826,7 +840,7 @@ def ensure_background_services() -> None:
         tele_dir = workspace_root_path / "tele-remote"
         tele_bin = tele_dir / "bin" / "tele-remote"
         if tele_bin.exists():
-            logger.info("🚀 Launching Tele-Remote (Telegram gateway) in background...")
+            logger.info(f"🚀 Launching Tele-Remote (Telegram gateway) on port {tele_port} in background...")
             log_session_event("Launching Tele-Remote in background.")
             try:
                 Popen(
@@ -840,7 +854,7 @@ def ensure_background_services() -> None:
         else:
             logger.warning(f"Tele-Remote binary not found at {tele_bin}")
     else:
-        logger.info("✅ Tele-Remote is already running.")
+        logger.info(f"✅ Tele-Remote is already running on port {tele_port}.")
 
 # -----------------------------------------------------------------------------------------------
 
@@ -866,20 +880,14 @@ def start_engine() -> None:
     # Create controller instance
     controller = CommandController(config=config, logger=logger)
 
-    # 1. Resolve host and ports strictly from config capability (no fallbacks)
-    sa_cap = config.data.get("capabilities", {}).get("squad_agent")
-    if not sa_cap or not isinstance(sa_cap, dict):
-        raise RuntimeError("Missing required capability 'capabilities.squad_agent' in configuration.")
-    if "port" not in sa_cap:
-        raise RuntimeError("Missing required port 'capabilities.squad_agent.port' in configuration.")
-    if "grpc_port" not in sa_cap:
-        raise RuntimeError("Missing required gRPC port 'capabilities.squad_agent.grpc_port' in configuration.")
-    if "ip" not in sa_cap:
-        raise RuntimeError("Missing required host IP 'capabilities.squad_agent.ip' in configuration.")
+    # 1. Resolve host and ports strictly via standard toolbox accessors (zero silent fallback)
+    sa_rest_addr = config.get_listen_addr("squad_agent")
+    sa_grpc_addr = config.get_grpc_listen_addr("squad_agent")
 
-    host = str(sa_cap["ip"])
-    port = int(sa_cap["port"])
-    grpc_port = int(sa_cap["grpc_port"])
+    host, port_str = sa_rest_addr.split(":")
+    port = int(port_str)
+    _, grpc_port_str = sa_grpc_addr.split(":")
+    grpc_port = int(grpc_port_str)
 
     # 2. Get/Create Event Loop
     try:
@@ -904,13 +912,8 @@ def start_engine() -> None:
     nats_cap = config.data.get("capabilities", {}).get("nats", {})
     nats_servers = nats_cap.get("servers")
     if not nats_servers:
-        addr = None
-        if hasattr(config, "get_listen_addr"):
-            addr = config.get_listen_addr("nats") or config.get_listen_addr("nats_server")
-        if addr:
-            nats_servers = [f"nats://{addr}"]
-        else:
-            nats_servers = []
+        addr = config.get_listen_addr("nats")
+        nats_servers = [f"nats://{addr}"] if addr else []
     client_id = nats_cap.get("client_id", "python_agent_squad")
     subject_prefix = nats_cap.get("subject_prefix", "bastien-antigravity")
     
@@ -1004,6 +1007,16 @@ def main():
         import sys
         print("\n\n👋 Daemon terminated. Exiting.")
         sysExit(0)
+    except Exception as e:
+        logger.critical(f"Squad Agent Daemon fatal exception: {e}")
+        try:
+            import src.bootstrap as bootstrap
+            from src.core.controller import CommandController
+            ctrl = CommandController(config=bootstrap.config, logger=bootstrap.logger)
+            ctrl.dispatch_alert_sync("CRITICAL", f"Squad Agent Daemon crashed: {e}", "squad", "fatal")
+        except Exception:
+            pass
+        raise
 
 
 

@@ -19,13 +19,18 @@ KEY PARAMETERS:
 import os
 import sys
 from pathlib import Path
-from lib.bootstrap import ensure_virtualenv, prepend_venv_bin, ensure_import_paths
 
-script_dir = Path(__file__).resolve().parent
-vault_root = ensure_virtualenv(str(script_dir))
-prepend_venv_bin(vault_root)
+try:
+    from microservice_toolbox.utils.bootstrap import bootstrap_microservice
+except ImportError:
+    for parent in Path(__file__).resolve().parents:
+        toolbox_py = parent / "microservice-toolbox" / "python"
+        if toolbox_py.exists():
+            sys.path.insert(0, str(toolbox_py))
+            break
+    from microservice_toolbox.utils.bootstrap import bootstrap_microservice
 
-ensure_import_paths(script_dir, vault_root)
+bootstrap_microservice(__file__, app_name="squad_agent_dispatcher")
 
 from os.path import join as osPathJoin, exists as osPathExists
 from glob import glob as globGlob
@@ -43,7 +48,7 @@ ROLE_PROMPT_SOURCES = [
     osPathJoin(OBSIDIAN_DIR, "07-Core-KMS", "Role-Prompts")
 ]
 
-# Role to Prompt Filename Mapping
+# Role to Prompt Filename Mapping (21 Ecosystem Squad Personas)
 ROLE_MAP = {
     "oracle": "00-Oracle/Prompt-Chronos-Oracle.md",
     "orchestrator": "01-Orchestrator/Prompt-Orchestrator.md",
@@ -55,6 +60,18 @@ ROLE_MAP = {
     "fleetcommander": "07-FleetCommander/Prompt-FleetCommander.md",
     "purger": "08-Purger/Mister-Straight-to-Goal.md",
     "sentinel": "09-Sentinel/Prompt-Sentinel.md",
+    "docindexer": "10-DocIndexer/Prompt-DocIndexer.md",
+    "codeindexer": "11-CodeIndexer/Prompt-CodeIndexer.md",
+    "patternsentinel": "12-PatternSentinel/Prompt-Pattern-Sentinel.md",
+    "prototyper": "13-Prototyper/Prompt-Prototyper.md",
+    # Developer Squad Specialists
+    "pythonspecialist": "03-Developer/Squad/Python-Integration-Specialist.md",
+    "gospecialist": "03-Developer/Squad/Go-Systems-Specialist.md",
+    "rustspecialist": "03-Developer/Squad/Rust-Safety-Specialist.md",
+    "cppspecialist": "03-Developer/Squad/CPP-Low-Latency-Specialist.md",
+    "webuispecialist": "03-Developer/Squad/Web-UI-Specialist.md",
+    "timescalespecialist": "03-Developer/Squad/Timescale-Data-Specialist.md",
+    "vbaspecialist": "03-Developer/Squad/Excel-VBA-Specialist.md",
 }
 
 def get_role_prompt_path(role_key: str) -> Optional[str]:
@@ -73,7 +90,7 @@ def get_role_prompt_path(role_key: str) -> Optional[str]:
 
 # Semantic Keywords for Fallback Scoring
 SEMANTIC_KEYWORDS = {
-    "developer": ["code", "implement", "fix", "feature", "refactor", "bug", "go", "python", "rust", "compile", "script", "import", "logic"],
+    "developer": ["code", "implement", "fix", "feature", "refactor", "bug", "compile", "script", "import", "logic"],
     "qa": ["test", "verification", "assert", "acceptance criteria", "scenario", "audit", "coverage", "check", "run_test", "mock", "validation"],
     "architect": ["design", "specification", "adr", "diagram", "blueprint", "pattern", "uml", "hierarchy", "relationship", "concept"],
     "docmaintainer": ["documentation", "markdown", "readme", "links", "glossary", "moc", "write-up", "frontmatter", "wiki", "text"],
@@ -81,7 +98,18 @@ SEMANTIC_KEYWORDS = {
     "sentinel": ["security", "sandbox", "permissions", "access control", "compliance", "policy", "firewall", "authorization", "matrix"],
     "fleetcommander": ["deploy", "ci/cd", "fleet", "docker", "release", "orchestrate", "git hook", "bootstrap", "submodule"],
     "oracle": ["strategy", "nexus", "oracle", "future", "forecast", "insight", "strategic", "vision", "goal"],
-    "orchestrator": ["coordinate", "delegation", "dispatcher", "dispatch", "assign", "workflow", "orchestrator", "schedule"]
+    "orchestrator": ["coordinate", "delegation", "dispatcher", "dispatch", "assign", "workflow", "orchestrator", "schedule"],
+    "docindexer": ["docindex", "documentation indexing", "rag vault indexing", "markdown indexing"],
+    "codeindexer": ["codeindex", "ast indexing", "symbol table", "code search index"],
+    "patternsentinel": ["pattern audit", "architectural pattern", "convention compliance", "rule alignment"],
+    "prototyper": ["prototype", "mockup", "poc", "scratchpad", "experimentation"],
+    "gospecialist": ["golang", "go", "goroutine", "safe-socket", "gopls", "channel", "cgo"],
+    "pythonspecialist": ["python", "pytest", "fastapi", "pydantic", "pip", "venv"],
+    "rustspecialist": ["rust", "cargo", "tokio", "log-server", "async rust", "borrow checker"],
+    "cppspecialist": ["cpp", "c++", "cmake", "low-latency", "cgo bridge"],
+    "webuispecialist": ["frontend", "web-interface", "openmfe", "css", "html", "javascript", "browser subagent"],
+    "timescalespecialist": ["timescale", "sql", "postgres", "hypertables", "database migration", "pgvector"],
+    "vbaspecialist": ["vba", "excel", "macro", "spreadsheet", "workbook"],
 }
 
 # -----------------------------------------------------------------------------------------------

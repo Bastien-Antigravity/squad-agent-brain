@@ -23,25 +23,30 @@ from pathlib import Path
 from datetime import datetime, timedelta
 from subprocess import run as subprocessRun
 import json
-from lib.bootstrap import ensure_virtualenv, prepend_venv_bin, ensure_import_paths
-from lib.orchestration_lib import setup_terminal, get_active_mode, get_fleet_repositories
-
-script_dir = Path(__file__).resolve().parent
-vault_root = ensure_virtualenv(str(script_dir))
-prepend_venv_bin(vault_root)
-ensure_import_paths(script_dir, vault_root)
-
-setup_terminal()
-
-# Add the lib directory to sys.path to import sovereignty
-lib_path = script_dir.parent / "lib"
-sys.path.append(str(lib_path))
 
 try:
-    from sovereignty import Sovereignty
+    from microservice_toolbox.utils.bootstrap import bootstrap_microservice
 except ImportError:
-    print("❌ Error: Could not find sovereignty.py in lib/")
-    sys.exit(1)
+    for parent in Path(__file__).resolve().parents:
+        toolbox_py = parent / "microservice-toolbox" / "python"
+        if toolbox_py.exists():
+            sys.path.insert(0, str(toolbox_py))
+            break
+    from microservice_toolbox.utils.bootstrap import bootstrap_microservice
+
+bootstrap_microservice(__file__, app_name="squad_agent_close_mission")
+
+from lib.orchestration_lib import (
+    setup_terminal,
+    get_active_mode,
+    get_fleet_repositories,
+    resolve_vault_and_workspace,
+    get_logger,
+)
+from lib.sovereignty import Sovereignty
+
+logger = get_logger("CloseMission")
+setup_terminal()
 
 # -----------------------------------------------------------------------------
 
@@ -64,16 +69,14 @@ def confirm_step(prompt: str) -> bool:
 # -----------------------------------------------------------------------------
 
 def main():
-    print("\n" + "═"*60)
-    print("🎭 BASTIEN-ANTIGRAVITY: MISSION SIGN-OFF RITUAL")
-    print("═"*60)
+    logger.info("═"*60)
+    logger.info("🎭 BASTIEN-ANTIGRAVITY: MISSION SIGN-OFF RITUAL")
+    logger.info("═"*60)
     
-    script_dir = Path(__file__).parent.absolute()
-    vault_root = script_dir.parent
-    workspace_root = vault_root.parent
+    vault_root, workspace_root = resolve_vault_and_workspace(__file__)
     
     active_mode = get_active_mode(vault_root)
-    print(f"📡 Active Mode Detected: Mode {active_mode}")
+    logger.info(f"📡 Active Mode Detected: Mode {active_mode}")
     
     EXCLUSIONS = [".git", ".obsidian", ".gemini", "Templates", "MODE-MANUAL.md"]
     engine = Sovereignty(workspace_root=workspace_root)
@@ -150,7 +153,7 @@ def main():
                     
         if is_dirty:
             dirty_repos.append(repo)
-            print(f"📡 Repo '{repo_name}' is dirty. Auditing...")
+            logger.info(f"📡 Repo '{repo_name}' is dirty. Auditing...")
             if not session_state_modified:
                 engine.log_error(f"[{repo_name}] Dirty repository lacks updates to its local AI-Session-State.md.")
             for path in repo_hot_files:
@@ -159,7 +162,7 @@ def main():
                 all_hot_files.append(path)
                 
     if not dirty_repos:
-        print("✨ Fleet is Clean: No uncommitted session work detected in any repository.")
+        logger.info("✨ Fleet is Clean: No uncommitted session work detected in any repository.")
         return
         
     report = engine.get_report()
@@ -168,79 +171,79 @@ def main():
         if "AI-Session-State.md" in err:
             state_ok = False
             
-    print("\n" + "─"*60)
-    print("📊 SOVEREIGNTY GATE STATUS")
-    print("─"*60)
+    logger.info("─"*60)
+    logger.info("📊 SOVEREIGNTY GATE STATUS")
+    logger.info("─"*60)
     
     metadata_icon = "✅" if report["success"] else "❌"
     state_icon = "✅" if state_ok else "❌"
-    print(f"  {metadata_icon} METADATA  : {'PASSED' if report['success'] else 'VIOLATED'}")
-    print(f"  {state_icon} STATE LOG : {'SYNCED' if state_ok else 'MISSING'}")
+    logger.info(f"  {metadata_icon} METADATA  : {'PASSED' if report['success'] else 'VIOLATED'}")
+    logger.info(f"  {state_icon} STATE LOG : {'SYNCED' if state_ok else 'MISSING'}")
     
     if report["file_errors"] or report["file_warnings"]:
-        print("\n📂 DETAILED AUDIT REPORT:")
+        logger.warning("📂 DETAILED AUDIT REPORT:")
         for file_path, errors in report["file_errors"].items():
-            print(f"  ❌ {Path(file_path).name}")
+            logger.error(f"  ❌ {Path(file_path).name}")
             for err in errors:
-                print(f"     - {err}")
+                logger.error(f"     - {err}")
         for file_path, warnings in report["file_warnings"].items():
-            print(f"  ⚠️  {Path(file_path).name}")
+            logger.warning(f"  ⚠️  {Path(file_path).name}")
             for warn in warnings:
-                print(f"     - {warn}")
+                logger.warning(f"     - {warn}")
 
     if report["success"] and state_ok:
-        print("\n✨ VERDICT: MISSION ACCOMPLISHED")
+        logger.info("✨ VERDICT: MISSION ACCOMPLISHED")
         mission_id = datetime.now().strftime("M-%Y%m%d-%H%M")
-        print("\n📜 SESSION SIGN-OFF SEAL:")
-        print("   " + "─"*40)
-        print(f"   Mission-ID : {mission_id}")
-        print(f"   Status     : SEALED-AND-SYNCED")
-        print(f"   Taxonomy   : Trinity-Compliant")
-        print("   " + "─"*40)
+        logger.info("📜 SESSION SIGN-OFF SEAL:")
+        logger.info("   " + "─"*40)
+        logger.info(f"   Mission-ID : {mission_id}")
+        logger.info(f"   Status     : SEALED-AND-SYNCED")
+        logger.info(f"   Taxonomy   : Trinity-Compliant")
+        logger.info("   " + "─"*40)
         
         # 5. GIT RITUAL (STRICTLY ON DEVELOP)
-        print("\n🚀 Initiating Fleet Synchronization Ritual...")
+        logger.info("🚀 Initiating Fleet Synchronization Ritual...")
         for repo in dirty_repos:
             repo_name = repo["name"]
             repo_path = repo["path"]
             branch = get_current_branch(repo_path)
             
             if branch in ["main", "master"]:
-                print(f"   🛑 PROHIBITED: Automatic ritual is FORBIDDEN on the '{branch}' branch.")
+                logger.error(f"   🛑 PROHIBITED: Automatic ritual is FORBIDDEN on the '{branch}' branch.")
                 continue
             elif branch != "develop" and not branch.startswith("feature/"):
-                print(f"   ⚠️  SKIPPED: Ritual only allowed on 'develop' or 'feature/*' branches. Current branch is '{branch}'.")
+                logger.warning(f"   ⚠️  SKIPPED: Ritual only allowed on 'develop' or 'feature/*' branches. Current branch is '{branch}'.")
                 continue
 
             try:
-                print(f"   📦 Preparing updates for '{repo_name}' on '{branch}'...")
+                logger.info(f"   📦 Preparing updates for '{repo_name}' on '{branch}'...")
                 subprocessRun(["git", "add", "."], cwd=repo_path, check=True)
                 
                 if confirm_step(f"Commit changes to '{repo_name}'?"):
                     commit_msg = f"chore: mission sign-off {mission_id}"
                     subprocessRun(["git", "commit", "-m", commit_msg], cwd=repo_path, check=True)
-                    print(f"   ✅ Changes committed.")
+                    logger.info("   ✅ Changes committed.")
                     
                     if confirm_step(f"Push changes for '{repo_name}' to origin {branch}?"):
                         subprocessRun(["git", "push", "origin", branch], cwd=repo_path, check=True)
-                        print(f"   ✅ Pushed successfully.")
+                        logger.info("   ✅ Pushed successfully.")
                     else:
-                        print(f"   ➡️  Push skipped.")
+                        logger.info("   ➡️  Push skipped.")
                 else:
-                    print(f"   ➡️  Commit skipped.")
+                    logger.info("   ➡️  Commit skipped.")
             except Exception as e:
-                print(f"   ⚠️  Sync failed for '{repo_name}': {e}")
+                logger.warning(f"   ⚠️  Sync failed for '{repo_name}': {e}")
     else:
-        print("\n🛑 VERDICT: MISSION BLOCKED")
+        logger.error("🛑 VERDICT: MISSION BLOCKED")
         for err in engine.errors:
-            print(f"   [!] {err}")
+            logger.error(f"   [!] {err}")
             
     if report["warnings"] and not report["file_warnings"]:
-        print("\n💡 HYGIENE SUGGESTIONS:")
+        logger.warning("💡 HYGIENE SUGGESTIONS:")
         for warn in report["warnings"]:
-            print(f"   [~] {warn}")
+            logger.warning(f"   [~] {warn}")
             
-    print("\n" + "═"*60 + "\n")
+    logger.info("═"*60)
     if not (report["success"] and state_ok):
         sys.exit(1)
 

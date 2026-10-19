@@ -8,7 +8,7 @@ structure, mandatory root files, Docker standards, and BDD specifications.
 
 DATA FLOW:
 1. Input: Service name, target language (Go/Python/Rust), port, description.
-2. Logic: Generates folder architecture, creates the 9 mandatory root files,
+2. Logic: Generates folder architecture, creates the 12 mandatory root files & folders,
    establishes standalone.yaml symlink, and generates BDD specs in 02-Business-BDD.
 3. Output: Production-ready microservice directory and ecosystem registration snippets.
 
@@ -113,11 +113,11 @@ func main() {{
 
 	appLogger.Info("Starting {name} (version %s) under profile: %s", appConfig.GetVersion(), appConfig.Profile)
 
-	// 2. Resolve Service Listen Address
+	// 2. Resolve Service Listen Address (Zero Silent Fallback)
 	addr, err := appConfig.GetListenAddr("{cap_name}")
 	if err != nil || addr == "" {{
-		addr = "127.0.0.1:{port}"
-		appLogger.Warning("Falling back to default listen address %s: %v", addr, err)
+		appLogger.Critical("Failed to resolve dynamic listen address for capability '{cap_name}': %v", err)
+		os.Exit(1)
 	}}
 
 	// 3. Instantiate Core Controller

@@ -65,25 +65,14 @@ def register_mfe_with_web_interface(config, logger, sa_ip, sa_port):
     """
     time.sleep(2)  # Wait for server to boot
 
-    # Resolve web_interface address dynamically from config (no fallbacks)
-    web_cap = None
-    if config and hasattr(config, "data") and isinstance(config.data, dict):
-        web_cap = config.data.get("capabilities", {}).get("web_interface")
-
-    if not web_cap or not isinstance(web_cap, dict):
-        logger.error("OpenMFE registration aborted: Missing capability 'capabilities.web_interface' in configuration.")
-        return
-    if "port" not in web_cap:
-        logger.error("OpenMFE registration aborted: Missing 'capabilities.web_interface.port' in configuration.")
-        return
-    if "ip" not in web_cap:
-        logger.error("OpenMFE registration aborted: Missing 'capabilities.web_interface.ip' in configuration.")
+    # Resolve web_interface address dynamically via standard toolbox accessor (zero silent fallback)
+    try:
+        web_addr = config.get_listen_addr("web_interface")
+    except Exception as e:
+        logger.error(f"OpenMFE registration aborted: Failed to resolve capability 'web_interface' listen address ({e}).")
         return
 
-    web_ip = str(web_cap["ip"])
-    web_port = int(web_cap["port"])
-
-    reg_url = f"http://{web_ip}:{web_port}/api/v1/register"
+    reg_url = f"http://{web_addr}/api/v1/register"
     mfe_url = f"http://{sa_ip}:{sa_port}/static/mfe.js"
     
     payload = {

@@ -19,30 +19,25 @@ KEY PARAMETERS:
 import os
 import sys
 from pathlib import Path
-from lib.bootstrap import ensure_virtualenv, prepend_venv_bin, ensure_import_paths
 
-script_dir = Path(__file__).resolve().parent
-vault_root = ensure_virtualenv(str(script_dir))
-prepend_venv_bin(vault_root)
+try:
+    from microservice_toolbox.utils.bootstrap import bootstrap_microservice
+except ImportError:
+    for parent in Path(__file__).resolve().parents:
+        toolbox_py = parent / "microservice-toolbox" / "python"
+        if toolbox_py.exists():
+            sys.path.insert(0, str(toolbox_py))
+            break
+    from microservice_toolbox.utils.bootstrap import bootstrap_microservice
 
-ensure_import_paths(script_dir, vault_root)
+bootstrap_microservice(__file__, app_name="fleet_init_update")
 
 from json import load as jsonLoad
-from pathlib import Path
-from sys import stdout as sysStdout
-
-# Standardize terminal output encoding for Windows
-if sysStdout.encoding != 'utf-8':
-    try:
-        sysStdout.reconfigure(encoding='utf-8')
-    except (AttributeError, Exception):
-        pass
-
-# ### CONFIGURATIONS ###
-
+from universal_logger import UniLog
 from lib.orchestration_lib import resolve_vault_and_workspace
 
 vault_root, workspace_root = resolve_vault_and_workspace(__file__)
+logger = UniLog(app_name="fleet_init_update")
 
 # Path to the inventory
 INVENTORY_PATH = vault_root / "05-Fleet-Operation" / "00-Repo-Control" / "inventory.json"
@@ -74,14 +69,14 @@ def update_fleet() -> None:
     Scans the inventory and updates the AI-Init.md file for every registered repository.
     """
     if not INVENTORY_PATH.exists():
-        print("FleetUpdate: Inventory not found at {0}".format(INVENTORY_PATH))
+        logger.error(f"FleetUpdate: Inventory not found at {INVENTORY_PATH}")
         return
 
     with open(INVENTORY_PATH, 'r', encoding='utf-8') as f:
         data = jsonLoad(f)
 
     repos = data.get("repositories", [])
-    print("🚀 Starting Fleet-Wide AI-Init Update for {0} repositories...".format(len(repos)))
+    logger.info(f"Starting Fleet-Wide AI-Init Update for {len(repos)} repositories...")
 
     for repo in repos:
         name = repo.get("name")
@@ -96,7 +91,7 @@ def update_fleet() -> None:
             path = (workspace_root / path_str).resolve()
         
         if not path.exists():
-            print("  [!] Skipping {0}: Path does not exist ({1})".format(name, path))
+            logger.warning(f"Skipping {name}: Path does not exist ({path})")
             continue
 
         init_file = path / "AI-Init.md"
@@ -105,11 +100,11 @@ def update_fleet() -> None:
         try:
             with open(init_file, 'w', encoding='utf-8') as f:
                 f.write(content)
-            print("  [+] Updated: {0}".format(name))
+            logger.info(f"Updated: {name}")
         except Exception as e:
-            print("  [X] Failed {0}: {1}".format(name, str(e)))
+            logger.error(f"Failed {name}: {e}")
 
-    print("\n✅ Fleet Update Complete.")
+    logger.info("Fleet Update Complete.")
 
 # -----------------------------------------------------------------------------------------------
 

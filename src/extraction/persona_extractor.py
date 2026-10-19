@@ -284,8 +284,6 @@ def extract_personas(repo_path, output_dir, is_daemon, logger=None):
     total_files = sum(scanned_files.values())
     if logger:
         logger.info(f"Persona Extraction complete ({duration_ms}ms, {total_files} files scanned). Manifest saved to {manifest_path}")
-    if not is_daemon:
-        print(f"✅ Persona Extraction complete ({duration_ms}ms, {total_files} files). Manifest: {manifest_path}")
 
 
 def main():

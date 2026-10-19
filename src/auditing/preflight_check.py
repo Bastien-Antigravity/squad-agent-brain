@@ -22,22 +22,17 @@ import os
 import sys
 from pathlib import Path
 
-# Add src root and project root to sys.path to enable loading lib.* and src.* modules
-_self_dir = Path(__file__).resolve().parent
-_src_dir = _self_dir.parent
-_project_dir = _src_dir.parent
-if str(_src_dir) not in sys.path:
-    sys.path.insert(0, str(_src_dir))
-if str(_project_dir) not in sys.path:
-    sys.path.insert(0, str(_project_dir))
+try:
+    from microservice_toolbox.utils.bootstrap import bootstrap_microservice
+except ImportError:
+    for parent in Path(__file__).resolve().parents:
+        toolbox_py = parent / "microservice-toolbox" / "python"
+        if toolbox_py.exists():
+            sys.path.insert(0, str(toolbox_py))
+            break
+    from microservice_toolbox.utils.bootstrap import bootstrap_microservice
 
-from lib.bootstrap import ensure_virtualenv, prepend_venv_bin, ensure_import_paths
-
-script_dir = _self_dir
-vault_root = ensure_virtualenv(str(script_dir))
-prepend_venv_bin(vault_root)
-
-ensure_import_paths(script_dir, vault_root)
+bootstrap_microservice(__file__, app_name="squad_agent_preflight")
 
 from sys import stdout as sysStdout, executable as sysExecutable
 from os import name as osName
@@ -409,6 +404,43 @@ def _check_versioning_integrity() -> Tuple[str, List[str]]:
     except Exception as e:
         return "RED", [f"Versioning integrity check failed: {e}"]
 
+def _check_ecosystem_tooling_parity() -> Tuple[str, List[str]]:
+    """
+    Gate 9: Scans workspace and submodules using ComplianceAuditor to ensure mandatory
+    adoption of dedicated ecosystem tooling (BootstrapService, UniLog, dynamic ports,
+    fail-fast resilience) and absolute zero anti-patterns (no bare prints, legacy sys.path climbing,
+    or direct YAML parsing).
+    """
+    messages = []
+    try:
+        from auditing.validate_compliance import ComplianceAuditor
+        auditor = ComplianceAuditor(workspace_root=WORKSPACE_ROOT)
+        
+        targets = [
+            VAULT_DIR / "08-Squad-Agent" / "src",
+            VAULT_DIR / "04-Rapid-Prototyping" / "src",
+            VAULT_DIR / "05-Fleet-Operation" / "00-Repo-Control",
+        ]
+        
+        all_violations = []
+        for t in targets:
+            if t.exists():
+                all_violations.extend(auditor.audit_path(t))
+                
+        if all_violations:
+            messages.append(f"Ecosystem tool compliance drift: {len(all_violations)} violation(s) detected:")
+            for v in all_violations[:5]:
+                f_name = Path(v['file']).name
+                messages.append(f"  - [{v['rule']}] {f_name}:{v['line']} - {v['message']}")
+            if len(all_violations) > 5:
+                messages.append(f"  - ... and {len(all_violations) - 5} more.")
+            return "RED", messages
+            
+        messages.append("All scanned codebase modules 100% compliant with dedicated ecosystem tooling standards.")
+        return "GREEN", messages
+    except Exception as e:
+        return "RED", [f"Ecosystem tool compliance check failed: {e}"]
+
 # ### MAIN ###
 
 def run_preflight(quiet: bool = False) -> bool:
@@ -425,6 +457,7 @@ def run_preflight(quiet: bool = False) -> bool:
         ("Process Manifest Check", _check_manifest_elements),
         ("4-Layer Port Drift Check", _check_ports_and_capabilities),
         ("Dynamic Versioning Integrity", _check_versioning_integrity),
+        ("Ecosystem Tooling & Anti-Pattern Parity", _check_ecosystem_tooling_parity),
     ]
     
     overall = "GREEN"
@@ -462,6 +495,15 @@ def run_preflight(quiet: bool = False) -> bool:
             print("{0} PREFLIGHT: CRITICAL ISSUES. Fix before proceeding.".format(icon))
         print("=" * 60 + "\n")
     
+    if overall == "RED":
+        try:
+            from microservice_toolbox.notification import NotificationClient
+            import src.bootstrap as bootstrap
+            client = NotificationClient.from_config(bootstrap.config, bootstrap.logger)
+            client.send_alert_sync("CRITICAL", f"🚨 Preflight Check FAILED in Bastien-Antigravity fleet: checks evaluated with fatal RED status.")
+        except Exception:
+            pass
+
     return overall == "GREEN"
 
 # -----------------------------------------------------------------------------------------------

@@ -20,38 +20,22 @@ import os
 import sys
 from pathlib import Path
 
-# Add src root and project root to sys.path to enable loading lib.* and src.* modules
-_self_dir = Path(__file__).resolve().parent
-_src_dir = _self_dir.parent
-_project_dir = _src_dir.parent
-if str(_src_dir) not in sys.path:
-    sys.path.insert(0, str(_src_dir))
-if str(_project_dir) not in sys.path:
-    sys.path.insert(0, str(_project_dir))
-
-from lib.bootstrap import ensure_virtualenv, prepend_venv_bin, ensure_import_paths
-
-script_dir = _self_dir
-vault_root = ensure_virtualenv(str(script_dir))
-prepend_venv_bin(vault_root)
-
-ensure_import_paths(script_dir, vault_root)
-
-from sys import exit as sysExit, stdout as sysStdout, path as sysPath
-from os import walk as osWalk
-from pathlib import Path
-from typing import List
-
-# Add the lib directory to sys.path to import sovereignty
-script_dir = Path(__file__).resolve().parent
-lib_path = script_dir.parent / "lib"
-sysPath.append(str(lib_path))
-
 try:
-    from sovereignty import Sovereignty
+    from microservice_toolbox.utils.bootstrap import bootstrap_microservice
 except ImportError:
-    print(f"❌ Error: Could not find sovereignty.py in {lib_path}")
-    sysExit(1)
+    for parent in Path(__file__).resolve().parents:
+        toolbox_py = parent / "microservice-toolbox" / "python"
+        if toolbox_py.exists():
+            sys.path.insert(0, str(toolbox_py))
+            break
+    from microservice_toolbox.utils.bootstrap import bootstrap_microservice
+
+bootstrap_microservice(__file__, app_name="squad_agent_brain_health")
+
+from sys import exit as sysExit, stdout as sysStdout
+from os import walk as osWalk
+from typing import List
+from lib.sovereignty import Sovereignty
 
 # Standardize terminal output encoding for Windows
 if sysStdout.encoding != 'utf-8':

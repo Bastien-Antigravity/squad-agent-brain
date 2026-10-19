@@ -20,8 +20,21 @@ KEY PARAMETERS:
 import sys
 import time
 import asyncio
+from pathlib import Path
 from typing import Dict, Any, List, Optional
 from json import dumps as jsonDumps
+
+try:
+    from microservice_toolbox.utils.bootstrap import bootstrap_microservice
+except ImportError:
+    for parent in Path(__file__).resolve().parents:
+        toolbox_py = parent / "microservice-toolbox" / "python"
+        if toolbox_py.exists():
+            sys.path.insert(0, str(toolbox_py))
+            break
+    from microservice_toolbox.utils.bootstrap import bootstrap_microservice
+
+bootstrap_microservice(__file__, app_name="squad_agent_controller")
 
 from microservice_toolbox.logger import ensure_safe_logger
 from interfaces import Command, MemoryStore
@@ -47,6 +60,44 @@ class CommandController(Command):
         self.repo_root = Path(__file__).resolve().parent.parent.parent
         self.version = self._load_version()
         self.memory = self._setup_memory()
+        self.notif_client = self._setup_notification_client()
+
+    # -----------------------------------------------------------------------------------------------
+
+    def _setup_notification_client(self) -> Optional[Any]:
+        """Dynamically initializes NotificationClient from microservice-toolbox."""
+        try:
+            from microservice_toolbox.notification import NotificationClient
+            return NotificationClient.from_config(self.config, self.logger)
+        except Exception as e:
+            self.logger.warning(f"{self.Name} : Could not initialize NotificationClient ({e}). Alert dispatch will be skipped.")
+            return None
+
+    # -----------------------------------------------------------------------------------------------
+
+    async def dispatch_alert(self, level: str, message: str, *tags: str) -> bool:
+        """Dispatches operational alerts to notif-server via NotificationClient."""
+        if not self.notif_client:
+            return False
+        try:
+            await self.notif_client.send_alert(level, message, *tags)
+            return True
+        except Exception as e:
+            self.logger.error(f"{self.Name} : Failed to dispatch notification alert ({e})")
+            return False
+
+    # -----------------------------------------------------------------------------------------------
+
+    def dispatch_alert_sync(self, level: str, message: str, *tags: str) -> bool:
+        """Synchronously dispatches operational alerts to notif-server via NotificationClient."""
+        if not self.notif_client:
+            return False
+        try:
+            self.notif_client.send_alert_sync(level, message, *tags)
+            return True
+        except Exception as e:
+            self.logger.error(f"{self.Name} : Failed to dispatch synchronous notification alert ({e})")
+            return False
 
     # -----------------------------------------------------------------------------------------------
 
@@ -201,6 +252,10 @@ class CommandController(Command):
             "discord-client": "Connects Discord chat channels to the unified squad command controller.",
             "map-feats": "Crawls BDD specifications to map microservices to their behavioral feature files and displays the coverage map.",
             "fix-feats": "Standardizes BDD spec files by injecting missing domain tags, normalizing folder locations, and adding parent hub links.",
+            "unlock-vault": "Removes KMS lock protections on sensitive vault files to permit maintenance and updates.",
+            "fleet-version": "Audits and verifies dynamic semantic versioning across all fleet repositories against VERSION.txt.",
+            "bump-version": "Increments semantic versioning (patch, minor, major) across fleet repositories and updates VERSION.txt.",
+            "fleet-refresh": "Synchronizes local git branches, pulls updates across submodules, and refreshes the repository workspace state.",
             "controller": "Invokes command router execution, handling direct subprocess spawning and command outputs."
         }
         return [
@@ -233,8 +288,10 @@ class CommandController(Command):
                     self.logger.info(f"Subcommand {cmd_name} finished successfully.")
                 else:
                     self.logger.error(f"Subcommand {cmd_name} failed with return code {proc.returncode}")
+                    await self.dispatch_alert("ERROR", f"Subcommand '{cmd_name}' failed with return code {proc.returncode}", "squad", "cli")
             except Exception as e:
                 self.logger.error(f"Failed to run subcommand {cmd_name}: {e}")
+                await self.dispatch_alert("CRITICAL", f"Subcommand '{cmd_name}' execution exception: {e}", "squad", "cli")
 
         asyncio.create_task(_task())
         return True, f"Subcommand {cmd_name} triggered successfully in the background."
@@ -372,7 +429,7 @@ class CommandController(Command):
             mock_msg = " ".join(sys.argv[1:])
 
         res = self.process_message(channel="CLI_MOCK", session_id="test_session", user_msg=mock_msg)
-        print(jsonDumps(res, indent=2))
+        self.logger.info(jsonDumps(res, indent=2))
 
 # -----------------------------------------------------------------------------------------------
 

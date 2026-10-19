@@ -32,20 +32,19 @@ from pathlib import Path
 from typing import Dict, Any, List, Tuple
 import yaml
 
-# Add src root and project root to sys.path to enable loading lib.* and src.* modules
-_self_dir = Path(__file__).resolve().parent
-_src_dir = _self_dir.parent
-_project_dir = _src_dir.parent
-if str(_src_dir) not in sys.path:
-    sys.path.insert(0, str(_src_dir))
-if str(_project_dir) not in sys.path:
-    sys.path.insert(0, str(_project_dir))
+try:
+    from microservice_toolbox.utils.bootstrap import bootstrap_microservice
+except ImportError:
+    for parent in Path(__file__).resolve().parents:
+        toolbox_py = parent / "microservice-toolbox" / "python"
+        if toolbox_py.exists():
+            sys.path.insert(0, str(toolbox_py))
+            break
+    from microservice_toolbox.utils.bootstrap import bootstrap_microservice
 
-from lib.bootstrap import ensure_virtualenv, prepend_venv_bin, ensure_import_paths
+bootstrap_microservice(__file__, app_name="squad_agent_audit_ports")
+
 from lib.orchestration_lib import setup_terminal, resolve_vault_and_workspace, get_logger
-_vault_root = ensure_virtualenv(str(_self_dir))
-prepend_venv_bin(_vault_root)
-ensure_import_paths(_self_dir, _vault_root)
 
 setup_terminal()
 VAULT_ROOT, WORKSPACE_ROOT = resolve_vault_and_workspace(__file__)
@@ -179,7 +178,7 @@ def audit_ports(auto_sync: bool = False) -> Tuple[str, List[str]]:
         "tele_remote": "tele-remote",
         "web_interface": "web-interface",
         "watchdog_agent": "watchdog-agent",
-        "nats_server": "nats-server",
+        "nats": "nats-server",
         "timescale_db": "timescale-db",
         "rag_engine": "rag-engine",
     }

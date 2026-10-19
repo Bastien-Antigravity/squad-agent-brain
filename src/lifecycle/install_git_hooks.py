@@ -60,20 +60,24 @@ fi
 cd "$(dirname "$0")/../.."
 
 if [ -f "./08-Squad-Agent/.venv/bin/python3" ]; then
-    ./08-Squad-Agent/.venv/bin/python3 ./08-Squad-Agent/main.py ensure-frontmatter --check
+    PY_BIN="./08-Squad-Agent/.venv/bin/python3"
 elif [ -f "./08-Squad-Agent/.venv/Scripts/python.exe" ]; then
-    ./08-Squad-Agent/.venv/Scripts/python.exe ./08-Squad-Agent/main.py ensure-frontmatter --check
+    PY_BIN="./08-Squad-Agent/.venv/Scripts/python.exe"
 elif [ -f "./09-RAG-Engine/.venv/bin/python3" ]; then
-    ./09-RAG-Engine/.venv/bin/python3 ./08-Squad-Agent/main.py ensure-frontmatter --check
+    PY_BIN="./09-RAG-Engine/.venv/bin/python3"
 elif [ -f "./09-RAG-Engine/.venv/Scripts/python.exe" ]; then
-    ./09-RAG-Engine/.venv/Scripts/python.exe ./08-Squad-Agent/main.py ensure-frontmatter --check
+    PY_BIN="./09-RAG-Engine/.venv/Scripts/python.exe"
 elif [ -f "./.venv/bin/python3" ]; then
-    ./.venv/bin/python3 ./08-Squad-Agent/main.py ensure-frontmatter --check
+    PY_BIN="./.venv/bin/python3"
 elif [ -f "./.venv/Scripts/python.exe" ]; then
-    ./.venv/Scripts/python.exe ./08-Squad-Agent/main.py ensure-frontmatter --check
+    PY_BIN="./.venv/Scripts/python.exe"
 else
-    python3 ./08-Squad-Agent/main.py ensure-frontmatter --check
+    PY_BIN="python3"
 fi
+
+echo "🔍 Running pre-commit Frontmatter & Ecosystem Compliance Gate..."
+$PY_BIN ./08-Squad-Agent/main.py ensure-frontmatter --check || exit 1
+$PY_BIN ./08-Squad-Agent/main.py validate-compliance --staged || exit 1
 """
 
     hooks_config = {
