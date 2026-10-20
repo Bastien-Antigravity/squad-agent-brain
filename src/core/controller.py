@@ -413,10 +413,10 @@ class CommandController(Command):
                 "content": message
             }
             if hasattr(self, "event_bus") and self.event_bus:
-                await self.event_bus.publish("antigravity.squad.chat", payload_data)
+                await self.event_bus.publish("bastien-antigravity.squad.chat", payload_data)
             else:
                 from src.interfaces import LocalEventBus
-                LocalEventBus.publish("antigravity.squad.chat", payload_data)
+                LocalEventBus.publish("bastien-antigravity.squad.chat", payload_data)
         except Exception as e:
             self.logger.error(f"Failed to publish user message: {e}")
 

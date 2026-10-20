@@ -17,6 +17,7 @@ KEY PARAMETERS:
 - logger: UniLog or compatible Logger instance.
 """
 
+import os
 import json
 import asyncio
 import uuid
@@ -24,6 +25,14 @@ import re
 from typing import Dict, Any, List, Callable, Awaitable, Optional
 from microservice_toolbox.messaging.config import NatsConfig
 from microservice_toolbox.messaging.connector import connect as nats_connect
+
+# -----------------------------------------------------------------------------
+
+def normalize_topic(topic: str) -> str:
+    """Normalizes legacy topic names to canonical ecosystem prefix."""
+    if topic == "antigravity.squad.chat":
+        return "bastien-antigravity.squad.chat"
+    return topic
 
 # -----------------------------------------------------------------------------
 
@@ -80,7 +89,7 @@ class EventDeduplicator:
 # -----------------------------------------------------------------------------
 
 class LocalEventBus:
-    """In-memory fallback event bus for NATS-offline/local testing."""
+    """In-memory fallback event bus for NATS-offline/mock testing only."""
     _subscribers = None
 
     # -----------------------------------------------------------------------------
@@ -95,12 +104,14 @@ class LocalEventBus:
 
     @classmethod
     def subscribe(cls, topic: str, callback: Callable[[Dict[str, Any]], Awaitable[None]], role: Optional[str] = None):
+        topic = normalize_topic(topic)
         subs = cls._get_subscribers()
         topics_to_sub = []
-        if topic in ("antigravity.squad.chat", "bastien-antigravity.squad.chat") and role:
+        is_squad_chat = topic.endswith(".squad.chat") or topic in ("antigravity.squad.chat", "bastien-antigravity.squad.chat")
+        if is_squad_chat and role:
             topics_to_sub.append(f"{topic}.broadcast")
             topics_to_sub.append(f"{topic}.agent.{role}")
-        elif topic in ("antigravity.squad.chat", "bastien-antigravity.squad.chat") and not role:
+        elif is_squad_chat and not role:
             topics_to_sub.append(f"{topic}.*")
         else:
             topics_to_sub.append(topic)
@@ -114,6 +125,7 @@ class LocalEventBus:
 
     @classmethod
     def publish(cls, topic: str, payload: Dict[str, Any]):
+        topic = normalize_topic(topic)
         # Deduplicate local events
         event_id = payload.get("event_id")
         if event_id and EventDeduplicator.is_duplicate(event_id):
@@ -121,7 +133,8 @@ class LocalEventBus:
 
         # Map targets for local fallback
         targets = []
-        if topic in ("antigravity.squad.chat", "bastien-antigravity.squad.chat"):
+        is_squad_chat = topic.endswith(".squad.chat") or topic in ("antigravity.squad.chat", "bastien-antigravity.squad.chat")
+        if is_squad_chat:
             content = payload.get("content", "").lower()
             sender = payload.get("sender")
             
@@ -144,7 +157,7 @@ class LocalEventBus:
             callbacks_to_trigger.extend(subs.get(target, []))
             
         # Also trigger subscribers of wildcard or base topic
-        if topic in ("antigravity.squad.chat", "bastien-antigravity.squad.chat"):
+        if is_squad_chat:
             callbacks_to_trigger.extend(subs.get(f"{topic}.*", []))
             callbacks_to_trigger.extend(subs.get(topic, []))
 
@@ -166,16 +179,26 @@ class LocalEventBus:
 
 class DualSquadEventBus(SquadEventBus):
     """
-    Unified hybrid event bus that attempts NATS broker routing but cleanly falls back
-    to in-memory LocalEventBus if NATS is offline, avoiding noisy traceback logs.
+    Unified ecosystem event bus connecting to NATS broker as the primary transport.
+    Adheres strictly to the fail-fast principle: in production mode, if NATS is offline,
+    it raises an exception rather than silently degrading to an isolated in-memory bus.
+    Local in-memory fallback is only permitted when explicitly enabled for unit tests or offline mocking.
     """
 
     # -----------------------------------------------------------------------------
 
-    def __init__(self, nats_cfg: Any, logger: Any):
+    def __init__(self, nats_cfg: Any, logger: Any, allow_local_fallback: Optional[bool] = None):
         self.logger = logger
         self.nc = None
         self.nats_connected = False
+        
+        # Check explicit parameter or environment variable override (default False for strict fail-fast)
+        if allow_local_fallback is None:
+            env_val = os.environ.get("ALLOW_LOCAL_EVENT_BUS", os.environ.get("MOCK_EVENT_BUS", "false")).lower()
+            self.allow_local_fallback = env_val in ("1", "true", "yes")
+        else:
+            self.allow_local_fallback = allow_local_fallback
+
         if isinstance(nats_cfg, str):
             self.cfg = NatsConfig(
                 servers=[nats_cfg],
@@ -191,30 +214,42 @@ class DualSquadEventBus(SquadEventBus):
     # -----------------------------------------------------------------------------
 
     async def connect(self) -> None:
-        """Attempts a resilient connection to NATS, falling back to Local otherwise."""
+        """Attempts a resilient connection to NATS, failing fast if offline and fallback is disabled."""
         try:
             self.nc = await nats_connect(self.cfg, logger=self.logger)
             self.nats_connected = True
+            self.logger.info("SquadEventBus: Connected to NATS message broker.")
         except Exception as e:
-            self.logger.warning(f"SquadEventBus: NATS connection failed ({e}). Falling back to in-memory LocalEventBus.")
             self.nats_connected = False
             if self.nc:
                 try:
                     await self.nc.close()
                 except Exception:
                     pass
+            if not self.allow_local_fallback:
+                err_msg = (
+                    f"SquadEventBus: NATS connection failed ({e}) and allow_local_fallback is disabled. "
+                    "Failing fast per ecosystem architecture (NATS + PostgreSQL required)."
+                )
+                self.logger.error(err_msg)
+                raise RuntimeError(err_msg)
+            self.logger.warning(
+                f"SquadEventBus: NATS connection failed ({e}). Falling back to in-memory LocalEventBus (testing/mock mode)."
+            )
 
     # -----------------------------------------------------------------------------
 
     async def publish(self, topic: str, payload: Dict[str, Any]) -> None:
         """Routes message broadcast depending on NATS connection state."""
+        topic = normalize_topic(topic)
         if "event_id" not in payload:
             payload["event_id"] = str(uuid.uuid4())
 
         if self.nats_connected:
             # Determine NATS subjects to publish to
             targets = []
-            if topic in ("antigravity.squad.chat", "bastien-antigravity.squad.chat"):
+            is_squad_chat = topic.endswith(".squad.chat") or topic in ("antigravity.squad.chat", "bastien-antigravity.squad.chat")
+            if is_squad_chat:
                 content = payload.get("content", "").lower()
                 sender = payload.get("sender")
                 
@@ -235,17 +270,27 @@ class DualSquadEventBus(SquadEventBus):
                 for target_subject in targets:
                     await self.nc.publish(target_subject, json.dumps(payload).encode("utf-8"))
             except Exception as e:
-                self.logger.error(f"SquadEventBus failed to publish to NATS: {e}. Falling back to Local.")
-                LocalEventBus.publish(topic, payload)
+                self.logger.error(f"SquadEventBus failed to publish to NATS: {e}")
+                if self.allow_local_fallback:
+                    LocalEventBus.publish(topic, payload)
+                else:
+                    raise
         else:
+            if not self.allow_local_fallback:
+                raise RuntimeError(
+                    f"SquadEventBus cannot publish to topic '{topic}': NATS is not connected and local fallback is disabled."
+                )
             LocalEventBus.publish(topic, payload)
 
     # -----------------------------------------------------------------------------
 
     async def subscribe(self, topic: str, callback: Callable[[Dict[str, Any]], Awaitable[None]], role: Optional[str] = None) -> None:
         """Subscribes callback to the correct event provider."""
-        # Always register local fallback subscription to ensure seamless offline state routing
-        LocalEventBus.subscribe(topic, callback, role)
+        topic = normalize_topic(topic)
+        
+        # If local fallback is allowed, also register local subscription for offline state routing
+        if self.allow_local_fallback:
+            LocalEventBus.subscribe(topic, callback, role)
         
         if self.nats_connected:
             async def nats_callback(msg):
@@ -260,10 +305,11 @@ class DualSquadEventBus(SquadEventBus):
                     self.logger.error(f"SquadEventBus subscriber failed to process NATS payload: {e}")
             
             topics_to_sub = []
-            if topic in ("antigravity.squad.chat", "bastien-antigravity.squad.chat") and role:
+            is_squad_chat = topic.endswith(".squad.chat") or topic in ("antigravity.squad.chat", "bastien-antigravity.squad.chat")
+            if is_squad_chat and role:
                 topics_to_sub.append(f"{topic}.broadcast")
                 topics_to_sub.append(f"{topic}.agent.{role}")
-            elif topic in ("antigravity.squad.chat", "bastien-antigravity.squad.chat") and not role:
+            elif is_squad_chat and not role:
                 topics_to_sub.append(f"{topic}.*")
             else:
                 topics_to_sub.append(topic)
@@ -274,6 +320,10 @@ class DualSquadEventBus(SquadEventBus):
                     self.logger.info(f"SquadEventBus subscribed to NATS topic '{t}'")
                 except Exception as e:
                     self.logger.error(f"SquadEventBus failed NATS subscription to '{t}': {e}")
+        elif not self.allow_local_fallback:
+            raise RuntimeError(
+                f"SquadEventBus cannot subscribe to topic '{topic}': NATS is not connected and local fallback is disabled."
+            )
 
     # -----------------------------------------------------------------------------
 

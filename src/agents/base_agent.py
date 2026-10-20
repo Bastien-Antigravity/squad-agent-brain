@@ -32,13 +32,14 @@ from google.genai import types
 
 # -----------------------------------------------------------------------------
 
-def query_rag_engine(query: str) -> str:
+def query_rag_engine(query: str, brain_id: str = "") -> str:
     """
     Queries the central RAG engine to retrieve architectural guidelines,
     codebase design patterns, or strategic decision history.
     
     Args:
         query: The semantic search query (e.g. 'REST API design standard').
+        brain_id: Optional target brain namespace filter (e.g. 'obsidian-brain', 'trading-brain').
     """
     return ""
 
@@ -187,12 +188,27 @@ class BaseAgent:
         
         # Subclass overrides or appends to tools
         self.tools = [query_rag_engine, read_workspace_file, write_workspace_file, execute_shell_command]
+        self.Name = self.__class__.__name__
+        raw_target = (
+            os.environ.get("TARGET_BRAIN_ID") or 
+            os.environ.get("BRAIN_ID")
+        )
+        if not raw_target and hasattr(self.config, "get_capability"):
+            cap = self.config.get_capability("squad_agent")
+            if isinstance(cap, dict):
+                raw_target = cap.get("target_brain_id")
+        self.target_brain_id = raw_target if isinstance(raw_target, str) and raw_target.strip() else None
+        self.squad_chat_topic = (
+            f"bastien-antigravity.{self.target_brain_id}.squad.chat"
+            if self.target_brain_id and self.target_brain_id != "obsidian-brain"
+            else "bastien-antigravity.squad.chat"
+        )
 
     def _load_system_prompt(self) -> str:
         """Reads the agent role's system instruction from KMS files."""
-        from pathlib import Path
-        obsidian_dir = Path(__file__).resolve().parent.parent.parent.parent
-        prompt_path = obsidian_dir / "07-Core-KMS" / "Role-Prompts" / self.prompt_file
+        from src.lib.orchestration_lib import resolve_vault_and_workspace
+        vault_root, _ = resolve_vault_and_workspace(__file__)
+        prompt_path = vault_root / "07-Core-KMS" / "Role-Prompts" / self.prompt_file
         if prompt_path.exists():
             try:
                 return prompt_path.read_text(encoding="utf-8")
@@ -211,8 +227,8 @@ class BaseAgent:
             except Exception as e:
                 self.logger.error(f"Agent {self.role_name} failed to handle incoming message: {e}")
         
-        await self.event_bus.subscribe("antigravity.squad.chat", callback=msg_cb, role=self.role_name)
-        self.logger.info(f"Agent {self.role_name} listening on event_bus channels for role '{self.role_name}'")
+        await self.event_bus.subscribe(self.squad_chat_topic, callback=msg_cb, role=self.role_name)
+        self.logger.info(f"Agent {self.role_name} listening on event_bus topic '{self.squad_chat_topic}' for role '{self.role_name}'")
 
     async def stop(self):
         """Clean shut down."""
@@ -346,7 +362,7 @@ class BaseAgent:
                 }
                 
                 # 5. Broadcast to SquadEventBus
-                await self.event_bus.publish("antigravity.squad.chat", payload_data)
+                await self.event_bus.publish(self.squad_chat_topic, payload_data)
         except Exception as e:
             self.logger.error(f"Agent {self.role_name} failed during LLM generation loop: {e}")
             err_msg = f"⚠️ [System Alert]: Agent '{self.role_name}' failed during generation loop: {e}"
@@ -357,7 +373,7 @@ class BaseAgent:
                 "tool_calls": []
             }
             try:
-                await self.event_bus.publish("antigravity.squad.chat", payload_data)
+                await self.event_bus.publish(self.squad_chat_topic, payload_data)
             except Exception as publish_err:
                 self.logger.error(f"Failed to publish error alert for {self.role_name}: {publish_err}")
 
@@ -365,12 +381,23 @@ class BaseAgent:
         """Dynamic tool execution handler."""
         if name == "query_rag_engine":
             query_arg = args.get("query", "")
+            target_brain = (
+                args.get("brain_id") or 
+                getattr(self, "target_brain_id", None) or 
+                os.environ.get("TARGET_BRAIN_ID") or 
+                os.environ.get("BRAIN_ID") or
+                (self.config.get_capability("squad_agent").get("target_brain_id") 
+                 if hasattr(self.config, "get_capability") else None)
+            )
+            if not target_brain:
+                return "Error: Target brain_id must be specified to prevent cross-tenant data pollution."
+
             from lib.memory import RAGMemoryStore
             rag_store = RAGMemoryStore(
                 config=self.config,
                 logger=self.logger,
-                tenant="08-Squad-Agent",
-                client=self.config.data.get("rag_client")
+                tenant=target_brain,
+                client=self.config.data.get("rag_client") if hasattr(self.config, "data") and isinstance(self.config.data, dict) else None
             )
             loop = asyncio.get_running_loop()
             results = await loop.run_in_executor(
@@ -378,7 +405,7 @@ class BaseAgent:
                 lambda: rag_store.retrieve(query_arg, limit=5)
             )
             if not results:
-                return "No architectural context found in RAG engine."
+                return f"No architectural context found in RAG engine for brain '{target_brain}'."
             formatted = []
             for doc in results:
                 formatted.append(f"Context turn:\n{doc.get('content', '')}")
@@ -387,8 +414,8 @@ class BaseAgent:
         elif name == "read_workspace_file":
             path_arg = args.get("path", "")
             fold_bodies_arg = args.get("fold_bodies", True)
-            from pathlib import Path
-            workspace_root = Path(__file__).resolve().parent.parent.parent.parent.parent
+            from src.lib.orchestration_lib import resolve_vault_and_workspace
+            _, workspace_root = resolve_vault_and_workspace(__file__)
             file_path = (workspace_root / path_arg).resolve()
             
             # Path Traversal Guard
@@ -412,8 +439,8 @@ class BaseAgent:
         elif name == "write_workspace_file":
             path_arg = args.get("path", "")
             content_arg = args.get("content", "")
-            from pathlib import Path
-            workspace_root = Path(__file__).resolve().parent.parent.parent.parent.parent
+            from src.lib.orchestration_lib import resolve_vault_and_workspace
+            _, workspace_root = resolve_vault_and_workspace(__file__)
             file_path = (workspace_root / path_arg).resolve()
             
             # Path Traversal Guard
@@ -455,8 +482,8 @@ class BaseAgent:
                         return f"Error: Command execution blocked for safety. Keyword '{kw}' is prohibited."
             
             import subprocess
-            from pathlib import Path
-            workspace_root = Path(__file__).resolve().parent.parent.parent.parent.parent
+            from src.lib.orchestration_lib import resolve_vault_and_workspace
+            _, workspace_root = resolve_vault_and_workspace(__file__)
             try:
                 proc = subprocess.run(
                     cmd_arg,
@@ -512,7 +539,7 @@ class BaseAgent:
                 "tool_calls": tool_calls_data
             }
             
-            await self.event_bus.publish("antigravity.squad.chat", payload_data)
+            await self.event_bus.publish(self.squad_chat_topic, payload_data)
 
     async def _fetch_history(self, session_id: str) -> List[Dict[str, Any]]:
         """Queries postgres squad_chat_logs for history turns."""

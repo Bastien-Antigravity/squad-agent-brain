@@ -115,12 +115,31 @@ class TestDualSquadEventBus(unittest.IsolatedAsyncioTestCase):
     @patch("src.interfaces.interfaces.nats_connect", side_effect=Exception("Connection Refused"))
     async def test_connect_offline_fallback(self, mock_connect):
         cfg = NatsConfig(servers=["nats://127.0.0.1:4222"], client_id="test_squad")
-        bus = DualSquadEventBus(cfg, self.logger)
+        bus = DualSquadEventBus(cfg, self.logger, allow_local_fallback=True)
         
         await bus.connect()
         self.assertFalse(bus.nats_connected)
         self.assertIsNone(bus.nc)
         self.logger.warning.assert_called_once()
+
+    @patch("src.interfaces.interfaces.nats_connect", side_effect=Exception("Connection Refused"))
+    async def test_connect_offline_fail_fast_enforcement(self, mock_connect):
+        cfg = NatsConfig(servers=["nats://127.0.0.1:4222"], client_id="test_squad")
+        bus = DualSquadEventBus(cfg, self.logger, allow_local_fallback=False)
+        
+        with self.assertRaises(RuntimeError) as ctx:
+            await bus.connect()
+        self.assertIn("Failing fast", str(ctx.exception))
+        self.assertFalse(bus.nats_connected)
+
+    async def test_publish_fail_fast_when_offline(self):
+        cfg = NatsConfig(servers=["nats://127.0.0.1:4222"], client_id="test_squad")
+        bus = DualSquadEventBus(cfg, self.logger, allow_local_fallback=False)
+        bus.nats_connected = False
+        
+        with self.assertRaises(RuntimeError) as ctx:
+            await bus.publish("bastien-antigravity.squad.chat", {"content": "hello"})
+        self.assertIn("NATS is not connected and local fallback is disabled", str(ctx.exception))
 
     async def test_config_legacy_string_compatibility(self):
         # Assert legacy string urls are handled and converted to NatsConfig

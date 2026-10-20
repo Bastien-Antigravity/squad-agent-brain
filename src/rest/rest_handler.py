@@ -182,12 +182,12 @@ class SquadRESTHandler:
                 event_bus = getattr(self.controller, "event_bus", None)
                 if event_bus:
                     import inspect
-                    res = event_bus.subscribe("antigravity.squad.chat", callback=msg_cb)
+                    res = event_bus.subscribe("bastien-antigravity.squad.chat", callback=msg_cb)
                     if inspect.isawaitable(res):
                         await res
                 else:
                     from src.interfaces import LocalEventBus
-                    LocalEventBus.subscribe("antigravity.squad.chat", msg_cb)
+                    LocalEventBus.subscribe("bastien-antigravity.squad.chat", msg_cb)
                 
                 try:
                     yield f"data: {json.dumps({'event': 'connected', 'session_id': session_id})}\n\n"

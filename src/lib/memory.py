@@ -18,10 +18,14 @@ KEY PARAMETERS:
   - tenant:   Workspace tenant context.
 """
 
+import os
+import time
+import urllib.request
 from typing import Dict, List, Any, Optional
 from json import dumps as jsonDumps, loads as jsonLoads
 
 from microservice_toolbox.logger import ensure_safe_logger
+from microservice_toolbox.conn_manager.manager import NetworkManager
 from interfaces import MemoryStore
 
 # -----------------------------------------------------------------------------------------------
@@ -66,14 +70,24 @@ class ShortTermMemory(MemoryStore):
 class PostgresMemoryStore(MemoryStore):
     """
     Persistent short-term memory store.
-    Saves conversation history to the tenant's schema in obsidiandb.
+    Saves conversation history to the tenant's schema in obsidiandb with brain_id partition isolation.
     """
 
-    def __init__(self, *, config: Any, logger: Any, pg_pool: Any, schema: str, name: Optional[str] = None):
+    def __init__(self, *, config: Any, logger: Any, pg_pool: Any, schema: str, brain_id: Optional[str] = None, name: Optional[str] = None):
         self.config = config
         self.logger = ensure_safe_logger(logger)
         self.pool = pg_pool
         self.schema = schema
+        raw_brain_id = (
+            brain_id or 
+            os.environ.get("TARGET_BRAIN_ID") or 
+            os.environ.get("BRAIN_ID")
+        )
+        if not raw_brain_id and hasattr(self.config, "get_capability"):
+            cap = self.config.get_capability("squad_agent")
+            if isinstance(cap, dict):
+                raw_brain_id = cap.get("target_brain_id")
+        self.brain_id = raw_brain_id if isinstance(raw_brain_id, str) and raw_brain_id.strip() else None
         self.Name = name or self.__class__.__name__
         self._init_db()
 
@@ -93,9 +107,12 @@ class PostgresMemoryStore(MemoryStore):
                         role VARCHAR(50) NOT NULL,
                         content TEXT NOT NULL,
                         metadata JSONB,
+                        brain_id VARCHAR(100),
                         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
                     )
                 """)
+                cursor.execute("ALTER TABLE conversation_turns ADD COLUMN IF NOT EXISTS brain_id VARCHAR(100)")
+                cursor.execute("CREATE INDEX IF NOT EXISTS conv_turns_brain_idx ON conversation_turns (brain_id)")
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS squad_chat_logs (
                         id SERIAL PRIMARY KEY,
@@ -103,11 +120,13 @@ class PostgresMemoryStore(MemoryStore):
                         sender VARCHAR(100) NOT NULL,
                         content TEXT NOT NULL,
                         tool_calls JSONB,
+                        brain_id VARCHAR(100),
                         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
                     )
                 """)
+                cursor.execute("ALTER TABLE squad_chat_logs ADD COLUMN IF NOT EXISTS brain_id VARCHAR(100)")
             conn.commit()
-            self.logger.info("{0} : Initialised database schema '{1}'".format(self.Name, self.schema))
+            self.logger.info("{0} : Initialised database schema '{1}' (brain_id: {2})".format(self.Name, self.schema, self.brain_id))
         except Exception as e:
             self.logger.error("{0} : Error initialising database table: {1}".format(self.Name, e))
             raise
@@ -124,11 +143,11 @@ class PostgresMemoryStore(MemoryStore):
             with conn.cursor() as cursor:
                 cursor.execute('SET search_path TO "{0}", public'.format(self.schema))
                 cursor.execute(
-                    "INSERT INTO conversation_turns (session_id, role, content, metadata) VALUES (%s, %s, %s, %s)",
-                    (session_id, message["role"], message["content"], jsonDumps(message.get("metadata", {})))
+                    "INSERT INTO conversation_turns (session_id, role, content, metadata, brain_id) VALUES (%s, %s, %s, %s, %s)",
+                    (session_id, message["role"], message["content"], jsonDumps(message.get("metadata", {})), self.brain_id)
                 )
             conn.commit()
-            self.logger.info("{0} : Added message turn for session '{1}'".format(self.Name, session_id))
+            self.logger.info("{0} : Added message turn for session '{1}' (brain: {2})".format(self.Name, session_id, self.brain_id))
         except Exception as e:
             self.logger.error("{0} : Error writing turn to postgres: {1}".format(self.Name, e))
         finally:
@@ -143,10 +162,16 @@ class PostgresMemoryStore(MemoryStore):
         try:
             with conn.cursor() as cursor:
                 cursor.execute('SET search_path TO "{0}", public'.format(self.schema))
-                cursor.execute(
-                    "SELECT role, content, metadata FROM conversation_turns WHERE session_id = %s ORDER BY created_at DESC LIMIT %s",
-                    (session_id, limit)
-                )
+                if self.brain_id:
+                    cursor.execute(
+                        "SELECT role, content, metadata FROM conversation_turns WHERE session_id = %s AND (brain_id = %s OR brain_id IS NULL) ORDER BY created_at DESC LIMIT %s",
+                        (session_id, self.brain_id, limit)
+                    )
+                else:
+                    cursor.execute(
+                        "SELECT role, content, metadata FROM conversation_turns WHERE session_id = %s ORDER BY created_at DESC LIMIT %s",
+                        (session_id, limit)
+                    )
                 rows = cursor.fetchall()
                 # Return in chronological order
                 turns = []
@@ -157,6 +182,30 @@ class PostgresMemoryStore(MemoryStore):
         except Exception as e:
             self.logger.error("{0} : Error retrieving memory from postgres: {1}".format(self.Name, e))
             return []
+        finally:
+            self.pool.putconn(conn)
+
+    # -----------------------------------------------------------------------------------------------
+
+    def delete_by_brain(self, brain_id: str) -> int:
+        """Purges conversation turns and chat logs for a brain partition, ensuring zero state pollution."""
+        if not brain_id:
+            return 0
+        conn = self.pool.getconn()
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute('SET search_path TO "{0}", public'.format(self.schema))
+                cursor.execute("DELETE FROM conversation_turns WHERE brain_id = %s", (brain_id,))
+                count_turns = cursor.rowcount
+                cursor.execute("DELETE FROM squad_chat_logs WHERE brain_id = %s", (brain_id,))
+                count_logs = cursor.rowcount
+            conn.commit()
+            total = count_turns + count_logs
+            self.logger.info(f"{self.Name} : Cleanly purged {total} conversational records for brain '{brain_id}'")
+            return total
+        except Exception as e:
+            self.logger.error(f"{self.Name} : Error purging conversation records for brain '{brain_id}': {e}")
+            return 0
         finally:
             self.pool.putconn(conn)
 
@@ -186,10 +235,21 @@ class RAGMemoryStore(MemoryStore):
     Integrates directly with the multi-tenant RAG database schemas to query vector similarity.
     """
 
-    def __init__(self, *, config: Any, logger: Any, tenant: str, client: Optional[Any] = None, name: Optional[str] = None):
+    def __init__(self, *, config: Any, logger: Any, tenant: Optional[str] = None, client: Optional[Any] = None, name: Optional[str] = None):
         self.config = config
         self.logger = ensure_safe_logger(logger)
-        self.tenant = tenant
+        raw_tenant = (
+            tenant or 
+            os.environ.get("TARGET_BRAIN_ID") or 
+            os.environ.get("BRAIN_ID")
+        )
+        if not raw_tenant and hasattr(self.config, "get_capability"):
+            cap = self.config.get_capability("squad_agent")
+            if isinstance(cap, dict):
+                raw_tenant = cap.get("target_brain_id")
+        self.tenant = raw_tenant if isinstance(raw_tenant, str) and raw_tenant.strip() else ""
+        if not self.tenant:
+            raise ValueError("Tenant/brain_id must be specified to prevent multi-tenant cross-brain pollution")
         self.client = client
         self.Name = name or self.__class__.__name__
 
@@ -206,34 +266,54 @@ class RAGMemoryStore(MemoryStore):
         if not query:
             return []
 
-        self.logger.info("{0} : Querying long-term semantic context for '{1}'".format(self.Name, query))
+        self.logger.info("{0} : Querying long-term semantic context for '{1}' (brain: {2})".format(self.Name, query, self.tenant))
 
-        # 1. Attempt using injected client
+        # 1. Attempt using REST API via canonical get_rest_addr (Zero Silent Fallback)
+        try:
+            if not hasattr(self.config, "get_rest_addr"):
+                raise ValueError("Config loader must implement get_rest_addr() per ecosystem standards")
+            rag_addr = self.config.get_rest_addr("rag_engine")
+            if not rag_addr:
+                raise ValueError("Capability 'rag_engine' REST address unresolvable from configuration")
+
+            url = f"http://{rag_addr}/api/v1/query"
+            payload = jsonDumps({
+                "query": query,
+                "limit": limit,
+                "brain_id": self.tenant
+            }).encode("utf-8")
+            
+            nm = NetworkManager(max_retries=3, base_delay_ms=200, max_delay_ms=2000, backoff=2.0, jitter=0.1, logger=self.logger)
+            req = urllib.request.Request(
+                url,
+                data=payload,
+                headers={"Content-Type": "application/json"}
+            )
+            for attempt in range(nm.max_retries):
+                try:
+                    with urllib.request.urlopen(req, timeout=3.0) as resp:
+                        if resp.status == 200:
+                            data = jsonLoads(resp.read().decode("utf-8"))
+                            if data.get("success") and "results" in data:
+                                return self._format_results(data["results"])
+                            return []
+                except Exception as net_err:
+                    if attempt < nm.max_retries - 1:
+                        delay = nm.get_next_delay(attempt)
+                        self.logger.debug(f"{self.Name} : REST query attempt {attempt+1} failed ({net_err}); retrying in {delay:.2f}s...")
+                        time.sleep(delay)
+                    else:
+                        self.logger.debug(f"{self.Name} : REST query to RAG Engine unavailable ({net_err}) after {nm.max_retries} attempts.")
+        except Exception as net_err:
+            self.logger.debug(f"{self.Name} : REST query to RAG Engine unavailable ({net_err}), falling back...")
+
+        # 2. Attempt using injected client
         if self.client and hasattr(self.client, "query_brain"):
             try:
                 results = self.client.query_brain(query=query, workspace=self.tenant, limit=limit)
                 return self._format_results(results)
             except Exception as e:
                 self.logger.error("{0} : Error querying via RAG client: {1}".format(self.Name, e))
-
-        # 2. Fallback to direct import if running within same directory structure
-        try:
-            from src.facade import get_rag_facade
-            import src.bootstrap as RAGBootstrap
-            
-            facade = get_rag_facade(RAGBootstrap.config, RAGBootstrap.logger)
-            import asyncio
-            
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                
-            results = loop.run_until_complete(facade.query_brain(query=query, workspace=self.tenant, limit=limit))
-            return self._format_results(results)
-        except Exception as e:
-            self.logger.warning("{0} : RAG Facade fallback unavailable: {1}".format(self.Name, e))
 
         return []
 
@@ -309,3 +389,14 @@ class DualLayerMemoryStore(MemoryStore):
         self.short_term.clear(session_id)
         if self.long_term:
             self.long_term.clear(session_id)
+
+    # -----------------------------------------------------------------------------------------------
+
+    def delete_by_brain(self, brain_id: str) -> int:
+        """Purges conversation records for a specific brain partition across storage layers."""
+        total = 0
+        if hasattr(self.short_term, "delete_by_brain"):
+            total += self.short_term.delete_by_brain(brain_id)
+        if hasattr(self.long_term, "delete_by_brain"):
+            total += self.long_term.delete_by_brain(brain_id)
+        return total
