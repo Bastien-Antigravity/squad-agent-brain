@@ -4,20 +4,20 @@ services:
       context: .
       dockerfile: Dockerfile
     image: ghcr.io/bastien-antigravity/squad-agent-brain:${TAG:-latest}
-    container_name: squad-agent
+    container_name: squad-agent-${BRAIN_ID:-root}
     restart: unless-stopped
     ports:
-      - "${HOST_IP:-127.0.0.1}:8085:8085"
-      - "${HOST_IP:-127.0.0.1}:8087:8087"
+      - "${HOST_IP:-127.0.0.1}:${SA_PORT:-8085}:${SA_PORT:-8085}"
+      - "${HOST_IP:-127.0.0.1}:${SA_GRPC_PORT:-8087}:${SA_GRPC_PORT:-8087}"
     environment:
-      - SA_PORT=8085
-      - SA_GRPC_PORT=8087
-      - SA_PORT=8085
-      - SA_GRPC_PORT=8087
+      - BRAIN_ID=${BRAIN_ID:-obsidian-brain}
+      - TARGET_BRAIN_ID=${BRAIN_ID:-obsidian-brain}
+      - SA_PORT=${SA_PORT:-8085}
+      - SA_GRPC_PORT=${SA_GRPC_PORT:-8087}
       - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN:-}
       - DISCORD_CHANNEL_ID=${DISCORD_CHANNEL_ID:-}
     volumes:
-      - ../:/app/obsidian-brain
+      - ../:/app/brain
       - ./standalone.yaml:/app/standalone.yaml:ro
     networks:
       - teleremote-network

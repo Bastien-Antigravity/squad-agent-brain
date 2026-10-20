@@ -138,12 +138,19 @@ class LocalEventBus:
             content = payload.get("content", "").lower()
             sender = payload.get("sender")
             
-            tags = re.findall(r'@([a-zA-Z0-9_-]+)', content)
+            tags = re.findall(r'@([a-zA-Z0-9_-]+(?::[a-zA-Z0-9_-]+)?)', content)
             for tag in tags:
-                role = tag.lower()
-                targets.append(f"{topic}.agent.{role}")
+                tag_clean = tag.lower()
+                if ":" in tag_clean:
+                    target_brain, target_role = tag_clean.split(":", 1)
+                    if target_brain in ("root", "obsidian-brain", "main"):
+                        targets.append(f"bastien-antigravity.squad.chat.agent.{target_role}")
+                    else:
+                        targets.append(f"bastien-antigravity.{target_brain}.squad.chat.agent.{target_role}")
+                else:
+                    targets.append(f"{topic}.agent.{tag_clean}")
                 
-            if sender == "user" and "orchestrator" not in tags:
+            if sender == "user" and "orchestrator" not in [t.split(":")[-1].lower() for t in tags]:
                 targets.append(f"{topic}.agent.orchestrator")
                 
             if not targets:
@@ -156,7 +163,15 @@ class LocalEventBus:
         for target in targets:
             callbacks_to_trigger.extend(subs.get(target, []))
             
-        # Also trigger subscribers of wildcard or base topic
+        # Trigger subscribers of wildcard patterns
+        import fnmatch
+        for sub_topic, cbs in subs.items():
+            if "*" in sub_topic:
+                for target in targets:
+                    if fnmatch.fnmatch(target, sub_topic):
+                        callbacks_to_trigger.extend(cbs)
+
+        # Also trigger subscribers of base topic
         if is_squad_chat:
             callbacks_to_trigger.extend(subs.get(f"{topic}.*", []))
             callbacks_to_trigger.extend(subs.get(topic, []))
@@ -253,12 +268,19 @@ class DualSquadEventBus(SquadEventBus):
                 content = payload.get("content", "").lower()
                 sender = payload.get("sender")
                 
-                tags = re.findall(r'@([a-zA-Z0-9_-]+)', content)
+                tags = re.findall(r'@([a-zA-Z0-9_-]+(?::[a-zA-Z0-9_-]+)?)', content)
                 for tag in tags:
-                    role = tag.lower()
-                    targets.append(f"{topic}.agent.{role}")
+                    tag_clean = tag.lower()
+                    if ":" in tag_clean:
+                        target_brain, target_role = tag_clean.split(":", 1)
+                        if target_brain in ("root", "obsidian-brain", "main"):
+                            targets.append(f"bastien-antigravity.squad.chat.agent.{target_role}")
+                        else:
+                            targets.append(f"bastien-antigravity.{target_brain}.squad.chat.agent.{target_role}")
+                    else:
+                        targets.append(f"{topic}.agent.{tag_clean}")
                     
-                if sender == "user" and "orchestrator" not in tags:
+                if sender == "user" and "orchestrator" not in [t.split(":")[-1].lower() for t in tags]:
                     targets.append(f"{topic}.agent.orchestrator")
                     
                 if not targets:

@@ -39,6 +39,7 @@ class DiscordClient:
         self.logger = logger
         self.controller = controller
         self.token = self._resolve_token()
+        self.channel_id = self._resolve_channel_id()
         self.client: Optional[Any] = None
         if HAS_DISCORD and self.token:
             self._setup_bot()
@@ -57,6 +58,67 @@ class DiscordClient:
 
     # -----------------------------------------------------------------------------------------------
 
+    def _resolve_channel_id(self) -> Optional[str]:
+        """Resolves the designated Discord channel ID for squad chat monitoring."""
+        ch_id = getenv("DISCORD_CHANNEL_ID")
+        if not ch_id and hasattr(self.config, "data"):
+            settings = self.config.data.get("capabilities", {}).get("discord", {})
+            ch_id = settings.get("channel_id")
+        return str(ch_id).strip() if ch_id else None
+
+    # -----------------------------------------------------------------------------------------------
+
+    async def _stream_squad_events_to_discord(self) -> None:
+        """Subscribes to NATS/LocalEventBus squad chat topics and mirrors agent communication into Discord."""
+        event_bus = getattr(self.controller, "event_bus", None)
+        if not event_bus:
+            from src.interfaces import LocalEventBus
+            event_bus = LocalEventBus
+
+        role_icons = {
+            "orchestrator": "🤖",
+            "developer": "🛠️",
+            "qa": "🧪",
+            "architect": "📐",
+            "trader": "📈",
+            "analyst": "📊",
+            "docindexer": "📚",
+            "purger": "🧹",
+        }
+
+        async def squad_event_callback(payload: dict) -> None:
+            sender = payload.get("sender", "")
+            # Filter out user messages to prevent echo loops
+            if not sender or sender.lower() == "user":
+                return
+
+            content = payload.get("content", "")
+            if not content:
+                return
+
+            try:
+                ch = self.client.get_channel(int(self.channel_id))
+                if not ch:
+                    ch = await self.client.fetch_channel(int(self.channel_id))
+                if ch:
+                    icon = role_icons.get(sender.lower(), "🤖")
+                    msg_text = f"{icon} **[{sender.upper()}]**\n{content}"
+                    if len(msg_text) > 1950:
+                        msg_text = msg_text[:1940] + "\n...[truncated]"
+                    await ch.send(msg_text)
+            except Exception as e:
+                self.logger.warning(f"DiscordClient : Failed to relay squad event to Discord channel {self.channel_id}: {e}")
+
+        import inspect
+        res = event_bus.subscribe("bastien-antigravity.squad.chat", callback=squad_event_callback)
+        if inspect.isawaitable(res):
+            await res
+        res_wildcard = event_bus.subscribe("bastien-antigravity.*.squad.chat", callback=squad_event_callback)
+        if inspect.isawaitable(res_wildcard):
+            await res_wildcard
+
+    # -----------------------------------------------------------------------------------------------
+
     def _setup_bot(self) -> None:
         """Configures the discord.py client and registers handlers."""
         intents = discord.Intents.default()
@@ -67,6 +129,10 @@ class DiscordClient:
         @self.client.event
         async def on_ready() -> None:
             self.logger.info("DiscordClient : Logged in as {0.user}".format(self.client))
+            if self.channel_id:
+                self.logger.info(f"DiscordClient : Monitoring squad chat and mirroring to channel {self.channel_id}")
+                import asyncio
+                asyncio.create_task(self._stream_squad_events_to_discord())
 
         # -------------------------------------------------------------------------------------------
         @self.client.event
@@ -75,30 +141,25 @@ class DiscordClient:
             if message.author == self.client.user:
                 return
 
-            # Commands start with a slash or specific mention prefix
-            if message.content.startswith("/") or self.client.user.mentioned_in(message):
+            is_designated_channel = self.channel_id and str(message.channel.id) == str(self.channel_id)
+            is_command = message.content.startswith("/") or self.client.user.mentioned_in(message)
+
+            if is_designated_channel or is_command:
                 clean_msg = message.content
                 if message.content.startswith("/"):
                     clean_msg = message.content[1:]
-                else:
-                    # Strip mention syntax
+                elif self.client.user.mentioned_in(message):
                     clean_msg = message.content.replace("<@{0.user.id}>".format(self.client), "").strip()
 
-                session_id = "discord_{0}".format(message.channel.id)
-                self.logger.info("DiscordClient : Message received from {0.author} : {1}".format(message.author, clean_msg))
+                session_id = f"discord_{message.channel.id}"
+                self.logger.info(f"DiscordClient : User message received from {message.author} : {clean_msg}")
 
-                # Route user payload to unified controller
+                # Publish directly onto NATS so all agents receive and process
                 try:
-                    res = self.controller.process_message(
-                        channel="DISCORD_{0}".format(message.channel.name or message.channel.id),
-                        session_id=session_id,
-                        user_msg=clean_msg
-                    )
-                    reply = res.get("answer", "No response from squad.")
-                    await message.reply(reply)
+                    await self.controller.publish_user_message(session_id, clean_msg)
                 except Exception as ex:
-                    self.logger.error("DiscordClient : Error processing channel payload: {0}".format(ex))
-                    await message.reply("Error: {0}".format(ex))
+                    self.logger.error(f"DiscordClient : Error publishing message onto squad event bus: {ex}")
+                    await message.reply(f"Error: {ex}")
 
     # -----------------------------------------------------------------------------------------------
 
@@ -129,3 +190,4 @@ def main() -> None:
     controller = CommandController(config=bootstrap.config, logger=bootstrap.logger)
     client_adapter = DiscordClient(config=bootstrap.config, logger=bootstrap.logger, controller=controller)
     client_adapter.start()
+

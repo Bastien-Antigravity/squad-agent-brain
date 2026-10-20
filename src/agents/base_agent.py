@@ -249,19 +249,23 @@ class BaseAgent:
 
         # Determine if this message is addressing us or if we are the Orchestrator
         is_orchestrator = (self.role_name == "orchestrator")
-        is_addressed = f"@{self.role_name}" in content.lower()
+        is_addressed = f"@{self.role_name}" in content.lower() or f":{self.role_name}" in content.lower()
         
         if not is_orchestrator and not is_addressed:
             return
 
-        self.logger.info(f"Agent {self.role_name} processing message from {sender} in session {session_id}")
-        await self.think_and_respond(session_id)
+        reply_topic = payload.get("reply_topic") or payload.get("source_topic") or self.squad_chat_topic
+        source_brain = payload.get("source_brain_id") or getattr(self, "target_brain_id", None)
+        self.logger.info(f"Agent {self.role_name} processing message from {sender} in session {session_id} (reply_topic: {reply_topic})")
+        await self.think_and_respond(session_id, reply_topic=reply_topic, source_brain=source_brain)
 
-    async def think_and_respond(self, session_id: str):
+    async def think_and_respond(self, session_id: str, reply_topic: Optional[str] = None, source_brain: Optional[str] = None):
         """Queries Gemini using conversation logs database history and broadcasts response."""
+        self.current_source_brain = source_brain
+        publish_topic = reply_topic or self.squad_chat_topic
         if not self.client:
             self.logger.info(f"Agent {self.role_name} using mock offline response (Gemini API key is missing).")
-            await self._run_mock_think_and_respond(session_id)
+            await self._run_mock_think_and_respond(session_id, reply_topic=publish_topic, source_brain=source_brain)
             return
 
         # 1. Fetch chat history from postgres
@@ -358,11 +362,13 @@ class BaseAgent:
                     "sender": self.role_name,
                     "session_id": session_id,
                     "content": answer_text,
-                    "tool_calls": tool_calls_data
+                    "tool_calls": tool_calls_data,
+                    "source_brain_id": self.target_brain_id or "obsidian-brain",
+                    "reply_topic": publish_topic
                 }
                 
                 # 5. Broadcast to SquadEventBus
-                await self.event_bus.publish(self.squad_chat_topic, payload_data)
+                await self.event_bus.publish(publish_topic, payload_data)
         except Exception as e:
             self.logger.error(f"Agent {self.role_name} failed during LLM generation loop: {e}")
             err_msg = f"⚠️ [System Alert]: Agent '{self.role_name}' failed during generation loop: {e}"
@@ -370,10 +376,12 @@ class BaseAgent:
                 "sender": self.role_name,
                 "session_id": session_id,
                 "content": err_msg,
-                "tool_calls": []
+                "tool_calls": [],
+                "source_brain_id": self.target_brain_id or "obsidian-brain",
+                "reply_topic": publish_topic
             }
             try:
-                await self.event_bus.publish(self.squad_chat_topic, payload_data)
+                await self.event_bus.publish(publish_topic, payload_data)
             except Exception as publish_err:
                 self.logger.error(f"Failed to publish error alert for {self.role_name}: {publish_err}")
 
@@ -501,7 +509,7 @@ class BaseAgent:
 
         return f"Tool {name} not implemented."
 
-    async def _run_mock_think_and_respond(self, session_id: str):
+    async def _run_mock_think_and_respond(self, session_id: str, reply_topic: Optional[str] = None, source_brain: Optional[str] = None):
         """Generates a simulated role-specific mock response for testing offline."""
         history = await self._fetch_history(session_id)
         last_msg = ""
@@ -532,14 +540,17 @@ class BaseAgent:
             await asyncio.sleep(1.0)
             await self._save_log(session_id, answer_text, tool_calls_data)
             
+            publish_topic = reply_topic or self.squad_chat_topic
             payload_data = {
                 "sender": self.role_name,
                 "session_id": session_id,
                 "content": answer_text,
-                "tool_calls": tool_calls_data
+                "tool_calls": tool_calls_data,
+                "source_brain_id": source_brain or getattr(self, "target_brain_id", None),
+                "reply_topic": publish_topic
             }
             
-            await self.event_bus.publish(self.squad_chat_topic, payload_data)
+            await self.event_bus.publish(publish_topic, payload_data)
 
     async def _fetch_history(self, session_id: str) -> List[Dict[str, Any]]:
         """Queries postgres squad_chat_logs for history turns."""

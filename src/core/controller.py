@@ -378,7 +378,7 @@ class CommandController(Command):
             self.logger.warning(f"Failed to retrieve memory fallback: {e}")
             return []
 
-    async def publish_user_message(self, session_id: str, message: str) -> None:
+    async def publish_user_message(self, session_id: str, message: str, brain_id: Optional[str] = None) -> None:
         """Saves a user message and publishes it to EventBus to trigger agents."""
         # 1. Save to in-memory memory store
         try:
@@ -395,8 +395,8 @@ class CommandController(Command):
                     with conn.cursor() as cursor:
                         cursor.execute('SET search_path TO "08-Squad-Agent", public')
                         cursor.execute(
-                            "INSERT INTO squad_chat_logs (session_id, sender, content, tool_calls) VALUES (%s, %s, %s, %s)",
-                            (session_id, "user", message, "[]")
+                            "INSERT INTO squad_chat_logs (session_id, sender, content, tool_calls, brain_id) VALUES (%s, %s, %s, %s, %s)",
+                            (session_id, "user", message, "[]", brain_id or "obsidian-brain")
                         )
                     conn.commit()
                 except Exception as e:
@@ -407,16 +407,19 @@ class CommandController(Command):
 
         # 3. Publish to SquadEventBus or LocalEventBus
         try:
+            target_topic = f"bastien-antigravity.{brain_id}.squad.chat" if brain_id and brain_id not in ("obsidian-brain", "root", "main") else "bastien-antigravity.squad.chat"
             payload_data = {
                 "sender": "user",
                 "session_id": session_id,
-                "content": message
+                "content": message,
+                "source_brain_id": brain_id or "obsidian-brain",
+                "reply_topic": target_topic
             }
             if hasattr(self, "event_bus") and self.event_bus:
-                await self.event_bus.publish("bastien-antigravity.squad.chat", payload_data)
+                await self.event_bus.publish(target_topic, payload_data)
             else:
                 from src.interfaces import LocalEventBus
-                LocalEventBus.publish("bastien-antigravity.squad.chat", payload_data)
+                LocalEventBus.publish(target_topic, payload_data)
         except Exception as e:
             self.logger.error(f"Failed to publish user message: {e}")
 

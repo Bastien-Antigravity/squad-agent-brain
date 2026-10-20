@@ -122,4 +122,8 @@ flowchart LR
 4. **Section Dividers**: Use `# -----------------------------------------------------------------------------` between top-level functions and classes.
 5. **Never Hardcode Paths**: Always resolve the workspace root dynamically via `resolve_vault_and_workspace(__file__)` or `bootstrap`.
 6. **GITHUB_TOKEN Environment Guard**: For dashboard and REST health management, ensure `GITHUB_TOKEN` is exported in the runtime environment.
+7. **Satellite Brain Sovereignty**: When scaffolding microservices for a satellite brain (e.g. `trading-brain`), pass `--dest <satellite>/06-Microservices/<name>` and `--brain <satellite>`. Code and BDD specifications MUST live inside the satellite brain; base ecosystem directories must NEVER be polluted.
+8. **Multi-Tenant NATS Topic Namespacing & Zero Crosstalk**: Chat topics are namespaced by `bastien-antigravity.{brain_id}.squad.chat`. Plain tags (`@developer`) remain strictly local. Cross-brain interactions MUST use compound tags `@{target_brain}:{role}` (e.g. `@root:developer`, `@trading-brain:trader`).
+9. **Discord Real-Time Streaming**: `discord-client` bridges NATS squad events live into a designated Discord channel with role emojis and forwards incoming user Discord messages into the event bus.
+
 

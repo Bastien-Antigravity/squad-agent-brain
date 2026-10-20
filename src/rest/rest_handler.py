@@ -171,7 +171,7 @@ class SquadRESTHandler:
             return StreamingResponse(event_generator(), media_type="text/event-stream")
 
         @router.get("/api/v1/squad/chat/stream/{session_id}")
-        async def stream_chat_messages(session_id: str, request: Request, once: bool = False):
+        async def stream_chat_messages(session_id: str, request: Request, once: bool = False, brain_id: str = ""):
             async def event_generator():
                 queue = asyncio.Queue()
                 
@@ -179,18 +179,19 @@ class SquadRESTHandler:
                     if payload.get("session_id") == session_id:
                         await queue.put(payload)
                 
+                target_topic = f"bastien-antigravity.{brain_id}.squad.chat" if brain_id and brain_id not in ("obsidian-brain", "root", "main") else "bastien-antigravity.squad.chat"
                 event_bus = getattr(self.controller, "event_bus", None)
                 if event_bus:
                     import inspect
-                    res = event_bus.subscribe("bastien-antigravity.squad.chat", callback=msg_cb)
+                    res = event_bus.subscribe(target_topic, callback=msg_cb)
                     if inspect.isawaitable(res):
                         await res
                 else:
                     from src.interfaces import LocalEventBus
-                    LocalEventBus.subscribe("bastien-antigravity.squad.chat", msg_cb)
+                    LocalEventBus.subscribe(target_topic, msg_cb)
                 
                 try:
-                    yield f"data: {json.dumps({'event': 'connected', 'session_id': session_id})}\n\n"
+                    yield f"data: {json.dumps({'event': 'connected', 'session_id': session_id, 'brain_id': brain_id or 'obsidian-brain'})}\n\n"
                     if once:
                         return
                     while True:
@@ -233,7 +234,11 @@ class SquadRESTHandler:
             if not message:
                 raise HTTPException(status_code=400, detail="Missing 'message' parameter")
             
-            await self.controller.publish_user_message(session_id, message)
+            brain_id = body.get("brain_id") or request.query_params.get("brain_id")
+            if brain_id:
+                await self.controller.publish_user_message(session_id, message, brain_id=brain_id)
+            else:
+                await self.controller.publish_user_message(session_id, message)
             return {"success": True, "message": "Message published successfully"}
 
         app.include_router(router)

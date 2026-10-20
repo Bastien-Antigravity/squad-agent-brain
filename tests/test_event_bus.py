@@ -94,6 +94,77 @@ class TestLocalEventBus(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(received), 1)
         self.assertEqual(received[0]["event_id"], "evt-tag-2")
 
+    async def test_cross_brain_tag_routing_satellite_to_root(self):
+        received_root_dev = []
+        async def root_dev_cb(payload):
+            received_root_dev.append(payload)
+
+        # Root developer listens on central agent channel
+        LocalEventBus.subscribe("bastien-antigravity.squad.chat", root_dev_cb, role="developer")
+
+        # Satellite agent asks root developer for code
+        payload = {
+            "event_id": "evt-cross-1",
+            "sender": "trader",
+            "content": "Hello @root:developer, please write the Binance executor microservice.",
+            "source_brain_id": "trading-brain",
+            "reply_topic": "bastien-antigravity.trading-brain.squad.chat"
+        }
+        LocalEventBus.publish("bastien-antigravity.trading-brain.squad.chat", payload)
+
+        await asyncio.sleep(0.01)
+        self.assertEqual(len(received_root_dev), 1)
+        self.assertEqual(received_root_dev[0]["event_id"], "evt-cross-1")
+
+    async def test_cross_brain_tag_routing_root_to_satellite(self):
+        received_satellite_trader = []
+        async def satellite_trader_cb(payload):
+            received_satellite_trader.append(payload)
+
+        # Satellite trader listens on satellite room agent channel
+        LocalEventBus.subscribe("bastien-antigravity.trading-brain.squad.chat", satellite_trader_cb, role="trader")
+
+        # Root agent asks satellite agent for domain business rules
+        payload = {
+            "event_id": "evt-cross-2",
+            "sender": "developer",
+            "content": "Hello @trading-brain:trader, what is the slippage threshold for the execution order?",
+            "source_brain_id": "obsidian-brain"
+        }
+        LocalEventBus.publish("bastien-antigravity.squad.chat", payload)
+
+        await asyncio.sleep(0.01)
+        self.assertEqual(len(received_satellite_trader), 1)
+        self.assertEqual(received_satellite_trader[0]["event_id"], "evt-cross-2")
+
+    async def test_cross_brain_isolation_intra_brain_no_crosstalk(self):
+        received_root_room = []
+        received_satellite_analyst = []
+
+        async def root_cb(payload):
+            received_root_room.append(payload)
+
+        async def analyst_cb(payload):
+            received_satellite_analyst.append(payload)
+
+        # Root room listener vs Satellite analyst listener
+        LocalEventBus.subscribe("bastien-antigravity.squad.chat", root_cb)
+        LocalEventBus.subscribe("bastien-antigravity.trading-brain.squad.chat", analyst_cb, role="analyst")
+
+        # Satellite user addresses local analyst
+        payload = {
+            "event_id": "evt-intra-1",
+            "sender": "user",
+            "content": "@analyst What is today's volume profile?"
+        }
+        LocalEventBus.publish("bastien-antigravity.trading-brain.squad.chat", payload)
+
+        await asyncio.sleep(0.01)
+        self.assertEqual(len(received_satellite_analyst), 1)
+        # Root room must have ZERO crosstalk
+        self.assertEqual(len(received_root_room), 0)
+
+
 
 class TestDualSquadEventBus(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
