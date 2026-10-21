@@ -400,11 +400,28 @@ services:
       - "${{HOST_IP:-127.0.0.1}}:${{SA_GRPC_PORT:-{sa_grpc_port}}}:${{SA_GRPC_PORT:-{sa_grpc_port}}}"
     environment:
       - DOCKER_ENV=true
+      - SQUAD_IP=0.0.0.0
+      - SQUAD_PORT=${{SA_PORT:-{sa_port}}}
       - BRAIN_ID=${{BRAIN_ID:-{target_name}}}
       - TARGET_BRAIN_ID=${{BRAIN_ID:-{target_name}}}
       - SA_PORT=${{SA_PORT:-{sa_port}}}
       - SA_GRPC_PORT=${{SA_GRPC_PORT:-{sa_grpc_port}}}
+      - TS_IP=timescale-db
+      - TS_PORT=5432
+      - TS_DBNAME=${{DB_NAME:-obsidiandb}}
+      - TS_USER=${{DB_USER:-dbuser}}
+      - TS_PASSWORD=${{DB_PASSWORD:-dbuser}}
+      - NATS_IP=nats-server
+      - NATS_PORT=4222
+      - RG_IP=rag-engine
+      - RG_REST_PORT=8093
+      - WB_IP=web-interface
+      - WB_PORT=5000
       - BASTIEN_PRIVATE_KEY_PATH=/etc/bastien/private.pem
+      - GEMINI_API_KEY=${{GEMINI_API_KEY:-}}
+      - GEMINI_MODEL=${{GEMINI_MODEL:-gemini-3.8-flash}}
+      - DISCORD_BOT_TOKEN=${{DISCORD_BOT_TOKEN:-}}
+      - DISCORD_CHANNEL_ID=${{DISCORD_CHANNEL_ID:-}}
     volumes:
       - ./:/app/brain:rw
       - ./standalone.yaml:/app/standalone.yaml:ro

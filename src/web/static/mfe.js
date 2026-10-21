@@ -1,6 +1,21 @@
+function getSquadLogger(name = 'squad-agent-mfe') {
+    if (typeof window !== 'undefined' && window.BastienLogger) {
+        return window.BastienLogger.get(name);
+    }
+    return {
+        debug: (msg, meta) => console.debug(`[${name}] ${msg}`, meta !== undefined ? meta : ''),
+        info: (msg, meta) => console.info(`[${name}] ${msg}`, meta !== undefined ? meta : ''),
+        warning: (msg, meta) => console.warn(`[${name}] ${msg}`, meta !== undefined ? meta : ''),
+        warn: (msg, meta) => console.warn(`[${name}] ${msg}`, meta !== undefined ? meta : ''),
+        error: (msg, meta) => console.error(`[${name}] ${msg}`, meta !== undefined ? meta : ''),
+        critical: (msg, meta) => console.error(`[CRITICAL] [${name}] ${msg}`, meta !== undefined ? meta : '')
+    };
+}
+
 class SquadAgentMFE extends HTMLElement {
     constructor() {
         super();
+        this.logger = getSquadLogger('squad-agent-mfe');
         this.baseUrl = '';
         this.statusData = { healthy: false, status: 'Offline', version: 'N/A', timestamp: 0 };
         this.activeMode = { mode: '4', name: 'Direct-Action', description: '' };
@@ -23,6 +38,7 @@ class SquadAgentMFE extends HTMLElement {
             this.baseUrl = this.baseUrl.slice(0, -1);
         }
 
+        this.logger.info('SquadAgentMFE mounted into DOM', { baseUrl: this.baseUrl, session: this.activeSessionId });
         this.renderSkeleton();
         await this.loadAll();
         this.setupEventListeners();
@@ -80,7 +96,7 @@ class SquadAgentMFE extends HTMLElement {
                 }
             }
         } catch (e) {
-            console.error('Failed to load active mode:', e);
+            this.logger.error('Failed to load active mode:', e);
         }
     }
 
@@ -94,7 +110,7 @@ class SquadAgentMFE extends HTMLElement {
                 }
             }
         } catch (e) {
-            console.error('Failed to load commands:', e);
+            this.logger.error('Failed to load commands:', e);
         }
     }
 
@@ -536,10 +552,43 @@ class SquadAgentMFE extends HTMLElement {
                 .chat-bubble.developer { border-left: 3px solid #00e5ff; }
                 .chat-bubble.qa { border-left: 3px solid #4CAF50; }
                 .chat-bubble.architect { border-left: 3px solid #E040FB; }
+                .chat-bubble.fleetcommander { border-left: 3px solid #7C4DFF; }
+                .chat-bubble.fleetarchitect { border-left: 3px solid #3F51B5; }
+                .chat-bubble.sentinel { border-left: 3px solid #FF9800; }
+                .chat-bubble.patternsentinel { border-left: 3px solid #FF5722; }
+                .chat-bubble.trader { border-left: 3px solid #00E676; }
+                .chat-bubble.analyst { border-left: 3px solid #29B6F6; }
+                .chat-bubble.purger { border-left: 3px solid #F44336; }
+                .chat-bubble.oracle { border-left: 3px solid #AB47BC; }
+                .chat-bubble.docindexer { border-left: 3px solid #26A69A; }
+                .chat-bubble.codeindexer { border-left: 3px solid #8D6E63; }
+                .chat-bubble.docmaintainer { border-left: 3px solid #FFCA28; }
+                .chat-bubble.gospecialist { border-left: 3px solid #00ADD8; }
+                .chat-bubble.pythonspecialist { border-left: 3px solid #3776AB; }
+                .chat-bubble.rustspecialist { border-left: 3px solid #DEA584; }
+                .chat-bubble.cppspecialist { border-left: 3px solid #00599C; }
+                .chat-bubble.webuispecialist { border-left: 3px solid #FF4081; }
+                .chat-bubble.timescalespecialist { border-left: 3px solid #FDB515; }
                 .chat-bubble.thinking {
                     border-left: 3px solid #FFC107;
                     background-color: rgba(255, 193, 7, 0.08);
                     animation: pulseThinking 1.5s infinite ease-in-out;
+                }
+                .agent-mention {
+                    color: #00e5ff;
+                    background: rgba(0, 229, 255, 0.12);
+                    padding: 1px 6px;
+                    border-radius: 4px;
+                    font-weight: 600;
+                    border: 1px solid rgba(0, 229, 255, 0.3);
+                }
+                .chat-brain-badge {
+                    font-size: 0.75rem;
+                    background: #252525;
+                    border: 1px solid #3a3a3a;
+                    padding: 3px 8px;
+                    border-radius: 6px;
+                    color: #e0e0e0;
                 }
                 @keyframes pulseThinking {
                     0% { opacity: 0.6; }
@@ -711,12 +760,12 @@ class SquadAgentMFE extends HTMLElement {
                 </div>
 
                 <div class="squad-tabs">
-                    <button class="squad-tab-btn active" data-tab="runner">🎛️ Command Control</button>
-                    <button class="squad-tab-btn" data-tab="chat">💬 Squad Chat</button>
+                    <button class="squad-tab-btn" data-tab="runner">🎛️ Command Control</button>
+                    <button class="squad-tab-btn active" data-tab="chat">💬 Squad Chat</button>
                 </div>
 
                 <!-- Runner View -->
-                <div id="tab-runner" class="tab-content active">
+                <div id="tab-runner" class="tab-content">
                     <div class="squad-grid">
                         <div class="squad-card">
                             <div class="squad-card-title">🕹️ Active Squad Mode</div>
@@ -770,7 +819,7 @@ class SquadAgentMFE extends HTMLElement {
                 </div>
 
                 <!-- Chat View -->
-                <div id="tab-chat" class="tab-content">
+                <div id="tab-chat" class="tab-content active">
                     <div class="chat-container-layout">
                         <!-- Session Drawer Sidebar -->
                         <div class="session-sidebar">
@@ -785,6 +834,7 @@ class SquadAgentMFE extends HTMLElement {
                         <div class="chat-layout">
                             <div class="chat-header-bar">
                                 <span id="current-session-label">Session: <strong>squad_sync_session</strong></span>
+                                <span id="chat-brain-badge" class="chat-brain-badge">🧠 Brain: obsidian-brain (root)</span>
                                 <span id="chat-live-status" style="color: #4CAF50; font-size: 0.75rem;">● Live SSE Active</span>
                             </div>
 
@@ -793,7 +843,7 @@ class SquadAgentMFE extends HTMLElement {
                                     <span class="chat-avatar">🤖</span>
                                     <div class="chat-content">
                                         <div class="chat-sender">System</div>
-                                        <div class="chat-text">Welcome to the AI Squad Chat room. Type a goal below or target a specific agent (@orchestrator, @developer, @qa, @architect).</div>
+                                        <div class="chat-text">Welcome to the AI Squad Chat room. Type a goal below or target a specific agent (@orchestrator, @developer, @qa, @architect, @trader).</div>
                                     </div>
                                 </div>
                             </div>
@@ -804,6 +854,10 @@ class SquadAgentMFE extends HTMLElement {
                                 <span class="agent-chip" data-tag="@developer ">💻 @developer</span>
                                 <span class="agent-chip" data-tag="@qa ">🧪 @qa</span>
                                 <span class="agent-chip" data-tag="@architect ">📐 @architect</span>
+                                <span class="agent-chip" data-tag="@fleetcommander ">🛰️ @fleetcommander</span>
+                                <span class="agent-chip" data-tag="@sentinel ">🛡️ @sentinel</span>
+                                <span class="agent-chip" data-tag="@trader ">📈 @trader</span>
+                                <span class="agent-chip" data-tag="@analyst ">📊 @analyst</span>
                             </div>
 
                             <div class="chat-input-area">
@@ -1023,7 +1077,7 @@ class SquadAgentMFE extends HTMLElement {
                 }
             }
         } catch (e) {
-            console.error("Failed to load chat history:", e);
+            this.logger.error("Failed to load chat history:", e);
         }
     }
 
@@ -1036,12 +1090,21 @@ class SquadAgentMFE extends HTMLElement {
         this.chatEventSource.onmessage = (event) => {
             try {
                 const msg = JSON.parse(event.data);
+                if (msg.event === 'connected') {
+                    const statusLabel = this.querySelector('#chat-live-status');
+                    if (statusLabel) {
+                        statusLabel.style.color = '#4CAF50';
+                        const target = msg.brain_id || (this.statusData.brain_id || 'root');
+                        statusLabel.textContent = `● Connected (${target})`;
+                    }
+                    return;
+                }
                 this.removeThinkingIndicator();
                 this.updateLastUserBadge('delivered');
                 this.setProcessingState(false);
                 this.appendChatMessage(msg);
             } catch (e) {
-                console.error("Failed to parse SSE chat message:", e);
+                this.logger.error("Failed to parse SSE chat message:", e);
                 this.setProcessingState(false);
             }
         };
@@ -1076,7 +1139,10 @@ class SquadAgentMFE extends HTMLElement {
             const resp = await fetch(`${this.baseUrl}/api/v1/squad/chat/${this.activeSessionId}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ message: text })
+                body: JSON.stringify({
+                    message: text,
+                    brain_id: this.statusData.brain_id || undefined
+                })
             });
 
             if (resp.ok) {
@@ -1088,7 +1154,7 @@ class SquadAgentMFE extends HTMLElement {
                 this.setProcessingState(false);
             }
         } catch (e) {
-            console.error("Connection error posting chat message:", e);
+            this.logger.error("Connection error posting chat message:", e);
             this.updateUserBadge(msgId, 'error');
             this.setProcessingState(false);
         }
@@ -1210,16 +1276,34 @@ class SquadAgentMFE extends HTMLElement {
             return;
         }
 
-        // Map avatars
+        // Full ecosystem avatars mapping
         const avatars = {
             'user': '👤',
+            'system': '⚙️',
             'orchestrator': '🤖',
             'developer': '💻',
             'qa': '🧪',
             'architect': '📐',
+            'fleetcommander': '🛰️',
+            'fleetarchitect': '🌐',
             'codeindexer': '🔍',
             'docindexer': '📚',
-            'fleetcommander': '🛰️'
+            'sentinel': '🛡️',
+            'patternsentinel': '👁️',
+            'purger': '🧹',
+            'prototyper': '⚡',
+            'oracle': '🔮',
+            'docmaintainer': '📝',
+            'gospecialist': '🐹',
+            'pythonspecialist': '🐍',
+            'rustspecialist': '🦀',
+            'cppspecialist': '⚙️',
+            'vbaspecialist': '📊',
+            'webuispecialist': '🎨',
+            'timescalespecialist': '⏱️',
+            'trader': '📈',
+            'analyst': '📊',
+            'risk_manager': '⚖️'
         };
         const avatar = avatars[msg.sender] || '🤖';
 
@@ -1262,6 +1346,14 @@ class SquadAgentMFE extends HTMLElement {
             });
         }
 
+        // Format text to highlight @agent and @brain:agent tags safely
+        const rawContent = msg.content || '';
+        const escapedContent = rawContent
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
+        const formattedContent = escapedContent.replace(/@([a-zA-Z0-9_-]+(?::[a-zA-Z0-9_-]+)?)/g, '<span class="agent-mention">@$1</span>');
+
         bubble.innerHTML = `
             <span class="chat-avatar">${avatar}</span>
             <div class="chat-content">
@@ -1269,7 +1361,7 @@ class SquadAgentMFE extends HTMLElement {
                     <span>${msg.sender || 'system'}</span>
                     ${statusBadgeHtml}
                 </div>
-                <div class="chat-text">${msg.content || ''}</div>
+                <div class="chat-text">${formattedContent}</div>
                 ${toolCallsHtml}
             </div>
         `;
@@ -1392,6 +1484,14 @@ class SquadAgentMFE extends HTMLElement {
             }
         }
 
+        const brainBadge = this.querySelector('#chat-brain-badge');
+        if (brainBadge && this.statusData.brain_id) {
+            const isSat = this.statusData.brain_id !== 'obsidian-brain';
+            brainBadge.innerHTML = isSat
+                ? `🛰️ Brain: <strong>${this.statusData.brain_id}</strong>`
+                : `🧠 Brain: <strong>obsidian-brain (root)</strong>`;
+        }
+
         agentChips.forEach(chip => {
             if (!isGhConfigured) {
                 chip.style.pointerEvents = 'none';
@@ -1404,5 +1504,7 @@ class SquadAgentMFE extends HTMLElement {
     }
 }
 
-customElements.define('squad-agent-mfe', SquadAgentMFE);
+if (!customElements.get('squad-agent-mfe')) {
+    customElements.define('squad-agent-mfe', SquadAgentMFE);
+}
 

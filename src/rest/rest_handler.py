@@ -80,7 +80,8 @@ class SquadRESTHandler:
                 "version": status_info.get("version", "0.0.1"),
                 "timestamp": status_info.get("timestamp", int(time.time())),
                 "github_configured": gh_configured,
-                "github_user": self.get_github_user()
+                "github_user": self.get_github_user(),
+                "brain_id": status_info.get("brain_id", "obsidian-brain")
             }
 
         @router.get("/api/v1/squad/commands")

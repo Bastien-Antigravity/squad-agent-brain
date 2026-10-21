@@ -72,14 +72,28 @@ def register_mfe_with_web_interface(config, logger, sa_ip, sa_port):
         logger.error(f"OpenMFE registration aborted: Failed to resolve capability 'web_interface' listen address ({e}).")
         return
 
+    import os
+    brain_id = os.getenv("TARGET_BRAIN_ID") or os.getenv("BRAIN_ID")
+    if not brain_id and hasattr(config, "data"):
+        try:
+            brain_id = config.data.get("capabilities", {}).get("squad_agent", {}).get("target_brain_id")
+        except Exception:
+            brain_id = None
+
+    is_satellite = brain_id and brain_id not in ("obsidian-brain", "root", "main")
+    service_name = f"squad-agent-{brain_id}" if is_satellite else "squad-agent"
+    service_tag = "squad-agent-mfe"
+    nav_title = f"🚀 Squad: {brain_id.replace('-', ' ').title()}" if is_satellite else "🚀 Squad Control"
+
     reg_url = f"http://{web_addr}/api/v1/register"
-    mfe_url = f"http://{sa_ip}:{sa_port}/static/mfe.js"
+    client_ip = sa_ip if sa_ip not in ("0.0.0.0", "", "::") else "127.0.0.1"
+    mfe_url = f"http://{client_ip}:{sa_port}/static/mfe.js"
     
     payload = {
-        "name": "squad-agent",
-        "tag": "squad-agent-mfe",
+        "name": service_name,
+        "tag": service_tag,
         "url": mfe_url,
-        "navTitle": "🚀 Squad Control"
+        "navTitle": nav_title
     }
     
     req_data = json.dumps(payload).encode("utf-8")

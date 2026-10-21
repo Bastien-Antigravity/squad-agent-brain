@@ -49,12 +49,20 @@ class DiscordClient:
     def _resolve_token(self) -> Optional[str]:
         """Resolves the Discord bot token from environment or settings file."""
         token = getenv("DISCORD_BOT_TOKEN")
-        if not token:
-            settings = self.config.data.get("capabilities", {}).get("discord", {})
-            token = settings.get("bot_token")
+        if not token and hasattr(self.config, "data"):
+            squad_cfg = self.config.data.get("capabilities", {}).get("squad_agent", {})
+            settings = squad_cfg.get("discord", {}) if isinstance(squad_cfg, dict) else {}
+            if not settings:
+                settings = self.config.data.get("capabilities", {}).get("discord", {})
+            token = settings.get("bot_token") or settings.get("token")
+        if token and "${" in token and "}" in token:
+            import re
+            m = re.search(r':-?([^}]+)', token)
+            if m:
+                token = m.group(1)
         if token and token.startswith("ENC(") and hasattr(self.config, "decrypt_secret"):
             token = self.config.decrypt_secret(token)
-        return token
+        return token.strip() if token else None
 
     # -----------------------------------------------------------------------------------------------
 
@@ -62,8 +70,16 @@ class DiscordClient:
         """Resolves the designated Discord channel ID for squad chat monitoring."""
         ch_id = getenv("DISCORD_CHANNEL_ID")
         if not ch_id and hasattr(self.config, "data"):
-            settings = self.config.data.get("capabilities", {}).get("discord", {})
+            squad_cfg = self.config.data.get("capabilities", {}).get("squad_agent", {})
+            settings = squad_cfg.get("discord", {}) if isinstance(squad_cfg, dict) else {}
+            if not settings:
+                settings = self.config.data.get("capabilities", {}).get("discord", {})
             ch_id = settings.get("channel_id")
+        if ch_id and "${" in str(ch_id):
+            import re
+            m = re.search(r':-?([^}]+)', str(ch_id))
+            if m:
+                ch_id = m.group(1)
         return str(ch_id).strip() if ch_id else None
 
     # -----------------------------------------------------------------------------------------------
@@ -179,6 +195,24 @@ class DiscordClient:
             self.client.run(self.token)
         except Exception as e:
             self.logger.error("DiscordClient : Failed to run Discord Client Gateway: {0}".format(e))
+
+    # -----------------------------------------------------------------------------------------------
+
+    async def start_async(self) -> None:
+        """Asynchronously establishes connection to the Discord Gateway."""
+        if not HAS_DISCORD:
+            self.logger.warning("DiscordClient : discord.py library is not installed in the python environment.")
+            return
+
+        if not self.token:
+            self.logger.warning("DiscordClient : DISCORD_BOT_TOKEN environment variable or config setting is missing.")
+            return
+
+        self.logger.info("DiscordClient : Starting bot Gateway connection asynchronously...")
+        try:
+            await self.client.start(self.token)
+        except Exception as e:
+            self.logger.error(f"DiscordClient : Failed to run Discord Client Gateway asynchronously: {e}")
 
 # -----------------------------------------------------------------------------------------------
 

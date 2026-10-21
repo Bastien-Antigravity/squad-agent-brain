@@ -57,7 +57,14 @@ class CommandController(Command):
         self.schema = resolve_schema_name(__file__)
         self.pool = get_pg_pool(config=self.config, logger=self.logger)
         from pathlib import Path
+        import os
         self.repo_root = Path(__file__).resolve().parent.parent.parent
+        raw_brain = os.getenv("TARGET_BRAIN_ID") or os.getenv("BRAIN_ID")
+        if not raw_brain and hasattr(self.config, "get_capability"):
+            cap = self.config.get_capability("squad_agent")
+            if isinstance(cap, dict):
+                raw_brain = cap.get("target_brain_id")
+        self.brain_id = (raw_brain if isinstance(raw_brain, str) and raw_brain.strip() else None) or "obsidian-brain"
         self.version = self._load_version()
         self.memory = self._setup_memory()
         self.notif_client = self._setup_notification_client()
@@ -184,7 +191,8 @@ class CommandController(Command):
             "healthy": True,
             "status": "Healthy",
             "version": self.version,
-            "timestamp": int(time.time())
+            "timestamp": int(time.time()),
+            "brain_id": self.brain_id
         }
 
     async def get_active_mode(self) -> str:

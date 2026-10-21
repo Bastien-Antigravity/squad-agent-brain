@@ -937,6 +937,18 @@ def start_engine() -> None:
     # 4. Start Telegram dynamic menu client
     SetupTelegram(config, controller, logger)
 
+    # 4.1. Start Discord Multi-Agent Squad Chat Client (if configured)
+    try:
+        from src.clients.discord_client import DiscordClient, HAS_DISCORD
+        discord_client = DiscordClient(config=config, logger=logger, controller=controller)
+        if HAS_DISCORD and discord_client.token:
+            logger.info("🎮 Discord token detected: Launching Discord Client for multi-agent squad chat...")
+            loop.create_task(discord_client.start_async())
+        elif not HAS_DISCORD and discord_client.token:
+            logger.warning("Discord token provided but 'discord.py' is not installed.")
+    except Exception as e:
+        logger.warning(f"Failed to initialize Discord client: {e}")
+
     # 4.5. Start Collaborative Agent Daemons
     try:
         from src.agents.orchestrator import OrchestratorAgent
