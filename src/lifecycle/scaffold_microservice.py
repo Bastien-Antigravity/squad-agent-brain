@@ -123,6 +123,12 @@ func main() {{
 	// 3. Instantiate Core Controller
 	ctrl := core.NewController(appConfig, appLogger)
 
+	// Dynamic Hot-Reload Listener (Ecosystem Live Configuration Standard)
+	appConfig.OnLiveConfUpdate(func(update map[string]interface{{}}) {{
+		appLogger.Info("Live configuration update received from config-server: hot-reloading parameters")
+		ctrl.OnLiveConfigUpdate(update)
+	}})
+
 	// 4. Initialize Lifecycle Manager
 	lm := toolbox_lifecycle.NewManagerWithLogger(appLogger)
 
@@ -214,6 +220,13 @@ func (c *Controller) Start(addr string) error {{
 func (c *Controller) Stop(ctx context.Context) error {{
 	c.logger.Info("{name} controller shutdown complete")
 	return nil
+}}
+
+// -----------------------------------------------------------------------------
+
+// OnLiveConfigUpdate handles real-time configuration changes without restarting the process.
+func (c *Controller) OnLiveConfigUpdate(update map[string]interface{{}}) {{
+	c.logger.Info("{name} controller: applying dynamic configuration update without restart")
 }}
 """
     create_file(target_dir / "src/core/controller.go", controller_go, dry_run)
@@ -469,6 +482,10 @@ impl Controller {{
         println!("{{}} controller shutdown complete", self.name);
         Ok(())
     }}
+
+    pub fn on_live_config_update(&self) {{
+        println!("{{}} controller: applying dynamic configuration update without restart", self.name);
+    }}
 }}
 """
     create_file(target_dir / "src/core/mod.rs", core_rs, dry_run)
@@ -531,6 +548,11 @@ def main():
 
     # Instantiate and start the example worker controller
     controller = Controller(config=config, logger=logger)
+
+    # Dynamic Hot-Reload Listener (Ecosystem Live Configuration Standard)
+    if hasattr(config, "on_live_conf_update"):
+        config.on_live_conf_update(lambda update: controller.on_live_config_update(update))
+
     logger.info(f"Starting {name} (version {{config.get_version()}}) under profile: {{config.profile}}...")
     controller.start()
 
@@ -599,6 +621,10 @@ class Controller:
     def stop(self) -> None:
         # Example cleanup logic - replace with actual worker teardown
         self.logger.info(f"{{self.Name}} : [DUMMY] Controller terminated gracefully.")
+
+    def on_live_config_update(self, update: dict) -> None:
+        \"\"\"Handles real-time configuration changes without restarting the process.\"\"\"
+        self.logger.info(f"{{self.Name}} : applying dynamic configuration update without restart.")
 """
     create_file(target_dir / "src/core/controller.py", controller_py, dry_run)
 
@@ -857,6 +883,7 @@ networks:
 3. **Encrypted Secrets**: Sensitive values stored in configurations must remain encrypted as `ENC(...)` tokens until runtime decryption via `appConfig.DecryptSecret()`.
 4. **Header Ritual**: All source files MUST begin with the standard Triple-Block header (`ESSENTIAL PROCESS`, `DATA FLOW`, `KEY PARAMETERS`).
 5. **Section Dividers**: Use appropriate dividers (`// -----------------------------------------------------------------------------`) between exported methods and major sections.
+6. **Dynamic Fleet Hot-Reloading**: Microservices must register `OnLiveConfUpdate` / `on_live_conf_update` to dynamically reload configuration changes without restarting the daemon process.
 """
     create_file(target_dir / "AGENTS.md", agents_md, dry_run)
 

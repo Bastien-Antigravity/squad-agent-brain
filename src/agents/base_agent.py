@@ -28,7 +28,7 @@ import asyncio
 from typing import Dict, Any, List, Optional
 from src.interfaces import SquadEventBus
 from google import genai
-from google.genai import types
+from google.genai import types, errors
 
 # -----------------------------------------------------------------------------
 
@@ -148,43 +148,25 @@ class BaseAgent:
         self.loop = None
         self.running = False
         
-        # Load LLM configuration from environment variables or configuration profile
-        self.api_key = os.environ.get("GEMINI_API_KEY")
-        self.model_name = os.environ.get("GEMINI_MODEL")
-        
-        if self.config and hasattr(self.config, "data") and isinstance(self.config.data, dict):
-            cap = self.config.data.get("capabilities", {}).get("squad_agent", {})
-            if not self.api_key:
-                raw_key = cap.get("gemini_api_key")
-                if raw_key:
-                    try:
-                        self.api_key = self.config.decrypt_secret(raw_key)
-                    except Exception as e:
-                        self.logger.error(f"Agent {self.role_name}: Failed to decrypt gemini_api_key from config: {e}")
-            if not self.model_name:
-                self.model_name = cap.get("gemini_model")
-                
-        if not self.model_name:
-            self.model_name = "gemini-3.5-flash"
+        # Initialise LLM configuration and client with live hot-reload support
+        self.api_key = None
+        self.model_name = None
+        self.thinking_level = None
+        self.thinking_budget = None
+        self.client = None
+        self._refresh_llm_config()
+        if not self.client:
+            self._init_genai_client()
+
+        # Register dynamic config reload listener if supported by AppConfig
+        if hasattr(self.config, "on_live_conf_update"):
+            try:
+                self.config.on_live_conf_update(lambda _: self._refresh_llm_config())
+            except Exception as ex:
+                self.logger.debug(f"Agent {self.role_name}: Could not bind on_live_conf_update: {ex}")
         
         # Load system instruction
         self.system_instruction = self._load_system_prompt()
-        
-        # Instantiate Google GenAI Client strictly if explicit API Key is present
-        self.client = None
-        if hasattr(self.config, "data") and isinstance(self.config.data, dict) and self.config.data.get("genai_client"):
-            self.client = self.config.data["genai_client"]
-            self.logger.info(f"Agent {self.role_name}: Re-using shared Gemini Client from config.")
-        elif self.api_key:
-            try:
-                self.client = genai.Client(api_key=self.api_key)
-                self.logger.info(f"Agent {self.role_name}: Initialised Gemini Client using GEMINI_API_KEY.")
-                if hasattr(self.config, "data") and isinstance(self.config.data, dict):
-                    self.config.data["genai_client"] = self.client
-            except Exception as e:
-                self.logger.error(f"Agent {self.role_name}: Failed to initialise Gemini Client: {e}")
-        else:
-            self.logger.warning(f"Agent {self.role_name}: GEMINI_API_KEY is missing from environment. Mock responses will be used.")
         
         # Subclass overrides or appends to tools
         self.tools = [query_rag_engine, read_workspace_file, write_workspace_file, execute_shell_command]
@@ -215,6 +197,58 @@ class BaseAgent:
             except Exception as e:
                 self.logger.error(f"Agent {self.role_name}: Failed to read prompt file {self.prompt_file}: {e}")
         return f"You are the {self.role_name} AI squad agent."
+
+    def _refresh_llm_config(self) -> None:
+        """Dynamically re-reads LLM configuration from config capability or environment for live hot-reload."""
+        cap = {}
+        if self.config and hasattr(self.config, "data") and isinstance(self.config.data, dict):
+            cap = self.config.data.get("capabilities", {}).get("squad_agent", {})
+        elif hasattr(self.config, "get_capability"):
+            cap = self.config.get_capability("squad_agent") or {}
+
+        # 1. Hot-reload model name (exact name, default: gemini-3.8-flash)
+        env_model = os.environ.get("GEMINI_MODEL")
+        new_model = env_model or cap.get("gemini_model") or getattr(self, "model_name", None) or "gemini-3.8-flash"
+        new_model_str = str(new_model).strip()
+        if hasattr(self, "model_name") and self.model_name and self.model_name != new_model_str:
+            self.logger.info(f"Agent {self.role_name}: Hot-reloaded model from '{self.model_name}' to '{new_model_str}' without restarting process.")
+        self.model_name = new_model_str
+
+        # 2. Hot-reload thinking configuration
+        self.thinking_level = os.environ.get("GEMINI_THINKING_LEVEL") or cap.get("thinking_level") or getattr(self, "thinking_level", None)
+        self.thinking_budget = os.environ.get("GEMINI_THINKING_BUDGET") or cap.get("thinking_budget") or getattr(self, "thinking_budget", None)
+
+        # 3. Hot-reload API key and client if updated dynamically
+        env_key = os.environ.get("GEMINI_API_KEY")
+        target_key = env_key
+        if not target_key and cap.get("gemini_api_key"):
+            raw_key = cap.get("gemini_api_key")
+            try:
+                target_key = self.config.decrypt_secret(raw_key) if hasattr(self.config, "decrypt_secret") else raw_key
+            except Exception as e:
+                self.logger.error(f"Agent {self.role_name}: Failed to decrypt updated gemini_api_key: {e}")
+
+        if target_key and target_key != getattr(self, "api_key", None):
+            self.api_key = target_key
+            self._init_genai_client()
+        elif not hasattr(self, "api_key"):
+            self.api_key = target_key
+
+    def _init_genai_client(self) -> None:
+        """Initialises or updates the Google GenAI Client with active credentials."""
+        if hasattr(self.config, "data") and isinstance(self.config.data, dict) and self.config.data.get("genai_client"):
+            self.client = self.config.data["genai_client"]
+            self.logger.info(f"Agent {self.role_name}: Re-using shared Google AI Studio Client from config.")
+        elif self.api_key:
+            try:
+                self.client = genai.Client(api_key=self.api_key)
+                self.logger.info(f"Agent {self.role_name}: Initialised Google AI Studio Client using GEMINI_API_KEY.")
+                if hasattr(self.config, "data") and isinstance(self.config.data, dict):
+                    self.config.data["genai_client"] = self.client
+            except Exception as e:
+                self.logger.error(f"Agent {self.role_name}: Failed to initialise Google AI Studio Client: {e}")
+        else:
+            self.client = None
 
     async def start(self):
         """Registers the agent message consumer loop."""
@@ -261,6 +295,7 @@ class BaseAgent:
 
     async def think_and_respond(self, session_id: str, reply_topic: Optional[str] = None, source_brain: Optional[str] = None):
         """Queries Gemini using conversation logs database history and broadcasts response."""
+        self._refresh_llm_config()
         self.current_source_brain = source_brain
         publish_topic = reply_topic or self.squad_chat_topic
         if not self.client:
@@ -292,6 +327,18 @@ class BaseAgent:
             }
             if self.tools:
                 config_params["tools"] = self.tools
+
+            # Support Gemini Thinking models (e.g. Flash Thinking Level: HIGH)
+            if hasattr(self, "thinking_level") and self.thinking_level:
+                tl = getattr(types.ThinkingLevel, str(self.thinking_level).upper(), None)
+                if tl:
+                    config_params["thinking_config"] = types.ThinkingConfig(thinking_level=tl)
+            elif hasattr(self, "thinking_budget") and self.thinking_budget:
+                try:
+                    tb = int(self.thinking_budget)
+                    config_params["thinking_config"] = types.ThinkingConfig(thinking_budget=tb)
+                except (ValueError, TypeError):
+                    pass
 
             response = self.client.models.generate_content(
                 model=self.model_name,
@@ -369,9 +416,33 @@ class BaseAgent:
                 
                 # 5. Broadcast to SquadEventBus
                 await self.event_bus.publish(publish_topic, payload_data)
+        except errors.APIError as e:
+            err_str = str(e).lower()
+            if getattr(e, "code", None) == 404 or "not found" in err_str or "not_found" in err_str:
+                err_msg = f"❌ [Model Error]: Model '{self.model_name}' was not found online on Google AI Studio. Please verify the exact model identifier."
+                self.logger.error(f"Agent {self.role_name}: {err_msg} (Details: {e})")
+            else:
+                err_msg = f"⚠️ [System Alert]: Agent '{self.role_name}' Google GenAI API error: {e}"
+                self.logger.error(f"Agent {self.role_name} API error: {e}")
+            payload_data = {
+                "sender": self.role_name,
+                "session_id": session_id,
+                "content": err_msg,
+                "tool_calls": [],
+                "source_brain_id": self.target_brain_id or "obsidian-brain",
+                "reply_topic": publish_topic
+            }
+            try:
+                await self.event_bus.publish(publish_topic, payload_data)
+            except Exception as publish_err:
+                self.logger.error(f"Failed to publish error alert for {self.role_name}: {publish_err}")
         except Exception as e:
+            err_str = str(e).lower()
+            if "not found" in err_str or "not_found" in err_str or "404" in err_str:
+                err_msg = f"❌ [Model Error]: Model '{self.model_name}' was not found online on Google AI Studio. Please verify the exact model identifier."
+            else:
+                err_msg = f"⚠️ [System Alert]: Agent '{self.role_name}' failed during generation loop: {e}"
             self.logger.error(f"Agent {self.role_name} failed during LLM generation loop: {e}")
-            err_msg = f"⚠️ [System Alert]: Agent '{self.role_name}' failed during generation loop: {e}"
             payload_data = {
                 "sender": self.role_name,
                 "session_id": session_id,

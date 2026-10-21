@@ -23,17 +23,123 @@ KEY PARAMETERS:
 
 import argparse
 import os
+import socket
 import sys
 from pathlib import Path
 from shutil import copytree as shutilCopytree, copy as shutilCopy, ignore_patterns as shutilIgnorePatterns
 from subprocess import run as subprocessRun
 from sys import executable as sysExecutable
+from typing import Optional, Tuple, Any, Set
 
 # Standard ecosystem bootstrap
 import src.bootstrap as bootstrap
 from lib.orchestration_lib import setup_terminal, resolve_vault_and_workspace
 
 logger = bootstrap.logger
+
+# -----------------------------------------------------------------------------
+
+def is_port_in_use(port: int, host: str = "127.0.0.1") -> bool:
+    """Checks whether a port is currently open and accepting connections."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(0.3)
+            return s.connect_ex((host, port)) == 0
+    except OSError:
+        return False
+
+# -----------------------------------------------------------------------------
+
+def get_allocated_ecosystem_ports(app_config: Any = None) -> Set[int]:
+    """
+    Dynamically extracts all ports declared across ecosystem capabilities
+    directly from the active configuration profile (single source of truth).
+    """
+    allocated: Set[int] = set()
+    active_cfg = app_config if app_config is not None else bootstrap.config
+    config_data = getattr(active_cfg, "data", {}) if active_cfg else {}
+    caps = config_data.get("capabilities", {})
+    for _, c_val in caps.items():
+        if isinstance(c_val, dict):
+            for k, v in c_val.items():
+                if "port" in k and str(v).isdigit():
+                    allocated.add(int(v))
+                elif isinstance(v, dict):
+                    for sub_k, sub_v in v.items():
+                        if "port" in sub_k and str(sub_v).isdigit():
+                            allocated.add(int(sub_v))
+    return allocated
+
+# -----------------------------------------------------------------------------
+
+def resolve_available_ports(target_path: Path, app_config: Any = None) -> Tuple[int, int]:
+    """
+    Finds the next free non-colliding (HTTP, gRPC) port pair for the satellite brain.
+    Extracts allocated ports dynamically from the ecosystem configuration and verifies
+    local socket availability without any hardcoded port constants or .env files.
+    """
+    active_cfg = app_config if app_config is not None else bootstrap.config
+    used_ports = get_allocated_ecosystem_ports(active_cfg)
+
+    squad_cap = (getattr(active_cfg, "data", {})
+                 .get("capabilities", {})
+                 .get("squad_agent", {}))
+    base_port_val = squad_cap.get("satellite_base_port", 8185)
+    base_grpc_val = squad_cap.get("satellite_base_grpc_port", 8187)
+    base_port = int(base_port_val) if str(base_port_val).isdigit() else 8185
+    base_grpc_port = int(base_grpc_val) if str(base_grpc_val).isdigit() else 8187
+    port_gap = base_grpc_port - base_port if base_grpc_port > base_port else 2
+
+    # Dynamically scan sibling directories for existing satellite docker-compose.yaml files
+    parent = target_path.parent
+    if parent.exists():
+        for sibling in parent.iterdir():
+            compose_file = sibling / "docker-compose.yaml"
+            if sibling.is_dir() and compose_file.exists():
+                try:
+                    for line in compose_file.read_text(encoding="utf-8").splitlines():
+                        if "SA_PORT" in line or "SA_GRPC_PORT" in line:
+                            for token in line.replace(":", " ").replace("-", " ").replace("}", " ").replace('"', ' ').replace("'", ' ').split():
+                                if token.isdigit():
+                                    used_ports.add(int(token))
+                except Exception:
+                    pass
+
+    port = base_port
+    while True:
+        grpc_port = port + port_gap
+        if port not in used_ports and grpc_port not in used_ports:
+            if not is_port_in_use(port) and not is_port_in_use(grpc_port):
+                return port, grpc_port
+        port += 10
+
+# -----------------------------------------------------------------------------
+
+def launch_satellite_docker(target_path: Path, brain_name: str, sa_port: int) -> bool:
+    """Launches the newly scaffolded satellite brain squad-agent in Docker."""
+    logger.info(f"ScaffoldNewBrain : Launching satellite squad-agent for '{brain_name}' in Docker...")
+    try:
+        res = subprocessRun(["docker", "info"], capture_output=True, text=True)
+        if res.returncode != 0:
+            logger.warning("ScaffoldNewBrain : Docker daemon is not active. Skipping container launch.")
+            return False
+
+        net_check = subprocessRun(["docker", "network", "inspect", "teleremote-network"], capture_output=True, text=True)
+        if net_check.returncode != 0:
+            logger.info("ScaffoldNewBrain : Creating Docker bridge network 'teleremote-network'...")
+            subprocessRun(["docker", "network", "create", "teleremote-network"], check=True)
+
+        run_res = subprocessRun(["docker", "compose", "up", "-d"], cwd=str(target_path), capture_output=True, text=True)
+        if run_res.returncode == 0:
+            logger.info(f"   🐳 Successfully launched 'squad-agent-{brain_name}' in Docker on port {sa_port}!")
+            return True
+        else:
+            logger.warning(f"ScaffoldNewBrain : docker compose failed: {run_res.stderr.strip()}")
+            return False
+    except Exception as e:
+        logger.warning(f"ScaffoldNewBrain : Could not launch Docker container: {e}")
+        return False
+
 
 # -----------------------------------------------------------------------------
 
@@ -62,11 +168,26 @@ def create_symlink(target_path: Path, link_target: str, dry_run: bool = False) -
 
 # -----------------------------------------------------------------------------
 
-def scaffold_brain(target_name: str, target_path: Path, vault_root: Path, dry_run: bool = False) -> None:
+def scaffold_brain(
+    target_name: str,
+    target_path: Path,
+    vault_root: Path,
+    dry_run: bool = False,
+    launch_docker: bool = False,
+    sa_port: Optional[int] = None,
+    sa_grpc_port: Optional[int] = None
+) -> None:
     """
     Executes complete scaffolding of a new Bastien-Antigravity brain vault.
     """
     logger.info(f"ScaffoldNewBrain : Fabricating '{target_name}' at {target_path}...")
+
+    # 0. Resolve non-colliding host ports for the satellite squad agent
+    if sa_port is None or sa_grpc_port is None:
+        auto_port, auto_grpc = resolve_available_ports(target_path)
+        sa_port = sa_port or auto_port
+        sa_grpc_port = sa_grpc_port or auto_grpc
+    logger.info(f"ScaffoldNewBrain : Allocated ports -> HTTP: {sa_port}, gRPC: {sa_grpc_port}")
 
     # 1. Create Double-Digit Folder Hierarchy
     folders = [
@@ -191,7 +312,7 @@ tags:
 # AGENTS.md: {target_name}
 
 ## Repository Mission & Architecture Role
-`{target_name}` is a centralized knowledge vault, architecture registry, operational runbook, and domain intelligence engine for the Bastien-Antigravity ecosystem.
+`{target_name}` is an autonomous knowledge vault, domain intelligence engine, and pluggable satellite squad for the Bastien-Antigravity ecosystem.
 
 - **Primary Structure**:
   - `00-AI-Orchestration`: Agent personas, coordination protocols, squad directives
@@ -204,15 +325,21 @@ tags:
 
 ## Key Commands & Verification
 ```bash
-# Run ecosystem preflight check
+# Start in Docker (Recommended - connects to fleet teleremote-network)
+make up
+# or
+docker compose up -d
+
+# Check status & logs
+make status
+make logs
+
+# Stop container
+make down
+
+# Run locally in native Python
 python3 08-Squad-Agent/main.py preflight-check
-
-# Scaffold a new microservice
-python3 08-Squad-Agent/main.py scaffold-microservice --name <name> --lang <go|python|rust>
-
-# Check vault frontmatter & coherence
-python3 08-Squad-Agent/main.py ensure-frontmatter
-python3 08-Squad-Agent/main.py check-coherence
+python3 08-Squad-Agent/main.py squad-agent
 ```
 
 ## AI Development & Integration Guidelines
@@ -229,6 +356,20 @@ python3 08-Squad-Agent/main.py check-coherence
 
 Bastien-Antigravity Ecosystem Knowledge Vault and Domain Orchestration Hub.
 
+## 🚀 Quick Start
+### Option A: Docker (Zero-Config, Plugs into Fleet)
+```bash
+make up       # Starts squad-agent on port {sa_port} connected to central teleremote-network
+make logs     # Follow agent logs
+make down     # Stop agent
+```
+
+### Option B: Native Python
+```bash
+python3 08-Squad-Agent/main.py preflight-check
+python3 08-Squad-Agent/main.py squad-agent
+```
+
 ## 📁 Vault Structure
 - `00-AI-Orchestration`: AI squad coordination and session state
 - `01-Strategic-Nexus`: Strategic objectives and anti-backlog
@@ -239,6 +380,72 @@ Bastien-Antigravity Ecosystem Knowledge Vault and Domain Orchestration Hub.
 - `08-Squad-Agent`: Fleet management and scaffolding automation
 """
     create_file(target_path / "README.md", readme_content, dry_run)
+
+    # docker-compose.yaml
+    docker_compose_content = f"""# =============================================================================
+# Satellite Brain Squad Agent Compose: {target_name}
+# Pluggable autonomous agent workshop connecting to central teleremote-network.
+# Configuration is sourced strictly from standalone.yaml (ecosystem standard).
+# =============================================================================
+services:
+  squad-agent:
+    build:
+      context: ./08-Squad-Agent
+      dockerfile: Dockerfile
+    image: ghcr.io/bastien-antigravity/squad-agent-{target_name}:${{TAG:-latest}}
+    container_name: squad-agent-${{BRAIN_ID:-{target_name}}}
+    restart: unless-stopped
+    ports:
+      - "${{HOST_IP:-127.0.0.1}}:${{SA_PORT:-{sa_port}}}:${{SA_PORT:-{sa_port}}}"
+      - "${{HOST_IP:-127.0.0.1}}:${{SA_GRPC_PORT:-{sa_grpc_port}}}:${{SA_GRPC_PORT:-{sa_grpc_port}}}"
+    environment:
+      - DOCKER_ENV=true
+      - BRAIN_ID=${{BRAIN_ID:-{target_name}}}
+      - TARGET_BRAIN_ID=${{BRAIN_ID:-{target_name}}}
+      - SA_PORT=${{SA_PORT:-{sa_port}}}
+      - SA_GRPC_PORT=${{SA_GRPC_PORT:-{sa_grpc_port}}}
+      - BASTIEN_PRIVATE_KEY_PATH=/etc/bastien/private.pem
+    volumes:
+      - ./:/app/brain:rw
+      - ./standalone.yaml:/app/standalone.yaml:ro
+      - ${{BASTIEN_PRIVATE_KEY_PATH:-/etc/bastien/private.pem}}:/etc/bastien/private.pem:ro
+    networks:
+      - teleremote-network
+    labels:
+      - com.centurylinklabs.watchtower.enable=false
+      - ecosystem.antigravity.role=satellite-brain
+      - ecosystem.antigravity.brain=${{BRAIN_ID:-{target_name}}}
+
+networks:
+  teleremote-network:
+    name: teleremote-network
+    external: true
+"""
+    create_file(target_path / "docker-compose.yaml", docker_compose_content, dry_run)
+
+    # Makefile
+    makefile_content = f"""# Satellite Brain Squad Agent Controller: {target_name}
+.PHONY: up down logs status restart build
+
+up:
+\tdocker compose up -d
+
+down:
+\tdocker compose down
+
+logs:
+\tdocker compose logs -f squad-agent
+
+status:
+\tdocker compose ps
+
+restart:
+\tdocker compose restart
+
+build:
+\tdocker compose build
+"""
+    create_file(target_path / "Makefile", makefile_content, dry_run)
 
     # 4. Generate Core Governance & Navigation Files
     logger.info("ScaffoldNewBrain : Generating Project Compass...")
@@ -376,6 +583,10 @@ Human-readable overview and quick-start reference for this domain vault.
             if fallback_convert.exists():
                 subprocessRun([sysExecutable, str(fallback_convert)], cwd=target_path, env=env)
 
+    # 6. Optional: Launch in Docker
+    if launch_docker and not dry_run:
+        launch_satellite_docker(target_path, target_name, sa_port)
+
     logger.info(f"ScaffoldNewBrain : SUCCESS! Your new Command Center is ready at: {target_path}")
 
 # -----------------------------------------------------------------------------
@@ -388,6 +599,9 @@ def main() -> None:
     parser.add_argument("--name", "-n", type=str, default="", help="New project name (e.g. trading-brain)")
     parser.add_argument("--dest", "-d", type=str, default="", help="Destination path (defaults to ../<name>)")
     parser.add_argument("--dry-run", action="store_true", help="Preview file fabrication without writing to disk")
+    parser.add_argument("--docker", action="store_true", help="Automatically launch the newly scaffolded brain in Docker")
+    parser.add_argument("--port", "-p", type=int, default=None, help="Explicit host HTTP port for squad-agent (defaults to auto-allocating 8185+)")
+    parser.add_argument("--grpc-port", type=int, default=None, help="Explicit host gRPC port for squad-agent (defaults to port + 2)")
     args = parser.parse_args()
 
     target_name = args.name.strip()
@@ -414,7 +628,15 @@ def main() -> None:
         logger.error(f"ScaffoldNewBrain : Path {target_path} already exists.")
         return
 
-    scaffold_brain(target_name, target_path, vault_root, dry_run=args.dry_run)
+    scaffold_brain(
+        target_name,
+        target_path,
+        vault_root,
+        dry_run=args.dry_run,
+        launch_docker=args.docker,
+        sa_port=args.port,
+        sa_grpc_port=args.grpc_port
+    )
 
 # -----------------------------------------------------------------------------
 
