@@ -50,10 +50,8 @@ class DiscordClient:
         """Resolves the Discord bot token from environment or settings file."""
         token = getenv("DISCORD_BOT_TOKEN")
         if not token and hasattr(self.config, "data"):
-            squad_cfg = self.config.data.get("capabilities", {}).get("squad_agent", {})
+            squad_cfg = self.config.data.get("squad_agent", {}) or self.config.data.get("capabilities", {}).get("squad_agent", {})
             settings = squad_cfg.get("discord", {}) if isinstance(squad_cfg, dict) else {}
-            if not settings:
-                settings = self.config.data.get("capabilities", {}).get("discord", {})
             token = settings.get("bot_token") or settings.get("token")
         if token and "${" in token and "}" in token:
             import re
@@ -70,10 +68,8 @@ class DiscordClient:
         """Resolves the designated Discord channel ID for squad chat monitoring."""
         ch_id = getenv("DISCORD_CHANNEL_ID")
         if not ch_id and hasattr(self.config, "data"):
-            squad_cfg = self.config.data.get("capabilities", {}).get("squad_agent", {})
+            squad_cfg = self.config.data.get("squad_agent", {}) or self.config.data.get("capabilities", {}).get("squad_agent", {})
             settings = squad_cfg.get("discord", {}) if isinstance(squad_cfg, dict) else {}
-            if not settings:
-                settings = self.config.data.get("capabilities", {}).get("discord", {})
             ch_id = settings.get("channel_id")
         if ch_id and "${" in str(ch_id):
             import re

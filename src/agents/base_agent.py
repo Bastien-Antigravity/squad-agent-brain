@@ -202,9 +202,9 @@ class BaseAgent:
         """Dynamically re-reads LLM configuration from config capability or environment for live hot-reload."""
         cap = {}
         if self.config and hasattr(self.config, "data") and isinstance(self.config.data, dict):
-            cap = self.config.data.get("capabilities", {}).get("squad_agent", {})
+            cap = self.config.data.get("capabilities", {}).get("squad_agent", {}) or self.config.data.get("squad_agent", {})
         elif hasattr(self.config, "get_capability"):
-            cap = self.config.get_capability("squad_agent") or {}
+            cap = self.config.get_capability("squad_agent") or (self.config.get_local("squad_agent") if hasattr(self.config, "get_local") else {}) or {}
 
         # 1. Hot-reload model name (exact name, default: gemini-3.8-flash)
         env_model = os.environ.get("GEMINI_MODEL")
