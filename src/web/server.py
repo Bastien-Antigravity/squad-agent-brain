@@ -93,7 +93,12 @@ def register_mfe_with_web_interface(config, logger, sa_ip, sa_port):
         "name": service_name,
         "tag": service_tag,
         "url": mfe_url,
-        "navTitle": nav_title
+        "navTitle": nav_title,
+        "layer": "L3",
+        "category": "Secure Controls",
+        "priority": 10,
+        "icon": "fa-users",
+        "requiresAuth": True,
     }
     
     req_data = json.dumps(payload).encode("utf-8")
