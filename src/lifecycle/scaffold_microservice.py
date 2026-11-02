@@ -97,11 +97,13 @@ def generate_go_scaffold(target_dir: Path, name: str, port: int, desc: str, dry_
 
 import (
 	"context"
+	"fmt"
 	"os"
 
 	"{name}/src/core"
 	toolbox_bootstrap "github.com/Bastien-Antigravity/microservice-toolbox/go/pkg/bootstrap"
 	toolbox_lifecycle "github.com/Bastien-Antigravity/microservice-toolbox/go/pkg/lifecycle"
+	toolbox_spec "github.com/Bastien-Antigravity/microservice-toolbox/go/pkg/spec"
 )
 
 // -----------------------------------------------------------------------------
@@ -137,7 +139,23 @@ func main() {{
 		return ctrl.Stop(context.Background())
 	}})
 
-	// 5. Start Service Worker Loop
+	// 5. Register OpenMFE Specification (Non-blocking background loop)
+	_ = toolbox_spec.PublishWithLifecycle(appConfig, appLogger, lm, "{cap_name}", toolbox_spec.ServiceSpec{{
+		Name:        "{name}",
+		Tag:         "{name}-mfe",
+		URL:         fmt.Sprintf("http://%s", addr),
+		NavTitle:    "{name}",
+		Layer:       "L2",
+		Category:    "Domain Services",
+		Priority:    100,
+		Icon:        "fa-cubes",
+		Description: "{desc}",
+		Protocol:    "HTTP/1.1 REST",
+		Framing:     fmt.Sprintf("Port %d REST", port),
+		DocLink:     "obsidian-brain/06-Microservices/{name}.md",
+	}})
+
+	// 6. Start Service Worker Loop
 	go func() {{
 		if err := ctrl.Start(addr); err != nil {{
 			appLogger.Critical("Service worker failed: %v", err)
@@ -145,7 +163,7 @@ func main() {{
 		}}
 	}}()
 
-	// 6. Await OS Signals for Graceful Termination
+	// 7. Await OS Signals for Graceful Termination
 	lm.Wait(context.Background())
 }}
 """
@@ -398,6 +416,7 @@ description = "{desc}"
 tokio = {{ version = "1.38", features = ["full"] }}
 serde = {{ version = "1.0", features = ["derive"] }}
 serde_json = "1.0"
+microservice-toolbox = {{ git = "https://github.com/Bastien-Antigravity/microservice-toolbox.git", branch = "develop" }}
 
 [dev-dependencies]
 tokio-test = "0.4"
@@ -424,6 +443,8 @@ tokio-test = "0.4"
 
 mod core;
 
+use microservice_toolbox::spec::{{publish_with_lifecycle, ServiceSpec}};
+
 pub const VERSION: &str = env!("APP_VERSION");
 
 // -----------------------------------------------------------------------------
@@ -432,6 +453,7 @@ pub const VERSION: &str = env!("APP_VERSION");
 async fn main() -> Result<(), Box<dyn std::error::Error>> {{
     println!("Starting {name} (version {{}})...", VERSION);
 
+    // 1. Initialize Controller
     let ctrl = core::Controller::new("{name}");
     ctrl.start("127.0.0.1:{port}").await?;
 
@@ -539,6 +561,7 @@ from pathlib import Path
 # Bootstrap configuration and logger via microservice-toolbox
 from microservice_toolbox.config.loader import load_config
 from microservice_toolbox.logger import UniLog
+from microservice_toolbox import publish_with_lifecycle, ServiceSpec
 from src.core.controller import Controller
 
 def main():
@@ -552,6 +575,28 @@ def main():
     # Dynamic Hot-Reload Listener (Ecosystem Live Configuration Standard)
     if hasattr(config, "on_live_conf_update"):
         config.on_live_conf_update(lambda update: controller.on_live_config_update(update))
+
+    # Register OpenMFE Specification (non-blocking background thread)
+    publish_with_lifecycle(
+        config,
+        logger,
+        lm=None,
+        capability="{cap_name}",
+        spec=ServiceSpec(
+            name="{name}",
+            tag="{name}-mfe",
+            url=f"http://127.0.0.1:{port}",
+            nav_title="{name}",
+            layer="L2",
+            category="Domain Services",
+            priority=100,
+            icon="fa-cubes",
+            description="{desc}",
+            protocol="HTTP/1.1 REST",
+            framing=f"Port {port} REST",
+            doc_link="obsidian-brain/06-Microservices/{name}.md",
+        ),
+    )
 
     logger.info(f"Starting {name} (version {{config.get_version()}}) under profile: {{config.profile}}...")
     controller.start()
@@ -884,6 +929,7 @@ networks:
 4. **Header Ritual**: All source files MUST begin with the standard Triple-Block header (`ESSENTIAL PROCESS`, `DATA FLOW`, `KEY PARAMETERS`).
 5. **Section Dividers**: Use appropriate dividers (`// -----------------------------------------------------------------------------`) between exported methods and major sections.
 6. **Dynamic Fleet Hot-Reloading**: Microservices must register `OnLiveConfUpdate` / `on_live_conf_update` to dynamically reload configuration changes without restarting the daemon process.
+7. **Service Specification & OpenMFE Registration Standard**: All microservices must register their declarative specification using `spec.PublishWithLifecycle` (Go), `spec.publish_with_lifecycle` (Python), or `spec::publish_with_lifecycle` (Rust) during bootstrap with infinite resilience (`MaxRetries: -1`) and non-blocking execution. The microservice authoritatively provides its metadata (`Name`, `Tag`, `URL`, `Layer`, `Category`, `Description`, `Protocol`, and directly formatted `Framing`).
 """
     create_file(target_dir / "AGENTS.md", agents_md, dry_run)
 
@@ -1305,7 +1351,7 @@ def main() -> None:
        (Or run: python3 obsidian-brain/08-Squad-Agent/main.py build-inventory)
 """)
     print("8. [UI & Remote Integration] (Optional / If Interactive):")
-    print("   - OpenMFE: Auto-registers with web-interface at http://127.0.0.1:5000/api/v1/register")
+    print("   - OpenMFE & Service Spec: Auto-registers with web-interface via spec.PublishWithLifecycle / spec.publish_with_lifecycle")
     print("   - Tele-Remote: Push dynamic UI menu over gRPC (Port 1863)")
     print("=" * 80 + "\n")
 

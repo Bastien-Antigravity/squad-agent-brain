@@ -30,6 +30,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
+from microservice_toolbox.spec import ServiceSpec, ProtocolSpec, publish_service_spec
 
 # -----------------------------------------------------------------------------
 
@@ -61,17 +62,8 @@ def init_routes(controller, logger):
 
 def register_mfe_with_web_interface(config, logger, sa_ip, sa_port):
     """
-    Auto-registration daemon that POSTs our MFE definition to the central web-interface.
+    Auto-registration daemon that publishes our ServiceSpec to the central web-interface.
     """
-    time.sleep(2)  # Wait for server to boot
-
-    # Resolve web_interface address dynamically via standard toolbox accessor (zero silent fallback)
-    try:
-        web_addr = config.get_listen_addr("web_interface")
-    except Exception as e:
-        logger.error(f"OpenMFE registration aborted: Failed to resolve capability 'web_interface' listen address ({e}).")
-        return
-
     import os
     brain_id = os.getenv("TARGET_BRAIN_ID") or os.getenv("BRAIN_ID")
     if not brain_id and hasattr(config, "data"):
@@ -85,46 +77,27 @@ def register_mfe_with_web_interface(config, logger, sa_ip, sa_port):
     service_tag = "squad-agent-mfe"
     nav_title = f"🚀 Squad: {brain_id.replace('-', ' ').title()}" if is_satellite else "🚀 Squad Control"
 
-    reg_url = f"http://{web_addr}/api/v1/register"
     client_ip = sa_ip if sa_ip not in ("0.0.0.0", "", "::") else "127.0.0.1"
     mfe_url = f"http://{client_ip}:{sa_port}/static/mfe.js"
-    
-    payload = {
-        "name": service_name,
-        "tag": service_tag,
-        "url": mfe_url,
-        "navTitle": nav_title,
-        "layer": "L3",
-        "category": "Secure Controls",
-        "priority": 10,
-        "icon": "fa-users",
-        "requiresAuth": True,
-    }
-    
-    req_data = json.dumps(payload).encode("utf-8")
-    
-    logger.info(f"OpenMFE: Starting squad-agent auto-registration loop to {reg_url}")
-    backoff = 2.0
-    max_backoff = 15.0
-    while True:
-        try:
-            req = urllib.request.Request(
-                reg_url, 
-                data=req_data, 
-                headers={"Content-Type": "application/json"},
-                method="POST"
-            )
-            with urllib.request.urlopen(req, timeout=3) as resp:
-                status = resp.status
-                if 200 <= status < 300:
-                    logger.info(f"OpenMFE: Successfully registered squad-agent MFE at {reg_url}")
-                    return
-                else:
-                    logger.warning(f"OpenMFE: Registration attempt failed with status {status}; retrying in {backoff:.1f}s...")
-        except Exception as e:
-            logger.warning(f"OpenMFE: Registration attempt failed ({e}); retrying in {backoff:.1f}s...")
-        time.sleep(backoff)
-        backoff = min(backoff * 1.5, max_backoff)
+
+    publish_service_spec(
+        config,
+        logger,
+        "squad_agent",
+        name=service_name,
+        tag=service_tag,
+        url=mfe_url,
+        nav_title=nav_title,
+        layer="L3",
+        category="Secure Controls",
+        icon="fa-users",
+        priority=10,
+        requires_auth=True,
+        description="Autonomous AI Agent Squad orchestrator managing task execution, code generation, and knowledge indexing.",
+        protocol="HTTP/1.1 REST & WebSocket",
+        framing=f"Port {sa_port} REST & WS",
+        doc_link="obsidian-brain/06-Microservices/Squad-Agent-Hub.md",
+    )
 
 # -----------------------------------------------------------------------------
 
