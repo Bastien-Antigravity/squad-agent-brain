@@ -62,8 +62,11 @@ def purge_stale_state() -> None:
 
 def main() -> None:
     """
-    Orchestrates the maintenance operations.
+    Orchestrates the maintenance operations. Requires explicit 'purge' argument.
     """
+    if len(sysArgv) < 2 or "purge" not in sysArgv:
+        logger.info("Maintenance Skill: No action taken. Use 'python3 08-Squad-Agent/main.py maintenance-skill purge' to run.")
+        return
     logger.info("Starting Maintenance Skill (Purger Mode)...")
     purge_stale_state()
     logger.info("Maintenance complete.")
