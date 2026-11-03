@@ -27,7 +27,7 @@ import re
 import json
 import yaml
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Standard ecosystem bootstrap
 import src.bootstrap as bootstrap
@@ -219,7 +219,7 @@ def generate_purge_approval_request() -> None:
     lines.append("microservice: obsidian-brain")
     lines.append("type: orchestration")
     lines.append("status: active")
-    lines.append("last-updated: {0}".format(datetime.now().strftime('%Y-%m-%d')))
+    lines.append("last-updated: {0}".format(datetime.now(timezone.utc).strftime('%Y-%m-%d')))
     lines.append("tags:")
     lines.append("- '#service/obsidian-brain'")
     lines.append("- '#type/orchestration'")
@@ -233,7 +233,7 @@ def generate_purge_approval_request() -> None:
     lines.append("> Review the candidates below and toggle the checkbox to `[x] Keep` or `[x] Delete` to authorize action.")
     lines.append("")
     lines.append("## 📦 Scan Summary")
-    lines.append("- **Scan Date**: {0}".format(datetime.now().strftime('%Y-%m-%d')))
+    lines.append("- **Scan Date**: {0}".format(datetime.now(timezone.utc).strftime('%Y-%m-%d')))
     lines.append("- **Total Candidates Found**: {0}".format(len(candidates)))
     lines.append("")
     lines.append("---")

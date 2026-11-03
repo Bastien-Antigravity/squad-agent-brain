@@ -39,7 +39,7 @@ from os.path import abspath as osPathAbspath, join as osPathJoin, dirname as osP
                     expanduser as osPathExpanduser, isdir as osPathIsdir, basename as osPathBasename, getmtime as osPathGetmtime
 from sys import exit as sysExit, executable as sysExecutable, path as sysPath, stdout as sysStdout
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 try:
@@ -64,8 +64,9 @@ def log_session_event(message: str) -> None:
             logger.warning(f"Could not create session log directory: {e}")
             return
             
-    log_file = osPathJoin(log_dir, f"session-{datetime.now().strftime('%Y-%m-%d')}.log")
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now_utc = datetime.now(timezone.utc)
+    log_file = osPathJoin(log_dir, f"session-{now_utc.strftime('%Y-%m-%d')}.log")
+    timestamp = now_utc.strftime("%Y-%m-%d %H:%M:%S UTC")
     try:
         with open(log_file, "a", encoding="utf-8") as f:
             f.write(f"[{timestamp}] {message}\n")
@@ -617,7 +618,7 @@ def generate_active_rituals(mode_choice: str) -> None:
         "- '#tier/ritual'",
         "---",
         "# ⚡ ACTIVE SESSION RITUALS",
-        f"> **Mode {mode_choice} Active** | Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        f"> **Mode {mode_choice} Active** | Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}",
         "\n"
     ]
     

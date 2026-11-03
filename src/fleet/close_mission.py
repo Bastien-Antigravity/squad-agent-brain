@@ -20,7 +20,7 @@ KEY PARAMETERS:
 
 import sys
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from subprocess import run as subprocessRun
 import json
 
@@ -135,14 +135,14 @@ def main():
                         if full_path.exists() and not engine.is_ignored_by_firewall(full_path):
                             repo_hot_files.append(full_path)
         except Exception:
-            hot_threshold = datetime.now() - timedelta(hours=2)
+            hot_threshold = datetime.now(timezone.utc) - timedelta(hours=2)
             for path in repo_path.rglob("*.md"):
                 if any(x in path.parts for x in EXCLUSIONS):
                     continue
                 if engine.is_ignored_by_firewall(path):
                     continue
                 try:
-                    mtime = datetime.fromtimestamp(path.stat().st_mtime)
+                    mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
                     if mtime > hot_threshold:
                         is_dirty = True
                         repo_hot_files.append(path)
@@ -193,7 +193,7 @@ def main():
 
     if report["success"] and state_ok:
         logger.info("✨ VERDICT: MISSION ACCOMPLISHED")
-        mission_id = datetime.now().strftime("M-%Y%m%d-%H%M")
+        mission_id = datetime.now(timezone.utc).strftime("M-%Y%m%d-%H%M")
         logger.info("📜 SESSION SIGN-OFF SEAL:")
         logger.info("   " + "─"*40)
         logger.info(f"   Mission-ID : {mission_id}")

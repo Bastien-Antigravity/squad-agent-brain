@@ -166,11 +166,12 @@ def extract_personas(repo_path, output_dir, is_daemon, logger=None):
             except Exception:
                 pass
 
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    now_utc = datetime.datetime.now(datetime.timezone.utc)
+    timestamp = now_utc.strftime("%Y%m%d_%H%M%S")
 
     py_content = [
         f"# 🐍 Python Persona RAG Context",
-        f"*Generated: {datetime.datetime.now().isoformat()}*",
+        f"*Generated: {now_utc.isoformat()}*",
         f"",
         f"> [!WARNING]",
         f"> This is static telemetry showing current codebase statistics. It does NOT define standard rules.",
@@ -190,7 +191,7 @@ def extract_personas(repo_path, output_dir, is_daemon, logger=None):
 
     go_content = [
         f"# 🐹 Go Persona RAG Context",
-        f"*Generated: {datetime.datetime.now().isoformat()}*",
+        f"*Generated: {now_utc.isoformat()}*",
         f"",
         f"> [!WARNING]",
         f"> This is static telemetry showing current codebase statistics. It does NOT define standard rules.",
@@ -210,7 +211,7 @@ def extract_personas(repo_path, output_dir, is_daemon, logger=None):
 
     rs_content = [
         f"# 🦀 Rust Persona RAG Context",
-        f"*Generated: {datetime.datetime.now().isoformat()}*",
+        f"*Generated: {now_utc.isoformat()}*",
         f"",
         f"> [!WARNING]",
         f"> This is static telemetry showing current codebase statistics. It does NOT define standard rules.",

@@ -22,7 +22,7 @@ import os
 import re
 import sys
 import argparse
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Standard ecosystem bootstrap
@@ -109,7 +109,8 @@ class KnowledgeCompressor:
             logger.info("KnowledgeCompressor : No sessions found to distill.")
             return
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        now_utc = datetime.now(timezone.utc)
+        timestamp = now_utc.strftime("%Y%m%d_%H%M%S")
         report_file = self.output_dir / f"distillation_{timestamp}.md"
         
         candidates = []
@@ -118,7 +119,7 @@ class KnowledgeCompressor:
             
         report_content = [
             f"# 🧠 Knowledge Distillation Report",
-            f"*Generated: {datetime.now().isoformat()}*",
+            f"*Generated: {now_utc.isoformat()}*",
             f"",
             "> [!TIP]",
             "> Review these candidates and append the verified ones to `00-AI-Orchestration/Knowledge-Strategy.md` Section 5.",
