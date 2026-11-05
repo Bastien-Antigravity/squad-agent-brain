@@ -30,6 +30,7 @@ prepend_venv_bin(vault_root_path)
 ensure_import_paths(script_dir, vault_root_path)
 _venv_python = get_venv_python(vault_root_path)
 vault_root = str(vault_root_path)
+workspace_root = str(vault_root_path.parent)
 
 from os import makedirs as osMakedirs, listdir as osListdir, name as osName, getenv as osGetenv, remove as osRemove, \
                environ as osEnviron, chmod as osChmod, walk as osWalk
@@ -225,8 +226,8 @@ def setup_mcp(mode_choice: str) -> None:
     Allows root access to fix 'path not allowed' errors for Ecosystem Map and manuals.
     """
     from microservice_toolbox.utils.mcp_ai_config import safe_load_and_repair_json
-    vault_root = osPathAbspath(osPathJoin(script_dir, ".."))
-    workspace_root = osPathAbspath(osPathJoin(vault_root, ".."))
+    vault_root = str(vault_root_path)
+    workspace_root = str(vault_root_path.parent)
     
     # 1. Check if RAG Engine option is available
     rag_dir = osPathJoin(vault_root, "09-RAG-Engine")
@@ -402,7 +403,8 @@ def run_preflight() -> bool:
     Runs the full audit chain to ensure the brain is healthy before session start.
     Returns True when all governance scripts complete successfully.
     """
-    workspace_root = osPathAbspath(osPathJoin(script_dir, "..", ".."))
+    workspace_root = str(vault_root_path.parent)
+    vault_root = str(vault_root_path)
     
     # Define fallback path candidates for each governance check
     governance_scripts = [
@@ -483,8 +485,8 @@ def check_session_health(mode_choice: str) -> None:
     Checks if there are uncommitted changes across the entire fleet from a previous session.
     Enforces mode-specific rules for unclosed missions.
     """
-    workspace_root = osPathAbspath(osPathJoin(script_dir, "..", ".."))
-    vault_root = osPathAbspath(osPathJoin(script_dir, ".."))
+    workspace_root = str(vault_root_path.parent)
+    vault_root = str(vault_root_path)
     inventory_path = osPathJoin(vault_root, "05-Fleet-Operation", "00-Repo-Control", "inventory.json")
     
     repos_to_check = []
@@ -672,7 +674,7 @@ def unlock_core_kms() -> None:
     Restores write permissions to 07-Core-KMS to allow audits and updates.
     Excludes quick-overview (dynamic AST telemetry) and Git files.
     """
-    vault_root = osPathAbspath(osPathJoin(script_dir, ".."))
+    vault_root = str(vault_root_path)
     kms_dir = osPathJoin(vault_root, "07-Core-KMS")
     if not osPathExists(kms_dir):
         return
@@ -703,7 +705,7 @@ def protect_core_kms() -> None:
     at the OS level to protect them against modifications.
     Excludes quick-overview (dynamic AST telemetry) and Git files.
     """
-    vault_root = osPathAbspath(osPathJoin(script_dir, ".."))
+    vault_root = str(vault_root_path)
     kms_dir = osPathJoin(vault_root, "07-Core-KMS")
     if not osPathExists(kms_dir):
         return
@@ -730,7 +732,7 @@ def protect_core_kms() -> None:
 
 def check_rag_attached() -> bool:
     """Returns True if the 09-RAG-Engine exists and a valid server entrypoint is available."""
-    vault_root = osPathAbspath(osPathJoin(script_dir, ".."))
+    vault_root = str(vault_root_path)
     rag_dir = osPathJoin(vault_root, "09-RAG-Engine")
     rag_main_script = osPathJoin(rag_dir, "main.py")
     rag_core_server = osPathJoin(rag_dir, "src", "core", "server.py")
@@ -966,6 +968,7 @@ def start_engine() -> None:
         from src.agents.prototyper import PrototyperAgent
         from src.agents.purger import PurgerAgent
         from src.agents.sentinel import SentinelAgent
+        from src.agents.debloatsentinel import DebloatSentinelAgent
         
         agents = [
             OrchestratorAgent(config=config, logger=logger, pg_pool=controller.pool, event_bus=event_bus),
@@ -982,6 +985,7 @@ def start_engine() -> None:
             PrototyperAgent(config=config, logger=logger, pg_pool=controller.pool, event_bus=event_bus),
             PurgerAgent(config=config, logger=logger, pg_pool=controller.pool, event_bus=event_bus),
             SentinelAgent(config=config, logger=logger, pg_pool=controller.pool, event_bus=event_bus),
+            DebloatSentinelAgent(config=config, logger=logger, pg_pool=controller.pool, event_bus=event_bus),
         ]
         
         for agent in agents:

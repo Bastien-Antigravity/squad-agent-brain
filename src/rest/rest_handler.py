@@ -182,11 +182,14 @@ class SquadRESTHandler:
                 
                 target_topic = f"bastien-antigravity.{brain_id}.squad.chat" if brain_id and brain_id not in ("obsidian-brain", "root", "main") else "bastien-antigravity.squad.chat"
                 event_bus = getattr(self.controller, "event_bus", None)
+                nats_subs = []
                 if event_bus:
                     import inspect
                     res = event_bus.subscribe(target_topic, callback=msg_cb)
                     if inspect.isawaitable(res):
-                        await res
+                        nats_subs = await res
+                    else:
+                        nats_subs = res
                 else:
                     from src.interfaces import LocalEventBus
                     LocalEventBus.subscribe(target_topic, msg_cb)
@@ -210,7 +213,14 @@ class SquadRESTHandler:
                 except Exception as e:
                     yield f"data: {json.dumps({'error': str(e)})}\n\n"
                 finally:
-                    pass
+                    if event_bus and hasattr(event_bus, "unsubscribe"):
+                        import inspect
+                        unsub_res = event_bus.unsubscribe(target_topic, msg_cb, nats_subs)
+                        if inspect.isawaitable(unsub_res):
+                            await unsub_res
+                    else:
+                        from src.interfaces import LocalEventBus
+                        LocalEventBus.unsubscribe(target_topic, msg_cb)
                         
             return StreamingResponse(event_generator(), media_type="text/event-stream")
 

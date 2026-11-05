@@ -43,6 +43,7 @@ COMMANDS_MAP = {
     "preflight-check": "auditing.preflight_check",
     "close-mission": "fleet.close_mission",
     "convert-agents": "fleet.convert_agents",
+    "debloat-audit": "auditing.debloat_audit",
     "ensure-frontmatter": "auditing.ensure_frontmatter",
     "fleet-commander": "fleet.fleet_commander",
     "install-git-hooks": "lifecycle.install_git_hooks",

@@ -161,9 +161,8 @@ def normalize_frontmatter(file_path, check_only=False):
     svc_tag = f"#service/{yaml_block['microservice']}"
     type_tag = f"#type/{yaml_block['type']}"
     state_tag = f"#state/{yaml_block['status']}"
-    ai_ignore_tag = "#ai/ignore"
 
-    required_tags = [svc_tag, type_tag, state_tag, ai_ignore_tag]
+    required_tags = [svc_tag, type_tag, state_tag]
     
     # Remove duplicates or slightly malformed representations
     cleaned_tags = []

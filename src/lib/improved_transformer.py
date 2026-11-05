@@ -369,23 +369,19 @@ class CodeTransformer:
         body_text = "\n".join(body_lines)
         standard_imports_to_add = []
         if has_os_import:
-            if reSearch(r'\bos\.path\.join\b', body_text) or reSearch(r'\bjoin\b', body_text):
+            if reSearch(r'\bos\.path\.join\b', body_text):
                 body_text = reSub(r'\bos\.path\.join\b', 'osPathJoin', body_text)
-                body_text = reSub(r'\bjoin\b', 'osPathJoin', body_text)
                 standard_imports_to_add.append("from os.path import join as osPathJoin")
-            if reSearch(r'\bos\.path\.exists\b', body_text) or reSearch(r'\bexists\b', body_text):
+            if reSearch(r'\bos\.path\.exists\b', body_text):
                 body_text = reSub(r'\bos\.path\.exists\b', 'osPathExists', body_text)
-                body_text = reSub(r'\bexists\b', 'osPathExists', body_text)
                 standard_imports_to_add.append("from os.path import exists as osPathExists")
         if has_sys_import:
-            if reSearch(r'\bsys\.exit\b', body_text) or reSearch(r'\bexit\b', body_text):
+            if reSearch(r'\bsys\.exit\b', body_text):
                 body_text = reSub(r'\bsys\.exit\b', 'sysExit', body_text)
-                body_text = reSub(r'\bexit\b', 'sysExit', body_text)
                 standard_imports_to_add.append("from sys import exit as sysExit")
         if has_re_import:
-            if reSearch(r'\bre\.search\b', body_text) or reSearch(r'\bsearch\b', body_text):
+            if reSearch(r'\bre\.search\b', body_text):
                 body_text = reSub(r'\bre\.search\b', 'reSearch', body_text)
-                body_text = reSub(r'\bsearch\b', 'reSearch', body_text)
                 standard_imports_to_add.append("from re import search as reSearch")
         typing_imports_to_add = []
         typing_used = set()

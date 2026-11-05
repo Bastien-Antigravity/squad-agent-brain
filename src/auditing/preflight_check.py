@@ -509,7 +509,9 @@ def run_preflight(quiet: bool = False) -> bool:
 # -----------------------------------------------------------------------------------------------
 
 def main():
-    run_preflight(quiet=False)
+    ok = run_preflight(quiet=False)
+    if not ok:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

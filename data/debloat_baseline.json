@@ -1,0 +1,579 @@
+{
+  "saved_at": "2026-11-04T14:16:24.171016+00:00",
+  "target": "/Users/imac/Desktop/Bastien-Antigravity",
+  "findings_count": 57,
+  "findings": [
+    {
+      "category": "Redundant Retry Loop",
+      "severity": "Medium",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/safe-socket/tests/polyglot/matrix_test.py",
+      "line": 59,
+      "title": "Manual retry/sleep loop around auto-reconnecting transport",
+      "explanation": "NATS and SafeSocket transports maintain internal reconnect buffers and automatic reconnection handlers. Adding manual retry loops causes latency spikes and thread exhaustion.",
+      "recommendation": "Rely on the transport client's connection lifecycle and error handlers instead of manual retry loops."
+    },
+    {
+      "category": "Redundant Retry Loop",
+      "severity": "Medium",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/safe-socket/safesock/python/tests/test_basic.py",
+      "line": 52,
+      "title": "Manual retry/sleep loop around auto-reconnecting transport",
+      "explanation": "NATS and SafeSocket transports maintain internal reconnect buffers and automatic reconnection handlers. Adding manual retry loops causes latency spikes and thread exhaustion.",
+      "recommendation": "Rely on the transport client's connection lifecycle and error handlers instead of manual retry loops."
+    },
+    {
+      "category": "Concurrency Bloat",
+      "severity": "High",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/safe-socket/src/transports/shm_server.go",
+      "line": 94,
+      "title": "Mutex guarding atomic primitive operations",
+      "explanation": "A `sync.Mutex` is being acquired immediately around `atomic.*` load/store operations, paying double synchronization penalties.",
+      "recommendation": "Rely solely on atomic operations, or replace atomic types with plain types if a mutex is strictly necessary."
+    },
+    {
+      "category": "Concurrency Bloat",
+      "severity": "High",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/safe-socket/src/transports/shm_connection.go",
+      "line": 482,
+      "title": "Mutex guarding atomic primitive operations",
+      "explanation": "A `sync.Mutex` is being acquired immediately around `atomic.*` load/store operations, paying double synchronization penalties.",
+      "recommendation": "Rely solely on atomic operations, or replace atomic types with plain types if a mutex is strictly necessary."
+    },
+    {
+      "category": "Defensive TOCTOU",
+      "severity": "Medium",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/web-interface/src/mfe/registry.go",
+      "line": 85,
+      "title": "Check-then-act os.Stat() before os.Open/ReadFile",
+      "explanation": "Calling `os.Stat` to check file existence before `os.Open` / `os.ReadFile` incurs a redundant disk syscall and creates a TOCTOU race condition.",
+      "recommendation": "Open/read the file directly and inspect `os.IsNotExist(err)`."
+    },
+    {
+      "category": "Defensive TOCTOU",
+      "severity": "Medium",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/obsidian-brain/04-Rapid-Prototyping/src/archive.py",
+      "line": 53,
+      "title": "Check-then-act disk read (TOCTOU redundancy)",
+      "explanation": "`exists()` check is immediately followed by `open()` in the branch body. This wastes a stat syscall and introduces a file race condition.",
+      "recommendation": "Directly attempt to open/read the file and catch `FileNotFoundError` / `OSError` instead."
+    },
+    {
+      "category": "Defensive TOCTOU",
+      "severity": "Medium",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/obsidian-brain/04-Rapid-Prototyping/src/lab_manager.py",
+      "line": 52,
+      "title": "Check-then-act disk read (TOCTOU redundancy)",
+      "explanation": "`exists()` check is immediately followed by `open()` in the branch body. This wastes a stat syscall and introduces a file race condition.",
+      "recommendation": "Directly attempt to open/read the file and catch `FileNotFoundError` / `OSError` instead."
+    },
+    {
+      "category": "Defensive TOCTOU",
+      "severity": "Medium",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/obsidian-brain/09-RAG-Engine/tests/test_integration.py",
+      "line": 46,
+      "title": "Check-then-act disk read (TOCTOU redundancy)",
+      "explanation": "`exists()` check is immediately followed by `open()` in the branch body. This wastes a stat syscall and introduces a file race condition.",
+      "recommendation": "Directly attempt to open/read the file and catch `FileNotFoundError` / `OSError` instead."
+    },
+    {
+      "category": "Concurrency Bloat",
+      "severity": "High",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/obsidian-brain/09-RAG-Engine/tests/test_turbo_pipeline.py",
+      "line": 101,
+      "title": "Useless asyncio.Lock in pure synchronous block",
+      "explanation": "The `async with` critical section contains ZERO `await` yield points. Because Python asyncio is single-threaded, cooperative context switching cannot occur here.",
+      "recommendation": "Remove `async with self.lock:` to eliminate unnecessary lock acquisition overhead and state complexity."
+    },
+    {
+      "category": "Concurrency Bloat",
+      "severity": "High",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/obsidian-brain/09-RAG-Engine/tests/test_turbo_pipeline.py",
+      "line": 107,
+      "title": "Useless asyncio.Lock in pure synchronous block",
+      "explanation": "The `async with` critical section contains ZERO `await` yield points. Because Python asyncio is single-threaded, cooperative context switching cannot occur here.",
+      "recommendation": "Remove `async with self.lock:` to eliminate unnecessary lock acquisition overhead and state complexity."
+    },
+    {
+      "category": "Defensive TOCTOU",
+      "severity": "Medium",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/obsidian-brain/09-RAG-Engine/src/core/access_matrix.py",
+      "line": 46,
+      "title": "Check-then-act disk read (TOCTOU redundancy)",
+      "explanation": "`exists()` check is immediately followed by `open()` in the branch body. This wastes a stat syscall and introduces a file race condition.",
+      "recommendation": "Directly attempt to open/read the file and catch `FileNotFoundError` / `OSError` instead."
+    },
+    {
+      "category": "Concurrency Bloat",
+      "severity": "High",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/obsidian-brain/09-RAG-Engine/src/services/enricher/llm_enricher.py",
+      "line": 254,
+      "title": "Useless asyncio.Lock in pure synchronous block",
+      "explanation": "The `async with` critical section contains ZERO `await` yield points. Because Python asyncio is single-threaded, cooperative context switching cannot occur here.",
+      "recommendation": "Remove `async with self.lock:` to eliminate unnecessary lock acquisition overhead and state complexity."
+    },
+    {
+      "category": "Concurrency Bloat",
+      "severity": "High",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/obsidian-brain/09-RAG-Engine/src/services/enricher/llm_enricher.py",
+      "line": 290,
+      "title": "Useless asyncio.Lock in pure synchronous block",
+      "explanation": "The `async with` critical section contains ZERO `await` yield points. Because Python asyncio is single-threaded, cooperative context switching cannot occur here.",
+      "recommendation": "Remove `async with self.lock:` to eliminate unnecessary lock acquisition overhead and state complexity."
+    },
+    {
+      "category": "Defensive TOCTOU",
+      "severity": "Medium",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/obsidian-brain/09-RAG-Engine/src/services/config/db_config.py",
+      "line": 65,
+      "title": "Check-then-act disk read (TOCTOU redundancy)",
+      "explanation": "`exists()` check is immediately followed by `read_text()` in the branch body. This wastes a stat syscall and introduces a file race condition.",
+      "recommendation": "Directly attempt to open/read the file and catch `FileNotFoundError` / `OSError` instead."
+    },
+    {
+      "category": "Defensive TOCTOU",
+      "severity": "Medium",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/obsidian-brain/09-RAG-Engine/src/services/config/db_config.py",
+      "line": 72,
+      "title": "Check-then-act disk read (TOCTOU redundancy)",
+      "explanation": "`exists()` check is immediately followed by `read_text()` in the branch body. This wastes a stat syscall and introduces a file race condition.",
+      "recommendation": "Directly attempt to open/read the file and catch `FileNotFoundError` / `OSError` instead."
+    },
+    {
+      "category": "Concurrency Bloat",
+      "severity": "High",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/obsidian-brain/09-RAG-Engine/src/services/indexing_pipeline/standard.py",
+      "line": 145,
+      "title": "Useless asyncio.Lock in pure synchronous block",
+      "explanation": "The `async with` critical section contains ZERO `await` yield points. Because Python asyncio is single-threaded, cooperative context switching cannot occur here.",
+      "recommendation": "Remove `async with self.lock:` to eliminate unnecessary lock acquisition overhead and state complexity."
+    },
+    {
+      "category": "Defensive TOCTOU",
+      "severity": "Medium",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/obsidian-brain/09-RAG-Engine/src/services/indexing_pipeline/standard.py",
+      "line": 338,
+      "title": "Check-then-act disk read (TOCTOU redundancy)",
+      "explanation": "`exists()` check is immediately followed by `read_text()` in the branch body. This wastes a stat syscall and introduces a file race condition.",
+      "recommendation": "Directly attempt to open/read the file and catch `FileNotFoundError` / `OSError` instead."
+    },
+    {
+      "category": "Defensive TOCTOU",
+      "severity": "Medium",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/obsidian-brain/09-RAG-Engine/src/services/indexing_pipeline/standard.py",
+      "line": 695,
+      "title": "Check-then-act disk read (TOCTOU redundancy)",
+      "explanation": "`exists()` check is immediately followed by `read_text()` in the branch body. This wastes a stat syscall and introduces a file race condition.",
+      "recommendation": "Directly attempt to open/read the file and catch `FileNotFoundError` / `OSError` instead."
+    },
+    {
+      "category": "Defensive TOCTOU",
+      "severity": "Medium",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/obsidian-brain/09-RAG-Engine/src/services/indexing_pipeline/standard.py",
+      "line": 724,
+      "title": "Check-then-act disk read (TOCTOU redundancy)",
+      "explanation": "`exists()` check is immediately followed by `read_text()` in the branch body. This wastes a stat syscall and introduces a file race condition.",
+      "recommendation": "Directly attempt to open/read the file and catch `FileNotFoundError` / `OSError` instead."
+    },
+    {
+      "category": "Defensive TOCTOU",
+      "severity": "Medium",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/obsidian-brain/09-RAG-Engine/src/services/mcp/tools.py",
+      "line": 1614,
+      "title": "Check-then-act disk read (TOCTOU redundancy)",
+      "explanation": "`exists()` check is immediately followed by `read_text()` in the branch body. This wastes a stat syscall and introduces a file race condition.",
+      "recommendation": "Directly attempt to open/read the file and catch `FileNotFoundError` / `OSError` instead."
+    },
+    {
+      "category": "Defensive TOCTOU",
+      "severity": "Medium",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/obsidian-brain/09-RAG-Engine/src/services/mcp/tools.py",
+      "line": 1655,
+      "title": "Check-then-act disk read (TOCTOU redundancy)",
+      "explanation": "`exists()` check is immediately followed by `read_text()` in the branch body. This wastes a stat syscall and introduces a file race condition.",
+      "recommendation": "Directly attempt to open/read the file and catch `FileNotFoundError` / `OSError` instead."
+    },
+    {
+      "category": "Defensive TOCTOU",
+      "severity": "Medium",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/obsidian-brain/09-RAG-Engine/src/services/mcp/tools.py",
+      "line": 1666,
+      "title": "Check-then-act disk read (TOCTOU redundancy)",
+      "explanation": "`exists()` check is immediately followed by `open()` in the branch body. This wastes a stat syscall and introduces a file race condition.",
+      "recommendation": "Directly attempt to open/read the file and catch `FileNotFoundError` / `OSError` instead."
+    },
+    {
+      "category": "Defensive TOCTOU",
+      "severity": "Medium",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/obsidian-brain/09-RAG-Engine/src/services/alignment/synchronizer.py",
+      "line": 238,
+      "title": "Check-then-act disk read (TOCTOU redundancy)",
+      "explanation": "`exists()` check is immediately followed by `open()` in the branch body. This wastes a stat syscall and introduces a file race condition.",
+      "recommendation": "Directly attempt to open/read the file and catch `FileNotFoundError` / `OSError` instead."
+    },
+    {
+      "category": "Defensive TOCTOU",
+      "severity": "Medium",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/obsidian-brain/08-Squad-Agent/src/core/controller.py",
+      "line": 202,
+      "title": "Check-then-act disk read (TOCTOU redundancy)",
+      "explanation": "`exists()` check is immediately followed by `open()` in the branch body. This wastes a stat syscall and introduces a file race condition.",
+      "recommendation": "Directly attempt to open/read the file and catch `FileNotFoundError` / `OSError` instead."
+    },
+    {
+      "category": "Defensive TOCTOU",
+      "severity": "Medium",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/obsidian-brain/08-Squad-Agent/src/lifecycle/scaffold_new_brain.py",
+      "line": 95,
+      "title": "Check-then-act disk read (TOCTOU redundancy)",
+      "explanation": "`exists()` check is immediately followed by `read_text()` in the branch body. This wastes a stat syscall and introduces a file race condition.",
+      "recommendation": "Directly attempt to open/read the file and catch `FileNotFoundError` / `OSError` instead."
+    },
+    {
+      "category": "Defensive TOCTOU",
+      "severity": "Medium",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/obsidian-brain/08-Squad-Agent/src/lifecycle/scaffold_new_brain.py",
+      "line": 98,
+      "title": "Check-then-act disk read (TOCTOU redundancy)",
+      "explanation": "`exists()` check is immediately followed by `read_text()` in the branch body. This wastes a stat syscall and introduces a file race condition.",
+      "recommendation": "Directly attempt to open/read the file and catch `FileNotFoundError` / `OSError` instead."
+    },
+    {
+      "category": "Defensive TOCTOU",
+      "severity": "Medium",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/obsidian-brain/08-Squad-Agent/src/lifecycle/scaffold_microservice.py",
+      "line": 1119,
+      "title": "Check-then-act disk read (TOCTOU redundancy)",
+      "explanation": "`exists()` check is immediately followed by `read_text()` in the branch body. This wastes a stat syscall and introduces a file race condition.",
+      "recommendation": "Directly attempt to open/read the file and catch `FileNotFoundError` / `OSError` instead."
+    },
+    {
+      "category": "Defensive TOCTOU",
+      "severity": "Medium",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/obsidian-brain/08-Squad-Agent/src/lifecycle/scaffold_microservice.py",
+      "line": 1138,
+      "title": "Check-then-act disk read (TOCTOU redundancy)",
+      "explanation": "`exists()` check is immediately followed by `read_text()` in the branch body. This wastes a stat syscall and introduces a file race condition.",
+      "recommendation": "Directly attempt to open/read the file and catch `FileNotFoundError` / `OSError` instead."
+    },
+    {
+      "category": "Defensive TOCTOU",
+      "severity": "Medium",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/obsidian-brain/08-Squad-Agent/src/lifecycle/scaffold_microservice.py",
+      "line": 1152,
+      "title": "Check-then-act disk read (TOCTOU redundancy)",
+      "explanation": "`exists()` check is immediately followed by `read_text()` in the branch body. This wastes a stat syscall and introduces a file race condition.",
+      "recommendation": "Directly attempt to open/read the file and catch `FileNotFoundError` / `OSError` instead."
+    },
+    {
+      "category": "Defensive TOCTOU",
+      "severity": "Medium",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/obsidian-brain/08-Squad-Agent/src/lifecycle/init_new_brain.py",
+      "line": 60,
+      "title": "Check-then-act disk read (TOCTOU redundancy)",
+      "explanation": "`exists()` check is immediately followed by `read_text()` in the branch body. This wastes a stat syscall and introduces a file race condition.",
+      "recommendation": "Directly attempt to open/read the file and catch `FileNotFoundError` / `OSError` instead."
+    },
+    {
+      "category": "Defensive TOCTOU",
+      "severity": "Medium",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/obsidian-brain/08-Squad-Agent/src/agents/base_agent.py",
+      "line": 194,
+      "title": "Check-then-act disk read (TOCTOU redundancy)",
+      "explanation": "`exists()` check is immediately followed by `read_text()` in the branch body. This wastes a stat syscall and introduces a file race condition.",
+      "recommendation": "Directly attempt to open/read the file and catch `FileNotFoundError` / `OSError` instead."
+    },
+    {
+      "category": "Defensive TOCTOU",
+      "severity": "Medium",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/obsidian-brain/08-Squad-Agent/src/lib/orchestration_lib.py",
+      "line": 115,
+      "title": "Check-then-act disk read (TOCTOU redundancy)",
+      "explanation": "`exists()` check is immediately followed by `open()` in the branch body. This wastes a stat syscall and introduces a file race condition.",
+      "recommendation": "Directly attempt to open/read the file and catch `FileNotFoundError` / `OSError` instead."
+    },
+    {
+      "category": "Defensive TOCTOU",
+      "severity": "Medium",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/obsidian-brain/08-Squad-Agent/src/maintenance/joint_audit_purger.py",
+      "line": 251,
+      "title": "Check-then-act disk read (TOCTOU redundancy)",
+      "explanation": "`exists()` check is immediately followed by `open()` in the branch body. This wastes a stat syscall and introduces a file race condition.",
+      "recommendation": "Directly attempt to open/read the file and catch `FileNotFoundError` / `OSError` instead."
+    },
+    {
+      "category": "Redundant Retry Loop",
+      "severity": "Medium",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/obsidian-brain/08-Squad-Agent/src/auditing/debloat_audit.py",
+      "line": 351,
+      "title": "Manual retry/sleep loop around auto-reconnecting transport",
+      "explanation": "NATS and SafeSocket transports maintain internal reconnect buffers and automatic reconnection handlers. Adding manual retry loops causes latency spikes and thread exhaustion.",
+      "recommendation": "Rely on the transport client's connection lifecycle and error handlers instead of manual retry loops."
+    },
+    {
+      "category": "Defensive TOCTOU",
+      "severity": "Medium",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/obsidian-brain/08-Squad-Agent/src/auditing/preflight_check.py",
+      "line": 270,
+      "title": "Check-then-act disk read (TOCTOU redundancy)",
+      "explanation": "`exists()` check is immediately followed by `open()` in the branch body. This wastes a stat syscall and introduces a file race condition.",
+      "recommendation": "Directly attempt to open/read the file and catch `FileNotFoundError` / `OSError` instead."
+    },
+    {
+      "category": "Defensive TOCTOU",
+      "severity": "Medium",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/obsidian-brain/08-Squad-Agent/src/fleet/fleet_version.py",
+      "line": 119,
+      "title": "Check-then-act disk read (TOCTOU redundancy)",
+      "explanation": "`exists()` check is immediately followed by `read_text()` in the branch body. This wastes a stat syscall and introduces a file race condition.",
+      "recommendation": "Directly attempt to open/read the file and catch `FileNotFoundError` / `OSError` instead."
+    },
+    {
+      "category": "Defensive TOCTOU",
+      "severity": "Medium",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/obsidian-brain/08-Squad-Agent/src/fleet/fleet_version.py",
+      "line": 130,
+      "title": "Check-then-act disk read (TOCTOU redundancy)",
+      "explanation": "`exists()` check is immediately followed by `read_text()` in the branch body. This wastes a stat syscall and introduces a file race condition.",
+      "recommendation": "Directly attempt to open/read the file and catch `FileNotFoundError` / `OSError` instead."
+    },
+    {
+      "category": "Defensive TOCTOU",
+      "severity": "Medium",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/obsidian-brain/08-Squad-Agent/src/fleet/fleet_version.py",
+      "line": 178,
+      "title": "Check-then-act disk read (TOCTOU redundancy)",
+      "explanation": "`exists()` check is immediately followed by `read_text()` in the branch body. This wastes a stat syscall and introduces a file race condition.",
+      "recommendation": "Directly attempt to open/read the file and catch `FileNotFoundError` / `OSError` instead."
+    },
+    {
+      "category": "Defensive TOCTOU",
+      "severity": "Medium",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/obsidian-brain/05-Fleet-Operation/02-Deployment-Logs/archive.py",
+      "line": 116,
+      "title": "Check-then-act disk read (TOCTOU redundancy)",
+      "explanation": "`exists()` check is immediately followed by `open()` in the branch body. This wastes a stat syscall and introduces a file race condition.",
+      "recommendation": "Directly attempt to open/read the file and catch `FileNotFoundError` / `OSError` instead."
+    },
+    {
+      "category": "Defensive TOCTOU",
+      "severity": "Medium",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/obsidian-brain/05-Fleet-Operation/02-Deployment-Logs/archive.py",
+      "line": 159,
+      "title": "Check-then-act disk read (TOCTOU redundancy)",
+      "explanation": "`exists()` check is immediately followed by `open()` in the branch body. This wastes a stat syscall and introduces a file race condition.",
+      "recommendation": "Directly attempt to open/read the file and catch `FileNotFoundError` / `OSError` instead."
+    },
+    {
+      "category": "Defensive TOCTOU",
+      "severity": "Medium",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/obsidian-brain/05-Fleet-Operation/01-Fleet-Action-Plans/archive.py",
+      "line": 129,
+      "title": "Check-then-act disk read (TOCTOU redundancy)",
+      "explanation": "`exists()` check is immediately followed by `open()` in the branch body. This wastes a stat syscall and introduces a file race condition.",
+      "recommendation": "Directly attempt to open/read the file and catch `FileNotFoundError` / `OSError` instead."
+    },
+    {
+      "category": "Defensive TOCTOU",
+      "severity": "Medium",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/obsidian-brain/05-Fleet-Operation/01-Fleet-Action-Plans/archive.py",
+      "line": 141,
+      "title": "Check-then-act disk read (TOCTOU redundancy)",
+      "explanation": "`exists()` check is immediately followed by `open()` in the branch body. This wastes a stat syscall and introduces a file race condition.",
+      "recommendation": "Directly attempt to open/read the file and catch `FileNotFoundError` / `OSError` instead."
+    },
+    {
+      "category": "Defensive TOCTOU",
+      "severity": "Medium",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/obsidian-brain/05-Fleet-Operation/01-Fleet-Action-Plans/archive.py",
+      "line": 180,
+      "title": "Check-then-act disk read (TOCTOU redundancy)",
+      "explanation": "`exists()` check is immediately followed by `open()` in the branch body. This wastes a stat syscall and introduces a file race condition.",
+      "recommendation": "Directly attempt to open/read the file and catch `FileNotFoundError` / `OSError` instead."
+    },
+    {
+      "category": "Defensive TOCTOU",
+      "severity": "Medium",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/sandbox-testing/02-Scenarios/go/ecosystem_tooling_parity_test.go",
+      "line": 56,
+      "title": "Check-then-act os.Stat() before os.Open/ReadFile",
+      "explanation": "Calling `os.Stat` to check file existence before `os.Open` / `os.ReadFile` incurs a redundant disk syscall and creates a TOCTOU race condition.",
+      "recommendation": "Open/read the file directly and inspect `os.IsNotExist(err)`."
+    },
+    {
+      "category": "Defensive TOCTOU",
+      "severity": "Medium",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/sandbox-testing/02-Scenarios/python/scaffolding_scenario_test.py",
+      "line": 136,
+      "title": "Check-then-act disk read (TOCTOU redundancy)",
+      "explanation": "`exists()` check is immediately followed by `open()` in the branch body. This wastes a stat syscall and introduces a file race condition.",
+      "recommendation": "Directly attempt to open/read the file and catch `FileNotFoundError` / `OSError` instead."
+    },
+    {
+      "category": "Defensive TOCTOU",
+      "severity": "Medium",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/sandbox-testing/02-Scenarios/python/scaffolding_scenario_test.py",
+      "line": 146,
+      "title": "Check-then-act disk read (TOCTOU redundancy)",
+      "explanation": "`exists()` check is immediately followed by `open()` in the branch body. This wastes a stat syscall and introduces a file race condition.",
+      "recommendation": "Directly attempt to open/read the file and catch `FileNotFoundError` / `OSError` instead."
+    },
+    {
+      "category": "Defensive TOCTOU",
+      "severity": "Medium",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/sandbox-testing/02-Scenarios/python/rag_mcp_sse_test.py",
+      "line": 124,
+      "title": "Check-then-act disk read (TOCTOU redundancy)",
+      "explanation": "`exists()` check is immediately followed by `read_text()` in the branch body. This wastes a stat syscall and introduces a file race condition.",
+      "recommendation": "Directly attempt to open/read the file and catch `FileNotFoundError` / `OSError` instead."
+    },
+    {
+      "category": "Defensive TOCTOU",
+      "severity": "Medium",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/docker-deployment/modes/local/health.py",
+      "line": 69,
+      "title": "Check-then-act disk read (TOCTOU redundancy)",
+      "explanation": "`exists()` check is immediately followed by `open()` in the branch body. This wastes a stat syscall and introduces a file race condition.",
+      "recommendation": "Directly attempt to open/read the file and catch `FileNotFoundError` / `OSError` instead."
+    },
+    {
+      "category": "Defensive TOCTOU",
+      "severity": "Medium",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/docker-deployment/modes/local/ide/setup_ide.py",
+      "line": 397,
+      "title": "Check-then-act disk read (TOCTOU redundancy)",
+      "explanation": "`exists()` check is immediately followed by `open()` in the branch body. This wastes a stat syscall and introduces a file race condition.",
+      "recommendation": "Directly attempt to open/read the file and catch `FileNotFoundError` / `OSError` instead."
+    },
+    {
+      "category": "Defensive TOCTOU",
+      "severity": "Medium",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/docker-deployment/modes/local/ide/setup_ide.py",
+      "line": 419,
+      "title": "Check-then-act disk read (TOCTOU redundancy)",
+      "explanation": "`exists()` check is immediately followed by `open()` in the branch body. This wastes a stat syscall and introduces a file race condition.",
+      "recommendation": "Directly attempt to open/read the file and catch `FileNotFoundError` / `OSError` instead."
+    },
+    {
+      "category": "Defensive TOCTOU",
+      "severity": "Medium",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/docker-deployment/modes/local/ide/setup_ide.py",
+      "line": 511,
+      "title": "Check-then-act disk read (TOCTOU redundancy)",
+      "explanation": "`exists()` check is immediately followed by `open()` in the branch body. This wastes a stat syscall and introduces a file race condition.",
+      "recommendation": "Directly attempt to open/read the file and catch `FileNotFoundError` / `OSError` instead."
+    },
+    {
+      "category": "Defensive TOCTOU",
+      "severity": "Medium",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/docker-deployment/modes/local/ide/setup_ide.py",
+      "line": 514,
+      "title": "Check-then-act disk read (TOCTOU redundancy)",
+      "explanation": "`exists()` check is immediately followed by `open()` in the branch body. This wastes a stat syscall and introduces a file race condition.",
+      "recommendation": "Directly attempt to open/read the file and catch `FileNotFoundError` / `OSError` instead."
+    },
+    {
+      "category": "Defensive TOCTOU",
+      "severity": "Medium",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/docker-deployment/scripts/operations.py",
+      "line": 75,
+      "title": "Check-then-act disk read (TOCTOU redundancy)",
+      "explanation": "`exists()` check is immediately followed by `open()` in the branch body. This wastes a stat syscall and introduces a file race condition.",
+      "recommendation": "Directly attempt to open/read the file and catch `FileNotFoundError` / `OSError` instead."
+    },
+    {
+      "category": "Defensive TOCTOU",
+      "severity": "Medium",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/docker-deployment/scripts/fleet_guard/git_verifier.py",
+      "line": 46,
+      "title": "Check-then-act disk read (TOCTOU redundancy)",
+      "explanation": "`exists()` check is immediately followed by `open()` in the branch body. This wastes a stat syscall and introduces a file race condition.",
+      "recommendation": "Directly attempt to open/read the file and catch `FileNotFoundError` / `OSError` instead."
+    },
+    {
+      "category": "Defensive TOCTOU",
+      "severity": "Medium",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/docker-deployment/scripts/fleet_guard/param_inspector.py",
+      "line": 179,
+      "title": "Check-then-act disk read (TOCTOU redundancy)",
+      "explanation": "`exists()` check is immediately followed by `open()` in the branch body. This wastes a stat syscall and introduces a file race condition.",
+      "recommendation": "Directly attempt to open/read the file and catch `FileNotFoundError` / `OSError` instead."
+    },
+    {
+      "category": "Defensive TOCTOU",
+      "severity": "Medium",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/docker-deployment/scripts/fleet_guard/crypto_validator.py",
+      "line": 264,
+      "title": "Check-then-act disk read (TOCTOU redundancy)",
+      "explanation": "`exists()` check is immediately followed by `open()` in the branch body. This wastes a stat syscall and introduces a file race condition.",
+      "recommendation": "Directly attempt to open/read the file and catch `FileNotFoundError` / `OSError` instead."
+    },
+    {
+      "category": "Defensive TOCTOU",
+      "severity": "Medium",
+      "file": "/Users/imac/Desktop/Bastien-Antigravity/distributed-config/src/loader/loader.go",
+      "line": 88,
+      "title": "Check-then-act os.Stat() before os.Open/ReadFile",
+      "explanation": "Calling `os.Stat` to check file existence before `os.Open` / `os.ReadFile` incurs a redundant disk syscall and creates a TOCTOU race condition.",
+      "recommendation": "Open/read the file directly and inspect `os.IsNotExist(err)`."
+    }
+  ],
+  "keys": [
+    "matrix_test.py::Redundant Retry Loop::Manual retry/sleep loop around auto-reconnecting transport",
+    "test_basic.py::Redundant Retry Loop::Manual retry/sleep loop around auto-reconnecting transport",
+    "shm_server.go::Concurrency Bloat::Mutex guarding atomic primitive operations",
+    "shm_connection.go::Concurrency Bloat::Mutex guarding atomic primitive operations",
+    "registry.go::Defensive TOCTOU::Check-then-act os.Stat() before os.Open/ReadFile",
+    "archive.py::Defensive TOCTOU::Check-then-act disk read (TOCTOU redundancy)",
+    "lab_manager.py::Defensive TOCTOU::Check-then-act disk read (TOCTOU redundancy)",
+    "test_integration.py::Defensive TOCTOU::Check-then-act disk read (TOCTOU redundancy)",
+    "test_turbo_pipeline.py::Concurrency Bloat::Useless asyncio.Lock in pure synchronous block",
+    "test_turbo_pipeline.py::Concurrency Bloat::Useless asyncio.Lock in pure synchronous block",
+    "access_matrix.py::Defensive TOCTOU::Check-then-act disk read (TOCTOU redundancy)",
+    "llm_enricher.py::Concurrency Bloat::Useless asyncio.Lock in pure synchronous block",
+    "llm_enricher.py::Concurrency Bloat::Useless asyncio.Lock in pure synchronous block",
+    "db_config.py::Defensive TOCTOU::Check-then-act disk read (TOCTOU redundancy)",
+    "db_config.py::Defensive TOCTOU::Check-then-act disk read (TOCTOU redundancy)",
+    "standard.py::Concurrency Bloat::Useless asyncio.Lock in pure synchronous block",
+    "standard.py::Defensive TOCTOU::Check-then-act disk read (TOCTOU redundancy)",
+    "standard.py::Defensive TOCTOU::Check-then-act disk read (TOCTOU redundancy)",
+    "standard.py::Defensive TOCTOU::Check-then-act disk read (TOCTOU redundancy)",
+    "tools.py::Defensive TOCTOU::Check-then-act disk read (TOCTOU redundancy)",
+    "tools.py::Defensive TOCTOU::Check-then-act disk read (TOCTOU redundancy)",
+    "tools.py::Defensive TOCTOU::Check-then-act disk read (TOCTOU redundancy)",
+    "synchronizer.py::Defensive TOCTOU::Check-then-act disk read (TOCTOU redundancy)",
+    "controller.py::Defensive TOCTOU::Check-then-act disk read (TOCTOU redundancy)",
+    "scaffold_new_brain.py::Defensive TOCTOU::Check-then-act disk read (TOCTOU redundancy)",
+    "scaffold_new_brain.py::Defensive TOCTOU::Check-then-act disk read (TOCTOU redundancy)",
+    "scaffold_microservice.py::Defensive TOCTOU::Check-then-act disk read (TOCTOU redundancy)",
+    "scaffold_microservice.py::Defensive TOCTOU::Check-then-act disk read (TOCTOU redundancy)",
+    "scaffold_microservice.py::Defensive TOCTOU::Check-then-act disk read (TOCTOU redundancy)",
+    "init_new_brain.py::Defensive TOCTOU::Check-then-act disk read (TOCTOU redundancy)",
+    "base_agent.py::Defensive TOCTOU::Check-then-act disk read (TOCTOU redundancy)",
+    "orchestration_lib.py::Defensive TOCTOU::Check-then-act disk read (TOCTOU redundancy)",
+    "joint_audit_purger.py::Defensive TOCTOU::Check-then-act disk read (TOCTOU redundancy)",
+    "debloat_audit.py::Redundant Retry Loop::Manual retry/sleep loop around auto-reconnecting transport",
+    "preflight_check.py::Defensive TOCTOU::Check-then-act disk read (TOCTOU redundancy)",
+    "fleet_version.py::Defensive TOCTOU::Check-then-act disk read (TOCTOU redundancy)",
+    "fleet_version.py::Defensive TOCTOU::Check-then-act disk read (TOCTOU redundancy)",
+    "fleet_version.py::Defensive TOCTOU::Check-then-act disk read (TOCTOU redundancy)",
+    "archive.py::Defensive TOCTOU::Check-then-act disk read (TOCTOU redundancy)",
+    "archive.py::Defensive TOCTOU::Check-then-act disk read (TOCTOU redundancy)",
+    "archive.py::Defensive TOCTOU::Check-then-act disk read (TOCTOU redundancy)",
+    "archive.py::Defensive TOCTOU::Check-then-act disk read (TOCTOU redundancy)",
+    "archive.py::Defensive TOCTOU::Check-then-act disk read (TOCTOU redundancy)",
+    "ecosystem_tooling_parity_test.go::Defensive TOCTOU::Check-then-act os.Stat() before os.Open/ReadFile",
+    "scaffolding_scenario_test.py::Defensive TOCTOU::Check-then-act disk read (TOCTOU redundancy)",
+    "scaffolding_scenario_test.py::Defensive TOCTOU::Check-then-act disk read (TOCTOU redundancy)",
+    "rag_mcp_sse_test.py::Defensive TOCTOU::Check-then-act disk read (TOCTOU redundancy)",
+    "health.py::Defensive TOCTOU::Check-then-act disk read (TOCTOU redundancy)",
+    "setup_ide.py::Defensive TOCTOU::Check-then-act disk read (TOCTOU redundancy)",
+    "setup_ide.py::Defensive TOCTOU::Check-then-act disk read (TOCTOU redundancy)",
+    "setup_ide.py::Defensive TOCTOU::Check-then-act disk read (TOCTOU redundancy)",
+    "setup_ide.py::Defensive TOCTOU::Check-then-act disk read (TOCTOU redundancy)",
+    "operations.py::Defensive TOCTOU::Check-then-act disk read (TOCTOU redundancy)",
+    "git_verifier.py::Defensive TOCTOU::Check-then-act disk read (TOCTOU redundancy)",
+    "param_inspector.py::Defensive TOCTOU::Check-then-act disk read (TOCTOU redundancy)",
+    "crypto_validator.py::Defensive TOCTOU::Check-then-act disk read (TOCTOU redundancy)",
+    "loader.go::Defensive TOCTOU::Check-then-act os.Stat() before os.Open/ReadFile"
+  ]
+}

@@ -9,13 +9,13 @@ across the Bastien-Antigravity ecosystem notes.
 
 DATA FLOW:
 1. Indexes workspace markdown files and builds link/stem registries.
-2. Loads canonical tag taxonomy from 00-AI-Orchestration/Tag-Taxonomy.md.
+2. Loads canonical tag taxonomy from 07-Core-KMS/tag_taxonomy.md.
 3. Evaluates document frontmatter against REQUIRED_YAML keys.
 4. Validates Obsidian tags and wikilinks against indexed notes.
 5. Returns structured error and warning collections.
 
 KEY PARAMETERS:
-- taxonomy_path: Optional path to Tag-Taxonomy.md.
+- taxonomy_path: Optional path to tag_taxonomy.md.
 - workspace_root: Optional path to workspace parent folder.
 """
 import os

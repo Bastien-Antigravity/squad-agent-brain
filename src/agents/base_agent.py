@@ -340,7 +340,8 @@ class BaseAgent:
                 except (ValueError, TypeError):
                     pass
 
-            response = self.client.models.generate_content(
+            response = await asyncio.to_thread(
+                self.client.models.generate_content,
                 model=self.model_name,
                 contents=contents,
                 config=types.GenerateContentConfig(**config_params)
@@ -391,7 +392,8 @@ class BaseAgent:
                 contents.append(types.Content(role="user", parts=user_parts))
                 
                 # Re-query the model with the execution results using the complete configuration parameters
-                current_response = self.client.models.generate_content(
+                current_response = await asyncio.to_thread(
+                    self.client.models.generate_content,
                     model=self.model_name,
                     contents=contents,
                     config=types.GenerateContentConfig(**config_params)
@@ -539,9 +541,9 @@ class BaseAgent:
             cmd_arg = args.get("command", "")
             
             # Sandbox / Shell Injection Blocklist Guard
-            blocked_keywords = [
-                "rm ", "rmdir", "chmod", "chown", "sudo", "su ", "curl", "wget",
-                "scp", "ssh", "sftp", "ftp", "/etc/", "/var/", "mv ", "dd ",
+            blocked_commands = [
+                "rm", "rmdir", "chmod", "chown", "sudo", "su", "curl", "wget",
+                "scp", "ssh", "sftp", "ftp", "/etc/", "/var/", "mv", "dd",
                 "mkfs", "tftp"
             ]
             
@@ -553,18 +555,21 @@ class BaseAgent:
             cmd_parts = re.split(r'[;&|`\n\r]', cleaned_cmd)
             for part in cmd_parts:
                 part_strip = part.strip()
-                for kw in blocked_keywords:
-                    kw_clean = kw.strip()
-                    if part_strip == kw_clean or part_strip.startswith(kw_clean + " ") or part_strip.startswith(kw_clean + "\t"):
-                        return f"Error: Command execution blocked for safety. Keyword '{kw_clean}' is prohibited."
-                    if kw in part:
-                        return f"Error: Command execution blocked for safety. Keyword '{kw}' is prohibited."
+                for kw in blocked_commands:
+                    if kw.startswith("/"):
+                        if kw in part_strip:
+                            return f"Error: Command execution blocked for safety. Path '{kw}' is prohibited."
+                    else:
+                        # Use word boundaries so 'git add' is not blocked by 'dd', and 'sum' is not blocked by 'su'
+                        if re.search(r'\b' + re.escape(kw) + r'\b', part_strip):
+                            return f"Error: Command execution blocked for safety. Command '{kw}' is prohibited."
             
             import subprocess
             from src.lib.orchestration_lib import resolve_vault_and_workspace
             _, workspace_root = resolve_vault_and_workspace(__file__)
             try:
-                proc = subprocess.run(
+                proc = await asyncio.to_thread(
+                    subprocess.run,
                     cmd_arg,
                     shell=True,
                     capture_output=True,

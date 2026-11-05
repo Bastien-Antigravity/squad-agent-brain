@@ -56,6 +56,7 @@ ROLES = {
     "codeindexer": ("07-Core-KMS/Role-Prompts/11-CodeIndexer", "Prompt-CodeIndexer.md"),
     "patternsentinel": ("07-Core-KMS/Role-Prompts/12-PatternSentinel", "Prompt-Pattern-Sentinel.md"),
     "prototyper": ("07-Core-KMS/Role-Prompts/13-Prototyper", "Prompt-Prototyper.md"),
+    "debloatsentinel": ("07-Core-KMS/Role-Prompts/14-DebloatSentinel", "Prompt-Debloat-Sentinel.md"),
     # Developer Squad Specialists
     "pythonspecialist": ("07-Core-KMS/Role-Prompts/03-Developer/Squad", "Python-Integration-Specialist.md"),
     "gospecialist": ("07-Core-KMS/Role-Prompts/03-Developer/Squad", "Go-Systems-Specialist.md"),

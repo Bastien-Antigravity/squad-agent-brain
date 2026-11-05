@@ -1,10 +1,14 @@
-# === BUILD STAGE (Compile CGO libunilog.so) ===
+# === BUILD STAGE (Compile CGO libunilog.so & Debloat Tools) ===
 FROM golang:1.25-bookworm AS go-builder
 
 WORKDIR /workspace
 
-RUN apt-get update && apt-get install -y --no-install-recommends git gcc libc6-dev && \
+RUN apt-get update && apt-get install -y --no-install-recommends git gcc libc6-dev curl && \
     rm -rf /var/lib/apt/lists/*
+
+# Install recommended Go debloat & lint tools for squad agents
+RUN go install go.uber.org/nilaway/cmd/nilaway@latest && \
+    curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b /go/bin v1.64.5
 
 RUN git clone --depth 1 -b develop https://github.com/Bastien-Antigravity/microservice-toolbox.git /workspace/microservice-toolbox && \
     git clone --depth 1 -b develop https://github.com/Bastien-Antigravity/distributed-config.git /workspace/distributed-config && \
@@ -27,8 +31,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential git netcat-openbsd \
     && rm -rf /var/lib/apt/lists/*
 
-# Install compiled libunilog.so system-wide
+# Install compiled libunilog.so and debloat binaries system-wide
 COPY --from=go-builder /workspace/libunilog.so /usr/local/lib/libunilog.so
+COPY --from=go-builder /go/bin/nilaway /usr/local/bin/nilaway
+COPY --from=go-builder /go/bin/golangci-lint /usr/local/bin/golangci-lint
 RUN ldconfig
 
 # Clone & install microservice-toolbox python package

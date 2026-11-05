@@ -22,6 +22,7 @@ KEY PARAMETERS:
 
 import os
 import sys
+import shlex
 import argparse
 import subprocess
 from pathlib import Path
@@ -149,7 +150,7 @@ class FleetCommander:
 
     def _run_command(self, cmd: str, cwd: str) -> Tuple[str, Optional[str]]:
         try:
-            cmd_list = cmd.split() if isinstance(cmd, str) else cmd
+            cmd_list = shlex.split(cmd) if isinstance(cmd, str) else cmd
             result = subprocess.run(
                 cmd_list, cwd=cwd, shell=False,
                 capture_output=True, text=True, check=True
@@ -166,6 +167,15 @@ class FleetCommander:
         if not self.engine:
             return True
         self._step(repo_name, "Auditing documentation")
+        if hasattr(self.engine, "errors") and isinstance(self.engine.errors, list):
+            self.engine.errors.clear()
+        if hasattr(self.engine, "warnings") and isinstance(self.engine.warnings, list):
+            self.engine.warnings.clear()
+        if hasattr(self.engine, "file_errors") and isinstance(self.engine.file_errors, dict):
+            self.engine.file_errors.clear()
+        if hasattr(self.engine, "file_warnings") and isinstance(self.engine.file_warnings, dict):
+            self.engine.file_warnings.clear()
+
         mandatory_files = ["AI-Init.md", "AI-Project-DNA.md", "AI-Session-State.md", "TODO.md", "README.md"]
         success = True
 

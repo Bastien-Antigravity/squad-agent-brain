@@ -64,6 +64,7 @@ ROLE_MAP = {
     "codeindexer": "11-CodeIndexer/Prompt-CodeIndexer.md",
     "patternsentinel": "12-PatternSentinel/Prompt-Pattern-Sentinel.md",
     "prototyper": "13-Prototyper/Prompt-Prototyper.md",
+    "debloatsentinel": "14-DebloatSentinel/Prompt-Debloat-Sentinel.md",
     # Developer Squad Specialists
     "pythonspecialist": "03-Developer/Squad/Python-Integration-Specialist.md",
     "gospecialist": "03-Developer/Squad/Go-Systems-Specialist.md",

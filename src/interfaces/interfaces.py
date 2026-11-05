@@ -66,25 +66,46 @@ class SquadEventBus:
 # -----------------------------------------------------------------------------
 
 class EventDeduplicator:
-    _seen = set()
-    _seen_list = []
+    _seen = {} # subscriber_key -> set of event_ids
+    _global_seen = set()
     MAX_SIZE = 1000
 
     # -----------------------------------------------------------------------------
 
     @classmethod
-    def is_duplicate(cls, event_id: str) -> bool:
-        if not event_id:
+    def is_duplicate(cls, arg1: Any, arg2: Optional[str] = None) -> bool:
+        if arg2 is None:
+            # Single argument: global publish-side deduplication
+            event_id = str(arg1)
+            if not event_id:
+                return False
+            if event_id in cls._global_seen:
+                return True
+            cls._global_seen.add(event_id)
+            if len(cls._global_seen) > cls.MAX_SIZE:
+                try:
+                    cls._global_seen.pop()
+                except KeyError:
+                    pass
             return False
-        if event_id in cls._seen:
-            return True
-        cls._seen.add(event_id)
-        cls._seen_list.append(event_id)
-        if len(cls._seen_list) > cls.MAX_SIZE:
-            oldest = cls._seen_list.pop(0)
-            cls._seen.discard(oldest)
+        else:
+            # Two arguments: per-subscriber deduplication
+            sub_key = arg1
+            event_id = str(arg2)
+            if not event_id:
+                return False
+            if sub_key not in cls._seen:
+                cls._seen[sub_key] = set()
+            sub_set = cls._seen[sub_key]
+            if event_id in sub_set:
+                return True
+            sub_set.add(event_id)
+            if len(sub_set) > cls.MAX_SIZE:
+                try:
+                    sub_set.pop()
+                except KeyError:
+                    pass
             return False
-        return False
 
 # -----------------------------------------------------------------------------
 
@@ -120,6 +141,17 @@ class LocalEventBus:
             if t not in subs:
                 subs[t] = []
             subs[t].append(callback)
+
+    # -----------------------------------------------------------------------------
+
+    @classmethod
+    def unsubscribe(cls, topic: str, callback: Any) -> None:
+        topic = normalize_topic(topic)
+        subs = cls._get_subscribers()
+        for t, cb_list in list(subs.items()):
+            if t == topic or t.startswith(f"{topic}."):
+                if callback in cb_list:
+                    cb_list.remove(callback)
 
     # -----------------------------------------------------------------------------
 
@@ -315,12 +347,13 @@ class DualSquadEventBus(SquadEventBus):
             LocalEventBus.subscribe(topic, callback, role)
         
         if self.nats_connected:
+            sub_key = id(callback)
             async def nats_callback(msg):
                 try:
                     payload = json.loads(msg.data.decode("utf-8"))
-                    # Deduplicate NATS events
+                    # Deduplicate NATS events per subscriber callback
                     event_id = payload.get("event_id")
-                    if event_id and EventDeduplicator.is_duplicate(event_id):
+                    if event_id and EventDeduplicator.is_duplicate(sub_key, event_id):
                         return
                     await callback(payload)
                 except Exception as e:
@@ -336,16 +369,33 @@ class DualSquadEventBus(SquadEventBus):
             else:
                 topics_to_sub.append(topic)
 
+            nats_subs = []
             for t in topics_to_sub:
                 try:
-                    await self.nc.subscribe(t, cb=nats_callback)
+                    sub = await self.nc.subscribe(t, cb=nats_callback)
+                    nats_subs.append(sub)
                     self.logger.info(f"SquadEventBus subscribed to NATS topic '{t}'")
                 except Exception as e:
                     self.logger.error(f"SquadEventBus failed NATS subscription to '{t}': {e}")
+            return nats_subs
         elif not self.allow_local_fallback:
             raise RuntimeError(
                 f"SquadEventBus cannot subscribe to topic '{topic}': NATS is not connected and local fallback is disabled."
             )
+        return []
+
+    # -----------------------------------------------------------------------------
+
+    async def unsubscribe(self, topic: str, callback: Any, nats_subs: Optional[list] = None) -> None:
+        """Unsubscribes callback and optional NATS subscriptions cleanly."""
+        if self.allow_local_fallback:
+            LocalEventBus.unsubscribe(topic, callback)
+        if nats_subs:
+            for sub in nats_subs:
+                try:
+                    await sub.unsubscribe()
+                except Exception:
+                    pass
 
     # -----------------------------------------------------------------------------
 
