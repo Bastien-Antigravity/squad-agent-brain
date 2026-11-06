@@ -1,3 +1,6 @@
+(function () {
+    'use strict';
+
 function getSquadLogger(name = 'squad-agent-mfe') {
     if (typeof window !== 'undefined' && window.BastienLogger) {
         return window.BastienLogger.get(name);
@@ -121,9 +124,9 @@ class SquadAgentMFE extends HTMLElement {
                     font-family: var(--font-sans, 'Outfit', 'Inter', system-ui, sans-serif);
                     color: var(--color-text-primary, #eaeaea);
                     width: 100%;
-                    max-width: var(--content-max-width, 1400px);
+                    max-width: 100%;
                     margin: 0 auto;
-                    padding: clamp(1.25rem, 2.5vh, 2.25rem) clamp(1.25rem, 3vw, 2.5rem) 3.5rem;
+                    padding: var(--space-4, 16px) 0 3.5rem;
                     box-sizing: border-box;
                 }
                 .squad-header {
@@ -1507,4 +1510,6 @@ class SquadAgentMFE extends HTMLElement {
 if (!customElements.get('squad-agent-mfe')) {
     customElements.define('squad-agent-mfe', SquadAgentMFE);
 }
+
+})();
 
