@@ -16,14 +16,14 @@ RUN git clone --depth 1 -b develop https://github.com/Bastien-Antigravity/micros
     git clone --depth 1 -b develop https://github.com/Bastien-Antigravity/universal-logger.git /workspace/universal-logger && \
     git clone --depth 1 -b develop https://github.com/Bastien-Antigravity/flexible-logger.git /workspace/flexible-logger && \
     cd /workspace/universal-logger && \
-    GOWORK=off GOTOOLCHAIN=local go build -buildmode=c-shared -o /workspace/libunilog.so ./src/cgo_bridge
+    CGO_ENABLED=1 CGO_CFLAGS="-D_GNU_SOURCE -std=gnu11" GOWORK=off go build -v -buildmode=c-shared -o /workspace/libunilog.so ./src/cgo_bridge
 
 # === PYTHON RUNTIME STAGE ===
 FROM python:3.12-slim-bookworm
 
 WORKDIR /app
 
-LABEL org.opencontainers.image.source="https://github.com/Bastien-Antigravity/obsidian-brain"
+LABEL org.opencontainers.image.source="https://github.com/Bastien-Antigravity/squad-agent-brain"
 
 # Install system runtime dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
