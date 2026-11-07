@@ -6,13 +6,14 @@ WORKDIR /workspace
 RUN apt-get update && apt-get install -y --no-install-recommends git gcc libc6-dev && \
     rm -rf /var/lib/apt/lists/*
 
-RUN git clone --depth 1 -b develop https://github.com/Bastien-Antigravity/microservice-toolbox.git /workspace/microservice-toolbox && \
-    git clone --depth 1 -b develop https://github.com/Bastien-Antigravity/distributed-config.git /workspace/distributed-config && \
-    git clone --depth 1 -b develop https://github.com/Bastien-Antigravity/safe-socket.git /workspace/safe-socket && \
-    git clone --depth 1 -b develop https://github.com/Bastien-Antigravity/universal-logger.git /workspace/universal-logger && \
-    git clone --depth 1 -b develop https://github.com/Bastien-Antigravity/flexible-logger.git /workspace/flexible-logger && \
-    cd /workspace/universal-logger && \
-    CGO_ENABLED=1 CGO_CFLAGS="-D_GNU_SOURCE -std=gnu11" GOWORK=off go build -v -buildmode=c-shared -o /workspace/libunilog.so ./src/cgo_bridge
+RUN git clone --depth 1 -b develop https://github.com/Bastien-Antigravity/microservice-toolbox.git /workspace/microservice-toolbox
+RUN git clone --depth 1 -b develop https://github.com/Bastien-Antigravity/distributed-config.git /workspace/distributed-config
+RUN git clone --depth 1 -b develop https://github.com/Bastien-Antigravity/safe-socket.git /workspace/safe-socket
+RUN git clone --depth 1 -b develop https://github.com/Bastien-Antigravity/universal-logger.git /workspace/universal-logger
+RUN git clone --depth 1 -b develop https://github.com/Bastien-Antigravity/flexible-logger.git /workspace/flexible-logger
+
+WORKDIR /workspace/universal-logger
+RUN CGO_ENABLED=1 CGO_CFLAGS="-D_GNU_SOURCE -std=gnu11" GOWORK=off go build -v -buildmode=c-shared -o /workspace/libunilog.so ./src/cgo_bridge
 
 # === PYTHON RUNTIME STAGE ===
 FROM python:3.12-slim-bookworm
