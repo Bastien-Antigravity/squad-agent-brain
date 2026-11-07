@@ -22,7 +22,9 @@ from typing import Any, Dict
 from src.agents.base_agent import BaseAgent
 from src.interfaces import SquadEventBus
 from src.auditing.debloat_audit import run_debloat_audit, generate_safe_by_design_markdown
+from src.lib.orchestration_lib import resolve_vault_and_workspace
 
+# -----------------------------------------------------------------------------
 
 def audit_codebase_bloat(path: str) -> str:
     """
@@ -35,6 +37,7 @@ def audit_codebase_bloat(path: str) -> str:
     """
     return ""
 
+# -----------------------------------------------------------------------------
 
 def generate_safe_by_design_spec(path: str, output_path: str = "") -> str:
     """
@@ -48,6 +51,7 @@ def generate_safe_by_design_spec(path: str, output_path: str = "") -> str:
     """
     return ""
 
+# -----------------------------------------------------------------------------
 
 def propose_code_simplification(file_path: str, issue_description: str) -> str:
     """
@@ -60,6 +64,7 @@ def propose_code_simplification(file_path: str, issue_description: str) -> str:
     """
     return ""
 
+# -----------------------------------------------------------------------------
 
 class DebloatSentinelAgent(BaseAgent):
     """
@@ -75,7 +80,11 @@ class DebloatSentinelAgent(BaseAgent):
             pg_pool=pg_pool,
             event_bus=event_bus
         )
-        self.tools = [audit_codebase_bloat, generate_safe_by_design_spec, propose_code_simplification]
+        vault_root, _ = resolve_vault_and_workspace(__file__)
+        self.vault_root = vault_root
+        self.tools.extend([audit_codebase_bloat, generate_safe_by_design_spec, propose_code_simplification])
+
+    # -----------------------------------------------------------------------------
 
     async def execute_tool(self, name: str, args: Dict[str, Any]) -> str:
         """Executes a function call requested by the model."""

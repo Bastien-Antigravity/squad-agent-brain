@@ -19,7 +19,7 @@ KEY PARAMETERS:
 
 from typing import Any
 from src.interfaces import SquadEventBus
-from src.agents.base_agent import BaseAgent, query_rag_engine
+from src.agents.base_agent import BaseAgent, query_rag_engine, read_workspace_file, write_workspace_file
 
 # -----------------------------------------------------------------------------
 
@@ -40,4 +40,4 @@ class ArchitectAgent(BaseAgent):
             pg_pool=pg_pool,
             event_bus=event_bus
         )
-        self.tools = [query_rag_engine]
+        self.tools = [query_rag_engine, read_workspace_file, write_workspace_file]

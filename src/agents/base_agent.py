@@ -21,14 +21,20 @@ KEY PARAMETERS:
 - pg_pool: Shared database connection pool for memory persistence.
 """
 
-import os
-import sys
-import json
+import ast
 import asyncio
+import json
+import os
+import re
+import subprocess
 from typing import Dict, Any, List, Optional
-from src.interfaces import SquadEventBus
+
 from google import genai
 from google.genai import types, errors
+
+from src.interfaces import SquadEventBus
+from src.lib.memory import RAGMemoryStore
+from src.lib.orchestration_lib import resolve_vault_and_workspace
 
 # -----------------------------------------------------------------------------
 
@@ -73,7 +79,6 @@ def execute_shell_command(command: str) -> str:
     return ""
 def _fold_python_code(content: str) -> str:
     """Folds python function/class bodies to show only signatures and docstrings."""
-    import ast
     try:
         tree = ast.parse(content)
         lines = content.splitlines()
@@ -171,24 +176,21 @@ class BaseAgent:
         # Subclass overrides or appends to tools
         self.tools = [query_rag_engine, read_workspace_file, write_workspace_file, execute_shell_command]
         self.Name = self.__class__.__name__
+        cfg_brain = self.config.get_capability("squad_agent").get("target_brain_id")
         raw_target = (
+            cfg_brain or
             os.environ.get("TARGET_BRAIN_ID") or 
             os.environ.get("BRAIN_ID")
         )
-        if not raw_target and hasattr(self.config, "get_capability"):
-            cap = self.config.get_capability("squad_agent")
-            if isinstance(cap, dict):
-                raw_target = cap.get("target_brain_id")
-        self.target_brain_id = raw_target if isinstance(raw_target, str) and raw_target.strip() else None
+        self.target_brain_id = raw_target if isinstance(raw_target, str) and raw_target.strip() else "obsidian-brain"
         self.squad_chat_topic = (
             f"bastien-antigravity.{self.target_brain_id}.squad.chat"
-            if self.target_brain_id and self.target_brain_id != "obsidian-brain"
+            if self.target_brain_id != "obsidian-brain"
             else "bastien-antigravity.squad.chat"
         )
 
     def _load_system_prompt(self) -> str:
         """Reads the agent role's system instruction from KMS files."""
-        from src.lib.orchestration_lib import resolve_vault_and_workspace
         vault_root, _ = resolve_vault_and_workspace(__file__)
         prompt_path = vault_root / "07-Core-KMS" / "Role-Prompts" / self.prompt_file
         if prompt_path.exists():
@@ -462,18 +464,8 @@ class BaseAgent:
         """Dynamic tool execution handler."""
         if name == "query_rag_engine":
             query_arg = args.get("query", "")
-            target_brain = (
-                args.get("brain_id") or 
-                getattr(self, "target_brain_id", None) or 
-                os.environ.get("TARGET_BRAIN_ID") or 
-                os.environ.get("BRAIN_ID") or
-                (self.config.get_capability("squad_agent").get("target_brain_id") 
-                 if hasattr(self.config, "get_capability") else None)
-            )
-            if not target_brain:
-                return "Error: Target brain_id must be specified to prevent cross-tenant data pollution."
+            target_brain = args.get("brain_id") or self.target_brain_id
 
-            from lib.memory import RAGMemoryStore
             rag_store = RAGMemoryStore(
                 config=self.config,
                 logger=self.logger,
@@ -495,7 +487,6 @@ class BaseAgent:
         elif name == "read_workspace_file":
             path_arg = args.get("path", "")
             fold_bodies_arg = args.get("fold_bodies", True)
-            from src.lib.orchestration_lib import resolve_vault_and_workspace
             _, workspace_root = resolve_vault_and_workspace(__file__)
             file_path = (workspace_root / path_arg).resolve()
             
@@ -513,6 +504,8 @@ class BaseAgent:
                         content = _fold_python_code(content)
                     elif ext in ("js", "ts", "go", "rs", "cpp", "h", "hpp", "cc"):
                         content = _fold_generic_code(content)
+                    elif ext in ("js", "ts", "go", "rs", "cpp", "h", "hpp", "cc"):
+                        content = _fold_generic_code(content)
                 return content
             except Exception as e:
                 return f"Error reading file {path_arg}: {e}"
@@ -520,7 +513,6 @@ class BaseAgent:
         elif name == "write_workspace_file":
             path_arg = args.get("path", "")
             content_arg = args.get("content", "")
-            from src.lib.orchestration_lib import resolve_vault_and_workspace
             _, workspace_root = resolve_vault_and_workspace(__file__)
             file_path = (workspace_root / path_arg).resolve()
             
@@ -551,7 +543,6 @@ class BaseAgent:
             cleaned_cmd = cmd_arg.lower().replace("'", "").replace('"', "").replace("\\", "")
             
             # Split commands by common operators to check sub-commands separately
-            import re
             cmd_parts = re.split(r'[;&|`\n\r]', cleaned_cmd)
             for part in cmd_parts:
                 part_strip = part.strip()
@@ -564,8 +555,6 @@ class BaseAgent:
                         if re.search(r'\b' + re.escape(kw) + r'\b', part_strip):
                             return f"Error: Command execution blocked for safety. Command '{kw}' is prohibited."
             
-            import subprocess
-            from src.lib.orchestration_lib import resolve_vault_and_workspace
             _, workspace_root = resolve_vault_and_workspace(__file__)
             try:
                 proc = await asyncio.to_thread(

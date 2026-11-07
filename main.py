@@ -14,13 +14,15 @@ KEY PARAMETERS:
 - sys.argv: Command line arguments containing target command and forwarded flags.
 """
 
+import importlib
 import sys
+import traceback
 from pathlib import Path
 
 # Add 08-Squad-Agent root to sys.path so we can import src.*
-_self_dir = Path(__file__).resolve().parent
-if str(_self_dir) not in sys.path:
-    sys.path.insert(0, str(_self_dir))
+_root_dir = str(Path(__file__).resolve().parent)
+if _root_dir not in sys.path:
+    sys.path.insert(0, _root_dir)
 
 # Enforce environment bootstrap & configuration loading
 import src.bootstrap as bootstrap
@@ -68,10 +70,8 @@ COMMANDS_MAP = {
 # -----------------------------------------------------------------------------
 
 def print_usage():
-    print("Usage: python3 08-Squad-Agent/main.py <command> [args...]")
-    print("\nAvailable commands:")
-    for cmd in sorted(COMMANDS_MAP.keys()):
-        print(f"  - {cmd}")
+    cmds = "\n".join(f"  - {cmd}" for cmd in sorted(COMMANDS_MAP.keys()))
+    bootstrap.logger.info(f"Usage: python3 08-Squad-Agent/main.py <command> [args...]\n\nAvailable commands:\n{cmds}")
 
 # -----------------------------------------------------------------------------
 
@@ -83,7 +83,7 @@ def main():
     cmd_arg = sys.argv[1].lower()
     
     if cmd_arg not in COMMANDS_MAP:
-        print(f"❌ Unknown command: {cmd_arg}")
+        bootstrap.logger.error(f"Unknown command: {cmd_arg}")
         print_usage()
         sys.exit(1)
         
@@ -94,13 +94,10 @@ def main():
     
     # Import and run command
     try:
-        import importlib
         module = importlib.import_module(f"src.{module_path}")
         module.main()
     except Exception as e:
-        import traceback
-        print(f"❌ Error running command '{cmd_arg}': {e}")
-        traceback.print_exc()
+        bootstrap.logger.error(f"Error running command '{cmd_arg}': {e}\n{traceback.format_exc()}")
         sys.exit(1)
 
 if __name__ == "__main__":

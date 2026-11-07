@@ -259,7 +259,7 @@ class ComplianceAuditor:
                     "switch_mode.py", "install_git_hooks.py", "fleet_commander.py", 
                     "fleet_version.py", "preflight_check.py", "joint_audit_purger.py",
                     "audit_ports.py", "ensure_frontmatter.py", "hardening_yaml.py",
-                    "improved_transformer.py"
+                    "improved_transformer.py", "debloat_audit.py"
                 }
                 allow_print = filename in cli_presenters or any(marker in content[:500] for marker in ("# cli:allow-print", "// cli:allow-print", "/* cli:allow-print */"))
                 if not allow_print:

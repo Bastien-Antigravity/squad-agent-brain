@@ -1,3 +1,6 @@
+#!/usr/bin/env python
+# coding:utf-8
+
 # =============================================================================
 # ESSENTIAL PROCESS: Squad Agent Model Hot-Reload Verification
 # DATA FLOW: Config Dynamic Capability Update -> Agent _refresh_llm_config -> Active Model Update

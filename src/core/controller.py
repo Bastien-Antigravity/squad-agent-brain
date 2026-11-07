@@ -141,7 +141,7 @@ class CommandController(Command):
         long_term = RAGMemoryStore(
             config=self.config,
             logger=self.logger,
-            tenant=self.schema,
+            tenant=self.brain_id,
             client=self.config.data.get("rag_client")
         )
 

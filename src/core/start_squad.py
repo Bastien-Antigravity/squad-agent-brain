@@ -238,25 +238,16 @@ def setup_mcp(mode_choice: str) -> None:
     mcp_args = None
     
     if has_rag:
-        # Resolve RAG server port dynamically from standalone.yaml or default to 8090
-        rag_port = 8090
-        try:
-            import yaml
-            yaml_path = osPathJoin(rag_dir, "standalone.yaml")
-            if osPathExists(yaml_path):
-                with open(yaml_path, 'r') as f:
-                    ydata = yaml.safe_load(f)
-                    mcp_conf = ydata.get("capabilities", {}).get("rag_engine", {}).get("mcp", {})
-                    if mcp_conf.get("port"):
-                        rag_port = int(mcp_conf.get("port"))
-        except Exception:
-            pass
+        # Resolve RAG server port dynamically from ecosystem AppConfig (safe-by-design)
+        rag_addr = get_config().get_listen_addr("rag_engine")
+        rag_host, rag_port_str = rag_addr.split(":")
+        rag_port = int(rag_port_str)
 
         # Check if RAG server is running
         is_running = False
         import socket
         try:
-            with socket.create_connection(("127.0.0.1", rag_port), timeout=1.0):
+            with socket.create_connection((rag_host, rag_port), timeout=1.0):
                 is_running = True
         except Exception:
             is_running = False
@@ -273,29 +264,9 @@ def setup_mcp(mode_choice: str) -> None:
             has_rag = False
 
     if has_rag:
-        # Determine the Python virtual environment path dynamically:
-        # Prioritize the RAG Engine's local virtualenv if it exists, otherwise fall back to the unified vault venv.
-        rag_venv_python = osPathJoin(rag_dir, ".venv", "Scripts", "python.exe") if osName == "nt" else osPathJoin(rag_dir, ".venv", "bin", "python3")
-        local_python = osPathJoin(vault_root, ".venv", "Scripts", "python.exe") if osName == "nt" else osPathJoin(vault_root, ".venv", "bin", "python3")
-        rag_server_script = rag_main_script if osPathExists(rag_main_script) else rag_core_server
-        
-        if osPathExists(rag_venv_python):
-            resolved_python = rag_venv_python
-            print(f"📡 RAG using local RAG virtual environment: {resolved_python}")
-        elif osPathExists(local_python):
-            resolved_python = local_python
-            print(f"📡 RAG using unified {osPathBasename(vault_root)} virtual environment: {resolved_python}")
-        else:
-            resolved_python = sysExecutable
-            print(f"📡 RAG using system Python fallback: {resolved_python}")
-            
+        mcp_url = f"http://{rag_host}:{rag_port}/sse"
         obsidian_rag_config = {
-            "command": resolved_python,
-            "args": [rag_server_script, "server"],
-            "env": {
-                "SQUAD_ACTIVE_MODE": str(mode_choice),
-                "PYTHONPATH": rag_dir
-            }
+            "url": mcp_url
         }
     else:
         # Fallback to standard basic filesystem MCP server
@@ -372,28 +343,6 @@ def setup_mcp(mode_choice: str) -> None:
             print(f"✅ {label} configured successfully.")
         except Exception as e:
             print(f"⚠️ Warning: Could not write {label}: {e}")
-
-    # 3. Non-destructive config validation and auto-repair check
-    #    Mirrors the RAG Engine's startup validation (09-RAG-Engine/main.py).
-    #    Ensures all .gemini config files have valid JSON and SSE-mode obsidian_rag entries.
-    try:
-        # Resolve MCP URL from the already-determined rag_port (defaults to 8090)
-        _rag_port = rag_port if 'rag_port' in dir() else 8090
-        mcp_url = "http://127.0.0.1:{0}/sse".format(_rag_port)
-
-        paths_to_verify = [
-            (osPathJoin(osPathExpanduser("~/.gemini"), "settings.json"), "Gemini Settings"),
-            (osPathJoin(osPathExpanduser("~/.gemini/antigravity-cli"), "mcp_config.json"), "Antigravity CLI MCP Config"),
-            (osPathJoin(osPathExpanduser("~/.gemini/antigravity-cli"), "settings.json"), "Antigravity CLI Settings"),
-            (osPathJoin(osPathExpanduser("~/.gemini/antigravity-ide"), "mcp_config.json"), "Antigravity IDE MCP Config"),
-            (osPathJoin(osPathExpanduser("~/.gemini/antigravity-ide"), "settings.json"), "Antigravity IDE Settings"),
-            (osPathJoin(osPathExpanduser("~/.gemini/config"), "mcp_config.json"), "Shared MCP Config"),
-            (osPathJoin(osPathExpanduser("~/.gemini-cli"), "mcp_config.json"), "Gemini CLI MCP Config"),
-        ]
-        for path, label in paths_to_verify:
-            safe_load_and_repair_json(path, label, mcp_url)
-    except Exception as e_verify:
-        logger.warning("Could not run config validation check: {0}".format(e_verify))
 
 # -----------------------------------------------------------------------------------------------
 

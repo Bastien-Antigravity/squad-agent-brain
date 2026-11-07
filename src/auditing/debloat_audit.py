@@ -22,6 +22,8 @@ KEY PARAMETERS:
 - generate_safe_doc: Writes 15-Safe-By-Design-Invariants.md.
 """
 
+# -----------------------------------------------------------------------------
+
 import ast
 import collections
 import datetime

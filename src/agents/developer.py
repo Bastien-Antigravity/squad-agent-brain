@@ -20,7 +20,7 @@ KEY PARAMETERS:
 
 from typing import Any
 from src.interfaces import SquadEventBus
-from src.agents.base_agent import BaseAgent, read_workspace_file, write_workspace_file, execute_shell_command
+from src.agents.base_agent import BaseAgent, query_rag_engine, read_workspace_file, write_workspace_file, execute_shell_command
 
 # -----------------------------------------------------------------------------
 
@@ -38,4 +38,4 @@ class DeveloperAgent(BaseAgent):
             pg_pool=pg_pool,
             event_bus=event_bus
         )
-        self.tools = [read_workspace_file, write_workspace_file, execute_shell_command]
+        self.tools = [query_rag_engine, read_workspace_file, write_workspace_file, execute_shell_command]
