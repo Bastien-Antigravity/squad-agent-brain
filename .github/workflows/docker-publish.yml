@@ -24,15 +24,13 @@ jobs:
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
-          password: ${{ secrets.REGISTRY_TOKEN || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract metadata (tags, labels)
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: |
-            ${{ env.REGISTRY }}/Bastien-Antigravity/squad-agent-brain
-            ${{ env.REGISTRY }}/Bastien-Antigravity/squad-agent
+          images: ${{ env.REGISTRY }}/${{ github.repository }}
           tags: |
             type=ref,event=branch
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
