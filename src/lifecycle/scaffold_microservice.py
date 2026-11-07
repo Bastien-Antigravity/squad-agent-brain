@@ -562,12 +562,14 @@ from pathlib import Path
 from microservice_toolbox.config.loader import load_config
 from microservice_toolbox.logger import UniLog
 from microservice_toolbox import publish_with_lifecycle, ServiceSpec
+from microservice_toolbox.wiretap import configure_from_config
 from src.core.controller import Controller
 
 def main():
     # Load layered configuration (CLI > local YAML > native.yaml > ENV)
     config = load_config("standalone")
     logger = UniLog(app_name="{name}", config_profile="standalone")
+    configure_from_config("{name}", config)
 
     # Instantiate and start the example worker controller
     controller = Controller(config=config, logger=logger)
@@ -930,6 +932,7 @@ networks:
 5. **Section Dividers**: Use appropriate dividers (`// -----------------------------------------------------------------------------`) between exported methods and major sections.
 6. **Dynamic Fleet Hot-Reloading**: Microservices must register `OnLiveConfUpdate` / `on_live_conf_update` to dynamically reload configuration changes without restarting the daemon process.
 7. **Service Specification & OpenMFE Registration Standard**: All microservices must register their declarative specification using `spec.PublishWithLifecycle` (Go), `spec.publish_with_lifecycle` (Python), or `spec::publish_with_lifecycle` (Rust) during bootstrap with infinite resilience (`MaxRetries: -1`) and non-blocking execution. The microservice authoritatively provides its metadata (`Name`, `Tag`, `URL`, `Layer`, `Category`, `Description`, `Protocol`, and directly formatted `Framing`).
+8. **Real-Time Transport WireTap & Dynamic Topology (`> L3` Ready)**: `BootstrapService` (Go) and `init_microservice` / `configure_from_config` (Python) automatically bind the lock-free WireTap transport telemetry engine (`microservice-toolbox/go/pkg/wiretap`, `microservice_toolbox/wiretap.py`) to `safe-socket`, gRPC (`teleremote`, `notification`, `network`), and NATS (`messaging`). Combined with `spec.PublishWithLifecycle`, this microservice (`L2`, `L3`, or `> L3` / `L4+`) and its live edges and segregated channels are synthesized automatically on `web-interface` (`src/router/mesh_topology.go`) with zero hardcoded topology changes in `web-interface`.
 """
     create_file(target_dir / "AGENTS.md", agents_md, dry_run)
 
