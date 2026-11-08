@@ -62,6 +62,7 @@ COMMANDS_MAP = {
     "fix-feats": "fleet.fix_feats",
     "fleet-version": "fleet.fleet_version",
     "bump-version": "fleet.fleet_version",
+    "checkpoint": "fleet.checkpoint",
     "controller": "core.controller",
     "discord-client": "clients.discord_client",
     "format-compliance": "lib.improved_transformer"

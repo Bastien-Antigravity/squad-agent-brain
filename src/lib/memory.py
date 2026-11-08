@@ -26,7 +26,7 @@ from json import dumps as jsonDumps, loads as jsonLoads
 
 from microservice_toolbox.logger import ensure_safe_logger
 from microservice_toolbox.conn_manager.manager import NetworkManager
-from interfaces import MemoryStore
+from src.interfaces import MemoryStore
 
 # -----------------------------------------------------------------------------------------------
 

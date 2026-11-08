@@ -39,6 +39,9 @@ class MockConfig:
     def decrypt_secret(self, val):
         return val
 
+    def get_capability(self, name):
+        return self.data.get("capabilities", {}).get(name, {})
+
 
 @pytest.fixture
 def mock_agent():
