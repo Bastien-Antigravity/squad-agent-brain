@@ -28,6 +28,7 @@ from src.lifecycle.scaffold_microservice import (
     generate_go_scaffold,
     generate_python_scaffold,
     generate_rust_scaffold,
+    generate_cpp_scaffold,
     generate_common_files,
     generate_bdd_spec,
     create_file,
@@ -99,8 +100,22 @@ class TestScaffoldUnits(unittest.TestCase):
         golangci = self.test_dir / ".golangci.yml"
         self.assertTrue(golangci.exists(), ".golangci.yml must exist")
 
+        contracts_go = self.test_dir / "src/rest/contracts.go"
+        rest_handler_go = self.test_dir / "src/rest/rest_handler.go"
+        rest_test_go = self.test_dir / "src/rest/rest_handler_test.go"
+        mfe_js = self.test_dir / "src/rest/mfe.js"
+        self.assertTrue(contracts_go.exists(), "src/rest/contracts.go must exist")
+        self.assertTrue(rest_handler_go.exists(), "src/rest/rest_handler.go must exist")
+        self.assertTrue(rest_test_go.exists(), "src/rest/rest_handler_test.go must exist")
+        self.assertTrue(mfe_js.exists(), "src/rest/mfe.js must exist")
+        mfe_js_text = mfe_js.read_text(encoding="utf-8")
+        self.assertIn("BastienMFEContracts", mfe_js_text)
+        self.assertIn("openmfe-tabs-bar", mfe_js_text)
+        self.assertNotIn("<style>", mfe_js_text)
+        self.assertIn("/api/v1/contracts", rest_handler_go.read_text(encoding="utf-8"))
+
     def test_generate_rust_scaffold(self):
-        """Verify Rust scaffolding creates Cargo.toml, main.rs, core/mod.rs, and tests."""
+        """Verify Rust scaffolding creates Cargo.toml, main.rs, contracts.rs, core/mod.rs, and tests."""
         name = "test-rust-service"
         port = 9030
         desc = "Test Rust Service Description"
@@ -115,6 +130,10 @@ class TestScaffoldUnits(unittest.TestCase):
         self.assertTrue(main_rs.exists(), "src/main.rs must exist")
         self.assertIn("tokio::main", main_rs.read_text(encoding="utf-8"))
 
+        contracts_rs = self.test_dir / "src/contracts.rs"
+        self.assertTrue(contracts_rs.exists(), "src/contracts.rs must exist")
+        self.assertIn("ExchangeContract", contracts_rs.read_text(encoding="utf-8"))
+
         core_rs = self.test_dir / "src/core/mod.rs"
         self.assertTrue(core_rs.exists(), "src/core/mod.rs must exist")
 
@@ -122,7 +141,7 @@ class TestScaffoldUnits(unittest.TestCase):
         self.assertTrue(test_rs.exists(), "tests/test_basic.rs must exist")
 
     def test_generate_python_scaffold(self):
-        """Verify Python scaffolding creates main.py, controller, interface, model, and valid syntax."""
+        """Verify Python scaffolding creates main.py, controller, rest contracts, mfe.js, and valid syntax."""
         name = "test-py-service"
         port = 9999
         desc = "Test Python Service Description"
@@ -134,6 +153,15 @@ class TestScaffoldUnits(unittest.TestCase):
         main_content = main_py.read_text(encoding="utf-8")
         self.assertIn("microservice_toolbox.config.loader", main_content)
         self.assertIn(f'UniLog(app_name="{name}"', main_content)
+        self.assertIn("build_service_contracts", main_content)
+
+        contracts_py = self.test_dir / "src/rest/contracts.py"
+        rest_py = self.test_dir / "src/rest/rest_handler.py"
+        mfe_js = self.test_dir / "src/rest/mfe.js"
+        self.assertTrue(contracts_py.exists(), "src/rest/contracts.py must exist")
+        self.assertTrue(rest_py.exists(), "src/rest/rest_handler.py must exist")
+        self.assertTrue(mfe_js.exists(), "src/rest/mfe.js must exist")
+        self.assertIn("/api/v1/contracts", rest_py.read_text(encoding="utf-8"))
 
         # Validate python syntax of all generated .py files
         for py_file in self.test_dir.rglob("*.py"):
@@ -146,6 +174,32 @@ class TestScaffoldUnits(unittest.TestCase):
         reqs = self.test_dir / "requirements.txt"
         self.assertTrue(reqs.exists(), "requirements.txt must exist")
         self.assertIn("microservice-toolbox", reqs.read_text(encoding="utf-8"))
+
+    def test_generate_cpp_scaffold_and_common_files(self):
+        """Verify C++ scaffolding creates main.cpp, controller.hpp, contracts.hpp, tests, Makefile, and Dockerfile."""
+        name = "test-cpp-service"
+        port = 9055
+        desc = "Low latency C++ feed handler"
+
+        generate_cpp_scaffold(self.test_dir, name, port, desc, dry_run=False)
+        generate_common_files(self.test_dir, name, lang="cpp", port=port, desc=desc, dry_run=False)
+
+        self.assertTrue((self.test_dir / "src/main.cpp").exists())
+        self.assertTrue((self.test_dir / "src/contracts/contracts.hpp").exists())
+        self.assertTrue((self.test_dir / "src/core/controller.hpp").exists())
+        self.assertTrue((self.test_dir / "tests/test_basic.cpp").exists())
+
+        contracts_hpp = (self.test_dir / "src/contracts/contracts.hpp").read_text(encoding="utf-8")
+        self.assertIn("microservice_toolbox/spec/contracts.hpp", contracts_hpp)
+        self.assertIn("ExchangeContract", contracts_hpp)
+
+        main_cpp = (self.test_dir / "src/main.cpp").read_text(encoding="utf-8")
+        self.assertIn("SpecPublisher::PublishWithLifecycle", main_cpp)
+
+        makefile = (self.test_dir / "Makefile").read_text(encoding="utf-8")
+        self.assertIn("-std=c++17", makefile)
+        dockerfile = (self.test_dir / "Dockerfile").read_text(encoding="utf-8")
+        self.assertIn("FROM alpine:3.20 AS cpp-builder", dockerfile)
 
     def test_generate_common_files_go(self):
         """Verify common files generation for Go includes multi-stage Dockerfile and teleremote-network."""

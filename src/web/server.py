@@ -80,10 +80,11 @@ def register_mfe_with_web_interface(config, logger, sa_ip, sa_port):
     client_ip = sa_ip if sa_ip not in ("0.0.0.0", "", "::") else "127.0.0.1"
     mfe_url = f"http://{client_ip}:{sa_port}/static/mfe.js"
 
-    publish_service_spec(
-        config,
-        logger,
-        "squad_agent",
+    from src.rest.contracts import build_squad_agent_contracts
+    contracts_env = build_squad_agent_contracts(app=app, config=config)
+    contract_list = contracts_env.get("contracts", [])
+
+    pub_kwargs = dict(
         name=service_name,
         tag=service_tag,
         url=mfe_url,
@@ -97,6 +98,16 @@ def register_mfe_with_web_interface(config, logger, sa_ip, sa_port):
         protocol="HTTP/1.1 REST & WebSocket",
         framing=f"Port {sa_port} REST & WS",
         doc_link="obsidian-brain/06-Microservices/Squad-Agent-Hub.md",
+        data_structure={"contracts": contract_list},
+    )
+    if hasattr(ServiceSpec, "__dataclass_fields__") and "contracts" in ServiceSpec.__dataclass_fields__:
+        pub_kwargs["contracts"] = contract_list
+
+    publish_service_spec(
+        config,
+        logger,
+        "squad_agent",
+        **pub_kwargs,
     )
 
 # -----------------------------------------------------------------------------

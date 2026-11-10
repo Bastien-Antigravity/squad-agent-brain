@@ -65,9 +65,104 @@ class SquadAgentMFE extends HTMLElement {
         await Promise.all([
             this.loadStatus(),
             this.loadActiveMode(),
-            this.loadCommands()
+            this.loadCommands(),
+            this.loadContracts()
         ]);
         this.updateUI();
+    }
+
+    async loadContracts() {
+        const contractsApi = typeof window !== 'undefined' ? window.BastienMFEContracts : null;
+        const tabsBar = this.querySelector('#squad-tabs-bar') || this.querySelector('.squad-tabs');
+        const panelsHost = this.querySelector('.squad-container');
+        if (!contractsApi || !tabsBar || !panelsHost) return;
+
+        const origin = (typeof window !== 'undefined' && window.location) ? window.location.origin : '';
+        const envelope = await contractsApi.fetchContracts({
+            primaryUrls: [`${this.baseUrl}/api/v1/contracts`],
+            serviceName: 'squad_agent',
+            origin
+        });
+
+        tabsBar.querySelectorAll('[data-dynamic-contract="true"]').forEach(el => el.remove());
+        panelsHost.querySelectorAll('[data-dynamic-contract="true"]').forEach(el => el.remove());
+
+        const contracts = (envelope && Array.isArray(envelope.contracts)) ? envelope.contracts : [];
+        if (contracts.length === 0) {
+            const btn = document.createElement('button');
+            btn.className = 'squad-tab-btn';
+            btn.setAttribute('data-tab', 'contract-unavailable');
+            btn.setAttribute('data-dynamic-contract', 'true');
+            btn.textContent = '📜 Contracts (Offline)';
+            tabsBar.appendChild(btn);
+
+            const panel = document.createElement('div');
+            panel.id = 'tab-contract-unavailable';
+            panel.className = 'tab-content';
+            panel.setAttribute('data-dynamic-contract', 'true');
+            panel.innerHTML = contractsApi.renderUnavailableNotice('squad_agent', envelope && envelope.source);
+            panelsHost.appendChild(panel);
+            const retryBtn = panel.querySelector('[data-retry-contracts="true"]');
+            if (retryBtn) retryBtn.addEventListener('click', () => this.loadContracts());
+        } else {
+            contracts.forEach((c, idx) => {
+                const tabId = contractsApi.tabIdForContract(c, idx);
+                const btn = document.createElement('button');
+                btn.className = 'squad-tab-btn';
+                btn.setAttribute('data-tab', tabId);
+                btn.setAttribute('data-dynamic-contract', 'true');
+                btn.innerHTML = `<i class="fa ${contractsApi.escapeHTML(c.icon || 'fa-file-code-o')}"></i> ${contractsApi.escapeHTML(c.tabLabel || c.type)}`;
+                tabsBar.appendChild(btn);
+
+                const panel = document.createElement('div');
+                panel.id = `tab-${tabId}`;
+                panel.className = 'tab-content';
+                panel.setAttribute('data-dynamic-contract', 'true');
+                panel.innerHTML = contractsApi.renderContractPanelInner(c, envelope);
+                panelsHost.appendChild(panel);
+            });
+
+            panelsHost.querySelectorAll('[data-copy-contract="true"]').forEach(copyBtn => {
+                copyBtn.addEventListener('click', async () => {
+                    const card = copyBtn.closest('.openmfe-card');
+                    const codeEl = card ? card.querySelector('[data-contract-schema-code="true"]') : null;
+                    if (!codeEl || !navigator.clipboard) return;
+                    await navigator.clipboard.writeText(codeEl.textContent || '');
+                    const prev = copyBtn.innerHTML;
+                    copyBtn.innerHTML = '<i class="fa fa-check"></i> Copied';
+                    setTimeout(() => { copyBtn.innerHTML = prev; }, 1400);
+                });
+            });
+            panelsHost.querySelectorAll('[data-contract-filter="true"]').forEach(inputEl => {
+                inputEl.addEventListener('input', (e) => {
+                    const q = (e.target.value || '').toLowerCase().trim();
+                    const card = inputEl.closest('.openmfe-card');
+                    if (!card) return;
+                    card.querySelectorAll('tbody[data-contract-ops-body="true"] tr').forEach(r => {
+                        const hay = r.getAttribute('data-op-search') || '';
+                        r.style.display = !q || hay.includes(q) ? '' : 'none';
+                    });
+                });
+            });
+        }
+
+        this.bindSquadTabs();
+    }
+
+    bindSquadTabs() {
+        const tabBtns = this.querySelectorAll('.squad-tab-btn');
+        tabBtns.forEach(btn => {
+            if (btn.dataset.squadTabBound === 'true') return;
+            btn.dataset.squadTabBound = 'true';
+            btn.addEventListener('click', () => {
+                this.querySelectorAll('.squad-tab-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                const tab = btn.dataset.tab;
+                this.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+                const target = this.querySelector(`#tab-${tab}`);
+                if (target) target.classList.add('active');
+            });
+        });
     }
 
     async loadStatus() {
@@ -762,7 +857,7 @@ class SquadAgentMFE extends HTMLElement {
                     </div>
                 </div>
 
-                <div class="squad-tabs">
+                <div class="squad-tabs" id="squad-tabs-bar">
                     <button class="squad-tab-btn" data-tab="runner">🎛️ Command Control</button>
                     <button class="squad-tab-btn active" data-tab="chat">💬 Squad Chat</button>
                 </div>
@@ -876,17 +971,7 @@ class SquadAgentMFE extends HTMLElement {
 
     setupEventListeners() {
         // Tab switching
-        const tabBtns = this.querySelectorAll('.squad-tab-btn');
-        tabBtns.forEach(btn => {
-            btn.addEventListener('click', () => {
-                tabBtns.forEach(b => b.classList.remove('active'));
-                btn.classList.add('active');
-
-                const tab = btn.dataset.tab;
-                this.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-                this.querySelector(`#tab-${tab}`).classList.add('active');
-            });
-        });
+        this.bindSquadTabs();
 
         // Clear terminal button
         const clearBtn = this.querySelector('#btn-clear-term');

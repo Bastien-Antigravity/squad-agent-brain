@@ -7,14 +7,15 @@ Scaffolds a new Bastien-Antigravity microservice adhering to canonical repositor
 structure, mandatory root files, Docker standards, and BDD specifications.
 
 DATA FLOW:
-1. Input: Service name, target language (Go/Python/Rust), port, description.
-2. Logic: Generates folder architecture, creates the 12 mandatory root files & folders,
-   establishes standalone.yaml symlink, and generates BDD specs in 02-Business-BDD.
+1. Input: Service name, target language (Go/Python/Rust/C++), port, description.
+2. Logic: Generates folder architecture, OpenMFE Exchange Contracts, creates the
+   12 mandatory root files & folders, establishes standalone.yaml symlink, and
+   generates BDD specs in 02-Business-BDD.
 3. Output: Production-ready microservice directory and ecosystem registration snippets.
 
 KEY PARAMETERS:
 - --name: Name of the microservice (kebab-case, e.g., market-observer).
-- --lang: Target language ('go', 'python', 'rust'). Defaults to 'go'.
+- --lang: Target language ('go', 'python', 'rust', 'cpp'). Defaults to 'go'.
 - --port: Primary service port (e.g., 8090).
 - --dest: Target directory path (defaults to workspace root / <name>).
 - --dry-run: Preview file fabrication without writing to disk.
@@ -70,6 +71,162 @@ def create_symlink(target_path: Path, link_target: str, dry_run: bool = False) -
 
 # -----------------------------------------------------------------------------
 
+def _to_pascal_case(name: str) -> str:
+    """Converts a kebab/snake identifier into PascalCase."""
+    return "".join(part.capitalize() for part in name.replace("_", "-").split("-") if part)
+
+# -----------------------------------------------------------------------------
+
+def generate_openmfe_component_js(name: str, cap_name: str, desc: str) -> str:
+    """Generates a standardized BastienMFEElement Web Component with dynamic Exchange Contract tabs."""
+    class_name = _to_pascal_case(name) + "MFE"
+    tag_name = f"{name}-mfe"
+    tabs_id = f"{cap_name}-tabs-bar"
+    panels_id = f"{cap_name}-panels-host"
+    return f"""// ============================================================================
+// Standardized OpenMFE Web Component for {name}
+// Consumes authoritative Exchange Contracts from GET /api/v1/contracts via BastienMFEContracts.
+// ============================================================================
+
+class {class_name} extends (window.BastienMFEElement || HTMLElement) {{
+    render() {{
+        this.innerHTML = `
+            <div class="openmfe-container">
+                <div class="openmfe-kpi-grid">
+                    <div class="openmfe-kpi-card">
+                        <span class="openmfe-kpi-label"><i class="fa fa-heartbeat"></i> Status</span>
+                        <span class="openmfe-kpi-val" id="{cap_name}-kpi-status">Checking...</span>
+                        <span class="openmfe-kpi-sub">{desc}</span>
+                    </div>
+                    <div class="openmfe-kpi-card">
+                        <span class="openmfe-kpi-label"><i class="fa fa-tag"></i> Version</span>
+                        <span class="openmfe-kpi-val" id="{cap_name}-kpi-version">—</span>
+                        <span class="openmfe-kpi-sub">VERSION.txt</span>
+                    </div>
+                    <div class="openmfe-kpi-card">
+                        <span class="openmfe-kpi-label"><i class="fa fa-exchange"></i> Exchange Contracts</span>
+                        <span class="openmfe-kpi-val" id="{cap_name}-kpi-contracts">—</span>
+                        <span class="openmfe-kpi-sub">Authoritative Service Introspection</span>
+                    </div>
+                </div>
+
+                <div class="openmfe-tabs-bar" id="{tabs_id}" role="tablist">
+                    <button type="button" class="openmfe-tab-btn is-active" data-tab="overview" role="tab">
+                        <i class="fa fa-tachometer"></i> Live Overview
+                    </button>
+                </div>
+
+                <div id="{panels_id}">
+                    <div class="openmfe-panel is-active" id="panel-overview">
+                        <div class="openmfe-card">
+                            <div class="openmfe-card__header">
+                                <h4 class="openmfe-card__title"><i class="fa fa-sliders"></i> {name} Live Operations</h4>
+                                <button type="button" class="openmfe-btn openmfe-btn--sm" id="{cap_name}-btn-refresh">
+                                    <i class="fa fa-refresh"></i> Refresh
+                                </button>
+                            </div>
+                            <div class="openmfe-card__body" id="{cap_name}-overview-body">
+                                <p class="openmfe-text-muted"><i class="fa fa-spinner fa-spin"></i> Loading service telemetry...</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+    }}
+
+    cacheDom() {{
+        this.activeTab = this.activeTab || 'overview';
+        this.dom = {{
+            kpiStatus: this.querySelector('#{cap_name}-kpi-status'),
+            kpiVersion: this.querySelector('#{cap_name}-kpi-version'),
+            kpiContracts: this.querySelector('#{cap_name}-kpi-contracts'),
+            tabsBar: this.querySelector('#{tabs_id}'),
+            panelsHost: this.querySelector('#{panels_id}'),
+            overviewBody: this.querySelector('#{cap_name}-overview-body'),
+            btnRefresh: this.querySelector('#{cap_name}-btn-refresh')
+        }};
+    }}
+
+    bindEvents() {{
+        if (this.dom.btnRefresh) {{
+            this.dom.btnRefresh.addEventListener('click', () => {{
+                this.fetchHealth();
+                this.loadContracts();
+            }});
+        }}
+        if (this.dom.tabsBar) {{
+            this.dom.tabsBar.querySelectorAll('.openmfe-tab-btn').forEach(btn => {{
+                btn.addEventListener('click', () => this.switchTab(btn.getAttribute('data-tab') || 'overview'));
+            }});
+        }}
+    }}
+
+    switchTab(tabId) {{
+        this.activeTab = tabId;
+        if (!this.dom.tabsBar || !this.dom.panelsHost) return;
+        this.dom.tabsBar.querySelectorAll('.openmfe-tab-btn').forEach(btn => {{
+            btn.classList.toggle('is-active', btn.getAttribute('data-tab') === tabId);
+        }});
+        this.dom.panelsHost.querySelectorAll('.openmfe-panel').forEach(panel => {{
+            panel.classList.toggle('is-active', panel.id === `panel-${{tabId}}`);
+        }});
+    }}
+
+    onMount() {{
+        this.fetchHealth();
+        this.loadContracts();
+        this.registerPoll(() => this.fetchHealth(), 5000);
+    }}
+
+    async fetchHealth() {{
+        try {{
+            const data = await this.apiFetch('/api/v1/health');
+            if (this.dom.kpiStatus) this.dom.kpiStatus.textContent = (data && data.status) || 'Healthy';
+            if (this.dom.kpiVersion && data && data.version) this.dom.kpiVersion.textContent = `v${{data.version}}`;
+            if (this.dom.overviewBody) {{
+                this.dom.overviewBody.innerHTML = `<pre class="openmfe-code-preview">${{JSON.stringify(data, null, 2)}}</pre>`;
+            }}
+        }} catch (err) {{
+            if (this.dom.kpiStatus) this.dom.kpiStatus.textContent = 'Offline';
+            if (this.showError && this.dom.overviewBody) {{
+                this.showError(this.dom.overviewBody, `Health check failed: ${{err.message}}`, () => this.fetchHealth());
+            }}
+        }}
+    }}
+
+    async loadContracts() {{
+        const helper = window.BastienMFEContracts;
+        if (!helper || !this.dom.tabsBar || !this.dom.panelsHost) return;
+        const envelope = await helper.fetchContracts({{
+            primaryUrls: [this.apiUrl('/api/v1/contracts')],
+            serviceName: '{cap_name}'
+        }});
+        if (this.dom.kpiContracts) {{
+            const count = Array.isArray(envelope.contracts) ? envelope.contracts.length : 0;
+            this.dom.kpiContracts.textContent = envelope.reliable ? `${{count}} contract(s)` : 'Unavailable';
+        }}
+        helper.mountContractTabs({{
+            rootEl: this,
+            tabsBarEl: this.dom.tabsBar,
+            panelsHostEl: this.dom.panelsHost,
+            envelope,
+            activeTab: this.activeTab,
+            onSwitchTab: (tab) => this.switchTab(tab),
+            onRetry: () => this.loadContracts()
+        }});
+    }}
+}}
+
+if (window.BastienMFEElement && typeof window.BastienMFEElement.register === 'function') {{
+    window.BastienMFEElement.register('{tag_name}', {class_name});
+}} else if (typeof customElements !== 'undefined' && !customElements.get('{tag_name}')) {{
+    customElements.define('{tag_name}', {class_name});
+}}
+"""
+
+# -----------------------------------------------------------------------------
+
 def generate_go_scaffold(target_dir: Path, name: str, port: int, desc: str, dry_run: bool) -> None:
     """Generates the Go microservice skeleton and source files."""
     cap_name = name.replace("-", "_")
@@ -98,9 +255,11 @@ def generate_go_scaffold(target_dir: Path, name: str, port: int, desc: str, dry_
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 
-	"{name}/src/core"
+	"github.com/Bastien-Antigravity/{name}/src/core"
+	"github.com/Bastien-Antigravity/{name}/src/rest"
 	toolbox_bootstrap "github.com/Bastien-Antigravity/microservice-toolbox/go/pkg/bootstrap"
 	toolbox_lifecycle "github.com/Bastien-Antigravity/microservice-toolbox/go/pkg/lifecycle"
 	toolbox_spec "github.com/Bastien-Antigravity/microservice-toolbox/go/pkg/spec"
@@ -122,8 +281,12 @@ func main() {{
 		os.Exit(1)
 	}}
 
-	// 3. Instantiate Core Controller
+	// 3. Instantiate Core Controller & REST/OpenMFE Handler
 	ctrl := core.NewController(appConfig, appLogger)
+	restHandler := rest.NewHandler(appConfig, appLogger, addr)
+	mux := http.NewServeMux()
+	restHandler.RegisterRoutes(mux)
+	httpSrv := &http.Server{{Addr: addr, Handler: rest.CorsMiddleware(mux)}}
 
 	// Dynamic Hot-Reload Listener (Ecosystem Live Configuration Standard)
 	appConfig.OnLiveConfUpdate(func(update map[string]interface{{}}) {{
@@ -134,16 +297,19 @@ func main() {{
 	// 4. Initialize Lifecycle Manager
 	lm := toolbox_lifecycle.NewManagerWithLogger(appLogger)
 
+	lm.Register("StopHTTP", func() error {{
+		return httpSrv.Shutdown(context.Background())
+	}})
 	lm.Register("StopService", func() error {{
 		appLogger.Info("Stopping {name} worker...")
 		return ctrl.Stop(context.Background())
 	}})
 
-	// 5. Register OpenMFE Specification (Non-blocking background loop)
+	// 5. Register OpenMFE Specification + Exchange Contracts (Non-blocking background loop)
 	_ = toolbox_spec.PublishWithLifecycle(appConfig, appLogger, lm, "{cap_name}", toolbox_spec.ServiceSpec{{
 		Name:        "{name}",
 		Tag:         "{name}-mfe",
-		URL:         fmt.Sprintf("http://%s", addr),
+		URL:         fmt.Sprintf("http://%s/static/js/mfe-loader.js", addr),
 		NavTitle:    "{name}",
 		Layer:       "L2",
 		Category:    "Domain Services",
@@ -151,15 +317,21 @@ func main() {{
 		Icon:        "fa-cubes",
 		Description: "{desc}",
 		Protocol:    "HTTP/1.1 REST",
-		Framing:     fmt.Sprintf("Port %d REST", port),
+		Framing:     fmt.Sprintf("Port %d REST", toolbox_spec.ResolveContractPort(addr)),
 		DocLink:     "obsidian-brain/06-Microservices/{name}.md",
+		Contracts:   rest.BuildServiceContracts(addr),
 	}})
 
-	// 6. Start Service Worker Loop
+	// 6. Start Service Worker Loop & HTTP/OpenMFE Server
 	go func() {{
 		if err := ctrl.Start(addr); err != nil {{
 			appLogger.Critical("Service worker failed: %v", err)
 			os.Exit(1)
+		}}
+	}}()
+	go func() {{
+		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {{
+			appLogger.Error("HTTP OpenMFE server error: %v", err)
 		}}
 	}}()
 
@@ -358,7 +530,7 @@ func (m *mockLogger) Warning(format string, args ...interface{{}})  {{}}
 func (m *mockLogger) Error(format string, args ...interface{{}})    {{}}
 func (m *mockLogger) Critical(format string, args ...interface{{}}) {{}}
 func (m *mockLogger) Debug(format string, args ...interface{{}})    {{}}
-func (m *mockLogger) Close() error                                {{ return nil }}
+func (m *mockLogger) Close()                                      {{}}
 
 func TestController_Lifecycle(t *testing.T) {{
 	cfg := &toolbox_config.AppConfig{{Profile: "test"}}
@@ -379,6 +551,223 @@ func TestController_Lifecycle(t *testing.T) {{
 }}
 """
     create_file(target_dir / "src/core/controller_test.go", controller_test_go, dry_run)
+
+    # 8. src/rest/contracts.go
+    contracts_go = f"""package rest
+
+// =============================================================================
+// ESSENTIAL PROCESS:
+// Builds authoritative Exchange Contracts for {name} published via
+// GET /api/v1/contracts and ServiceSpec OpenMFE registration.
+//
+// DATA FLOW:
+// 1. Input: Resolved runtime listen address and configuration metadata.
+// 2. Logic: Constructs typed toolbox_spec.ExchangeContract descriptors.
+// 3. Output: Returns Exchanges & ContractsEnvelope for OpenMFE Live Operations.
+//
+// KEY PARAMETERS:
+// - listenAddr: Dynamic HTTP listen address resolved from AppConfig.
+// =============================================================================
+
+import (
+	toolbox_spec "github.com/Bastien-Antigravity/microservice-toolbox/go/pkg/spec"
+)
+
+// -----------------------------------------------------------------------------
+
+// BuildServiceContracts returns the authoritative ExchangeContract list for {name}.
+func BuildServiceContracts(listenAddr string) []toolbox_spec.ExchangeContract {{
+	addr := toolbox_spec.DisplayAddress(listenAddr)
+	p := toolbox_spec.ResolveContractPort(listenAddr)
+	if p == 0 {{
+		p = {port}
+	}}
+	return []toolbox_spec.ExchangeContract{{
+		{{
+			ID:        "http-rest",
+			Type:      "HTTP/1.1 JSON REST",
+			TabLabel:  "REST API",
+			Icon:      "fa-globe",
+			Direction: "inbound",
+			Transport: "HTTP/1.1 + CORS JSON",
+			Address:   addr,
+			Port:      p,
+			Framing:   "JSON request/response endpoints",
+			Auth:      "Internal mesh CORS",
+			Summary:   "{desc}",
+			Source:    "{name}/src/rest/rest_handler.go",
+			Peers: []toolbox_spec.ContractPeer{{
+				{{Service: "web_interface", Role: "consumer", Description: "Renders OpenMFE shell & Exchange Contract tabs"}},
+			}},
+			Operations: []toolbox_spec.ContractOperation{{
+				{{Name: "Health", Kind: "GET", Target: "/api/v1/health", Output: "status/version JSON", Description: "Service health probe"}},
+				{{Name: "Contracts", Kind: "GET", Target: "/api/v1/contracts", Output: "ContractsEnvelope JSON", Description: "Self-describing exchange contracts"}},
+				{{Name: "MFEBundle", Kind: "GET", Target: "/static/js/mfe-loader.js", Output: "ES6 Web Component JS", Description: "Embedded OpenMFE bundle"}},
+			}},
+			SchemaFormat: "http",
+			Schema:       "GET /api/v1/health\\nGET /api/v1/contracts\\nGET /static/js/mfe-loader.js",
+		}},
+	}}
+}}
+
+// -----------------------------------------------------------------------------
+
+// BuildContractsEnvelope wraps BuildServiceContracts in a versioned ContractsEnvelope.
+func BuildContractsEnvelope(listenAddr, version string) toolbox_spec.ContractsEnvelope {{
+	return toolbox_spec.NewContractsEnvelope(
+		"{cap_name}",
+		version,
+		"{name}/src/rest/contracts.go",
+		BuildServiceContracts(listenAddr),
+	)
+}}
+"""
+    create_file(target_dir / "src/rest/contracts.go", contracts_go, dry_run)
+
+    # 9. src/rest/mfe.js
+    create_file(target_dir / "src/rest/mfe.js", generate_openmfe_component_js(name, cap_name, desc), dry_run)
+
+    # 10. src/rest/rest_handler.go
+    rest_handler_go = f"""package rest
+
+// =============================================================================
+// ESSENTIAL PROCESS:
+// Serves embedded OpenMFE Web Component assets, CORS middleware, health probe,
+// and authoritative GET /api/v1/contracts endpoint for {name}.
+//
+// DATA FLOW:
+// 1. Input: Incoming HTTP requests from web-interface or peer diagnostics.
+// 2. Logic: Applies CORS headers and routes to JSON / embedded JS handlers.
+// 3. Output: HTTP JSON envelopes or embedded mfe.js Web Component script.
+//
+// KEY PARAMETERS:
+// - addr: Runtime listen address for self-describing Exchange Contracts.
+// =============================================================================
+
+import (
+	_ "embed"
+	"encoding/json"
+	"net/http"
+
+	toolbox_config "github.com/Bastien-Antigravity/microservice-toolbox/go/pkg/config"
+	unilog_interfaces "github.com/Bastien-Antigravity/universal-logger/src/interfaces"
+)
+
+//go:embed mfe.js
+var mfeJS string
+
+// -----------------------------------------------------------------------------
+
+// Handler exposes HTTP/REST and OpenMFE endpoints for {name}.
+type Handler struct {{
+	appConfig *toolbox_config.AppConfig
+	logger    unilog_interfaces.Logger
+	addr      string
+}}
+
+// -----------------------------------------------------------------------------
+
+// NewHandler creates a REST Handler for {name}.
+func NewHandler(appConfig *toolbox_config.AppConfig, logger unilog_interfaces.Logger, addr string) *Handler {{
+	return &Handler{{appConfig: appConfig, logger: logger, addr: addr}}
+}}
+
+// -----------------------------------------------------------------------------
+
+// CorsMiddleware attaches CORS headers for cross-origin OpenMFE mounting.
+func CorsMiddleware(next http.Handler) http.Handler {{
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {{
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		if r.Method == http.MethodOptions {{
+			w.WriteHeader(http.StatusOK)
+			return
+		}}
+		next.ServeHTTP(w, r)
+	}})
+}}
+
+// -----------------------------------------------------------------------------
+
+// RegisterRoutes mounts REST and OpenMFE handlers on mux.
+func (h *Handler) RegisterRoutes(mux *http.ServeMux) {{
+	mfeHandler := func(w http.ResponseWriter, r *http.Request) {{
+		w.Header().Set("Content-Type", "application/javascript")
+		_, _ = w.Write([]byte(mfeJS))
+	}}
+	mux.HandleFunc("/static/js/mfe-loader.js", mfeHandler)
+	mux.HandleFunc("/static/mfe.js", mfeHandler)
+	mux.HandleFunc("/api/v1/health", h.handleHealth)
+	mux.HandleFunc("/api/v1/contracts", h.handleContracts)
+}}
+
+// -----------------------------------------------------------------------------
+
+func (h *Handler) version() string {{
+	if h.appConfig != nil {{
+		return h.appConfig.GetVersion()
+	}}
+	return "0.0.1"
+}}
+
+func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {{
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{{}}{{
+		"service": "{cap_name}",
+		"status":  "Healthy",
+		"version": h.version(),
+	}})
+}}
+
+func (h *Handler) handleContracts(w http.ResponseWriter, r *http.Request) {{
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(BuildContractsEnvelope(h.addr, h.version()))
+}}
+"""
+    create_file(target_dir / "src/rest/rest_handler.go", rest_handler_go, dry_run)
+
+    # 11. src/rest/rest_handler_test.go
+    rest_test_go = f"""package rest
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	toolbox_spec "github.com/Bastien-Antigravity/microservice-toolbox/go/pkg/spec"
+)
+
+func TestHandlerContractsAndMFE(t *testing.T) {{
+	h := NewHandler(nil, nil, "127.0.0.1:{port}")
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/contracts", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {{
+		t.Fatalf("expected 200 OK, got %d", rec.Code)
+	}}
+	var env toolbox_spec.ContractsEnvelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {{
+		t.Fatalf("failed to decode envelope: %v", err)
+	}}
+	if !env.Reliable || !env.Exhaustive || len(env.Contracts) == 0 {{
+		t.Fatalf("unexpected envelope: %+v", env)
+	}}
+
+	mfeReq := httptest.NewRequest(http.MethodGet, "/static/js/mfe-loader.js", nil)
+	mfeRec := httptest.NewRecorder()
+	mux.ServeHTTP(mfeRec, mfeReq)
+	if mfeRec.Code != http.StatusOK || !strings.Contains(mfeRec.Body.String(), "BastienMFEContracts") {{
+		t.Fatalf("expected MFE script with BastienMFEContracts, got status=%d", mfeRec.Code)
+	}}
+}}
+"""
+    create_file(target_dir / "src/rest/rest_handler_test.go", rest_test_go, dry_run)
 
 # -----------------------------------------------------------------------------
 
@@ -441,6 +830,7 @@ tokio-test = "0.4"
 // - {cap_name}: Capability section defining service network ports.
 // =============================================================================
 
+mod contracts;
 mod core;
 
 use microservice_toolbox::spec::{{publish_with_lifecycle, ServiceSpec}};
@@ -451,11 +841,33 @@ pub const VERSION: &str = env!("APP_VERSION");
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {{
+    let listen_addr = "127.0.0.1:{port}";
     println!("Starting {name} (version {{}})...", VERSION);
 
-    // 1. Initialize Controller
+    // 1. Initialize Controller & Exchange Contracts
     let ctrl = core::Controller::new("{name}");
-    ctrl.start("127.0.0.1:{port}").await?;
+    ctrl.start(listen_addr).await?;
+    let _contracts = contracts::build_exchange_contracts(listen_addr);
+
+    // 2. Register OpenMFE ServiceSpec (attach contracts when app_config is loaded)
+    let _spec_template = ServiceSpec {{
+        name: "{name}".to_string(),
+        tag: "{name}-mfe".to_string(),
+        url: format!("http://{{}}/static/mfe.js", listen_addr),
+        nav_title: "{name}".to_string(),
+        layer: "L2".to_string(),
+        category: "Domain Services".to_string(),
+        priority: 100,
+        icon: "fa-cubes".to_string(),
+        capability: "{cap_name}".to_string(),
+        description: "{desc}".to_string(),
+        protocol: "SafeSocket TCP / gRPC".to_string(),
+        framing: format!("Port {port}"),
+        doc_link: "obsidian-brain/06-Microservices/{name}.md".to_string(),
+        contracts: _contracts,
+        ..Default::default()
+    }};
+    let _ = publish_with_lifecycle;
 
     // Await termination signal
     tokio::signal::ctrl_c().await?;
@@ -466,6 +878,56 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {{
 }}
 """
     create_file(target_dir / "src/main.rs", main_rs, dry_run)
+
+    # 2b. src/contracts.rs
+    contracts_rs = f"""// =============================================================================
+// ESSENTIAL PROCESS:
+// Builds authoritative Exchange Contracts for {name} using microservice_toolbox::spec.
+//
+// DATA FLOW:
+// Returns Vec<ExchangeContract> published via ServiceSpec and contract queries.
+//
+// KEY PARAMETERS:
+// - listen_addr: Resolved runtime address for the microservice.
+// =============================================================================
+
+use microservice_toolbox::spec::{{ContractOperation, ContractPeer, ExchangeContract}};
+
+// -----------------------------------------------------------------------------
+
+pub fn build_exchange_contracts(listen_addr: &str) -> Vec<ExchangeContract> {{
+    vec![ExchangeContract {{
+        id: "primary-transport".to_string(),
+        r#type: "SafeSocket TCP / gRPC".to_string(),
+        tab_label: "Primary Transport".to_string(),
+        icon: "fa-exchange".to_string(),
+        direction: "inbound".to_string(),
+        transport: "Framed TCP / gRPC".to_string(),
+        address: listen_addr.to_string(),
+        port: {port},
+        framing: "4-byte length prefix".to_string(),
+        auth: "Internal service mesh".to_string(),
+        summary: "{desc}".to_string(),
+        source: "{name}/src/contracts.rs".to_string(),
+        peers: vec![ContractPeer {{
+            service: "web_interface".to_string(),
+            role: "consumer".to_string(),
+            description: "Renders OpenMFE Exchange Contract tabs".to_string(),
+        }}],
+        operations: vec![ContractOperation {{
+            name: "Health".to_string(),
+            kind: "RPC".to_string(),
+            target: "{cap_name}/Health".to_string(),
+            input: "Empty".to_string(),
+            output: "Status".to_string(),
+            description: "Service health probe".to_string(),
+        }}],
+        schema_format: "wire".to_string(),
+        schema: format!("{name} listening on {{}}", listen_addr),
+    }}]
+}}
+"""
+    create_file(target_dir / "src/contracts.rs", contracts_rs, dry_run)
 
     # 3. src/core/mod.rs
     core_rs = f"""// =============================================================================
@@ -518,9 +980,14 @@ impl Controller {{
 // NOTE: Starter integration test for {name}.
 // =============================================================================
 
+#[path = "../src/contracts.rs"]
+mod contracts;
+
 #[tokio::test]
 async fn test_scaffold_initialization() {{
-    assert!(true);
+    let built = contracts::build_exchange_contracts("127.0.0.1:{port}");
+    assert!(!built.is_empty(), "expected at least one ExchangeContract");
+    assert_eq!(built[0].id, "primary-transport");
 }}
 """
     create_file(target_dir / "tests/test_basic.rs", test_rs, dry_run)
@@ -564,12 +1031,19 @@ from microservice_toolbox.logger import UniLog
 from microservice_toolbox import publish_with_lifecycle, ServiceSpec
 from microservice_toolbox.wiretap import configure_from_config
 from src.core.controller import Controller
+from src.rest.contracts import build_service_contracts
 
 def main():
     # Load layered configuration (CLI > local YAML > native.yaml > ENV)
     config = load_config("standalone")
     logger = UniLog(app_name="{name}", config_profile="standalone")
     configure_from_config("{name}", config)
+
+    # Resolve capability listen address (Fallback gracefully for local sandbox runs)
+    try:
+        listen_addr = config.get_listen_addr("{cap_name}") or ""
+    except Exception:
+        listen_addr = ""
 
     # Instantiate and start the example worker controller
     controller = Controller(config=config, logger=logger)
@@ -578,7 +1052,9 @@ def main():
     if hasattr(config, "on_live_conf_update"):
         config.on_live_conf_update(lambda update: controller.on_live_config_update(update))
 
-    # Register OpenMFE Specification (non-blocking background thread)
+    contract_env = build_service_contracts(config=config)
+
+    # Register OpenMFE Specification + Exchange Contracts (non-blocking background thread)
     publish_with_lifecycle(
         config,
         logger,
@@ -587,7 +1063,7 @@ def main():
         spec=ServiceSpec(
             name="{name}",
             tag="{name}-mfe",
-            url=f"http://127.0.0.1:{port}",
+            url=f"http://{{listen_addr or '127.0.0.1'}}/static/mfe.js",
             nav_title="{name}",
             layer="L2",
             category="Domain Services",
@@ -597,6 +1073,7 @@ def main():
             protocol="HTTP/1.1 REST",
             framing=f"Port {port} REST",
             doc_link="obsidian-brain/06-Microservices/{name}.md",
+            contracts=contract_env.get("contracts", []),
         ),
     )
 
@@ -746,23 +1223,436 @@ class StatusPayload:
     # 5. requirements.txt
     reqs_txt = """microservice-toolbox
 universal-logger
+fastapi
+uvicorn
 pytest
 """
     create_file(target_dir / "requirements.txt", reqs_txt, dry_run)
 
-    # 6. tests/test_basic.py
-    test_py = f"""# =============================================================================
-# [STARTER TEMPLATE / DUMMY TEST SUITE]
-# NOTE: This is a dummy test suite to verify pytest test runner integration.
-# Developers & AI Agents: Replace these placeholder assertions with rigorous unit
-# and integration tests for {name}.
+    # 6. src/rest/contracts.py, mfe.js, rest_handler.py
+    contracts_py = f"""#!/usr/bin/env python
+# coding:utf-8
+
+\"\"\"
+ESSENTIAL PROCESS:
+Builds authoritative Exchange Contracts for {name} via microservice_toolbox.contracts.
+
+DATA FLOW:
+1. Input: Optional FastAPI app and AppConfig instance.
+2. Logic: Introspects live FastAPI routes into ContractOperation descriptors.
+3. Output: Returns ContractsEnvelope dict for GET /api/v1/contracts & ServiceSpec.
+
+KEY PARAMETERS:
+- app: Optional FastAPI instance whose routes are introspected live.
+- config: Optional AppConfig providing runtime addresses and semver.
+\"\"\"
+
+from typing import Any, Dict
+
+from microservice_toolbox.contracts import (
+    ContractOperation,
+    ContractPeer,
+    ExchangeContract,
+    build_contracts_envelope,
+    display_address,
+    extract_fastapi_operations,
+    resolve_contract_port,
+)
+
+# -----------------------------------------------------------------------------
+
+def build_service_contracts(app: Any = None, config: Any = None, version: str = "") -> Dict[str, Any]:
+    \"\"\"Builds the authoritative Exchange Contracts envelope for {name}.\"\"\"
+    addr = ""
+    if config is not None and hasattr(config, "get_listen_addr"):
+        try:
+            addr = config.get_listen_addr("{cap_name}") or ""
+        except Exception:
+            addr = ""
+    ver = version or (config.get_version() if hasattr(config, "get_version") else "0.0.1")
+
+    rest_ops = extract_fastapi_operations(app)
+    if not rest_ops:
+        rest_ops = [
+            ContractOperation(name="health", kind="GET", target="/api/v1/health", output="status/version JSON", description="Service health check"),
+            ContractOperation(name="contracts", kind="GET", target="/api/v1/contracts", output="ContractsEnvelope JSON", description="Authoritative exchange contracts"),
+            ContractOperation(name="mfe_bundle", kind="GET", target="/static/mfe.js", output="ES6 Web Component JS", description="Embedded OpenMFE bundle"),
+        ]
+
+    contracts = [
+        ExchangeContract(
+            id="http-rest",
+            type="HTTP/1.1 JSON REST",
+            tab_label="REST API",
+            icon="fa-globe",
+            direction="inbound",
+            transport="HTTP/1.1 + FastAPI JSON",
+            address=display_address(addr),
+            port=resolve_contract_port(addr) or {port},
+            framing="JSON request/response endpoints",
+            auth="Internal mesh CORS",
+            summary="{desc}",
+            source="{name}/src/rest/rest_handler.py",
+            peers=[
+                ContractPeer(service="web_interface", role="consumer", description="Hosts OpenMFE shell & Exchange Contract tabs"),
+            ],
+            operations=rest_ops,
+            schema_format="http",
+            schema="\\n".join(f"{{op.kind:<6}} {{op.target}}" for op in rest_ops),
+        )
+    ]
+
+    return build_contracts_envelope(
+        "{cap_name}",
+        ver,
+        "{name}/src/rest/contracts.py",
+        contracts,
+    )
+"""
+    create_file(target_dir / "src/rest/contracts.py", contracts_py, dry_run)
+    create_file(target_dir / "src/rest/mfe.js", generate_openmfe_component_js(name, cap_name, desc), dry_run)
+
+    rest_handler_py = f"""#!/usr/bin/env python
+# coding:utf-8
+
+\"\"\"
+ESSENTIAL PROCESS:
+Registers FastAPI HTTP/REST, /api/v1/contracts, and OpenMFE static JS routes for {name}.
+
+DATA FLOW:
+1. Input: FastAPI app instance.
+2. Logic: Binds CORS middleware and health/contracts/mfe.js handlers.
+3. Output: Live REST and OpenMFE HTTP routes.
+
+KEY PARAMETERS:
+- app: FastAPI application instance.
+\"\"\"
+
+from pathlib import Path
+
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, Response
+
+from src.rest.contracts import build_service_contracts
+
+# -----------------------------------------------------------------------------
+
+_MFE_JS_PATH = Path(__file__).resolve().with_name("mfe.js")
+
+def register_routes(app, config=None) -> None:
+    \"\"\"Registers OpenMFE static asset, health, and Exchange Contract routes on FastAPI.\"\"\"
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    @app.get("/api/v1/health")
+    async def health():
+        ver = config.get_version() if hasattr(config, "get_version") else "0.0.1"
+        return {{"service": "{cap_name}", "status": "Healthy", "version": ver}}
+
+    @app.get("/api/v1/contracts")
+    async def get_contracts():
+        return JSONResponse(content=build_service_contracts(app=app, config=config))
+
+    def _serve_mfe():
+        content = _MFE_JS_PATH.read_text(encoding="utf-8") if _MFE_JS_PATH.is_file() else ""
+        return Response(content=content, media_type="application/javascript")
+
+    app.add_api_route("/static/mfe.js", _serve_mfe, methods=["GET"])
+    app.add_api_route("/static/js/mfe-loader.js", _serve_mfe, methods=["GET"])
+"""
+    create_file(target_dir / "src/rest/rest_handler.py", rest_handler_py, dry_run)
+
+    # 7. tests/test_basic.py
+    test_py = f"""#!/usr/bin/env python
+# coding:utf-8
+
+# =============================================================================
+# [STARTER TEMPLATE / TEST SUITE]
+# Verifies starter initialization and Exchange Contracts payload generation for {name}.
 # =============================================================================
 
+import sys
+from pathlib import Path
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from src.rest.contracts import build_service_contracts
+
+
 def test_scaffold_initialization():
-    \"\"\"Verify that basic pytest execution passes in the scaffolded environment.\"\"\"
-    assert True
+    \"\"\"Verify Exchange Contracts envelope builds cleanly for {name}.\"\"\"
+    envelope = build_service_contracts()
+    assert envelope["service"] == "{cap_name}"
+    assert envelope["reliable"] is True
+    assert envelope["exhaustive"] is True
+    assert len(envelope["contracts"]) >= 1
 """
     create_file(target_dir / "tests/test_basic.py", test_py, dry_run)
+
+# -----------------------------------------------------------------------------
+
+def generate_cpp_scaffold(target_dir: Path, name: str, port: int, desc: str, dry_run: bool) -> None:
+    """Generates a C++17 microservice skeleton wired to microservice-toolbox/cpp spec & contracts."""
+    cap_name = name.replace("-", "_")
+
+    # 1. src/contracts/contracts.hpp
+    contracts_hpp = f"""#ifndef {cap_name.upper()}_CONTRACTS_HPP
+#define {cap_name.upper()}_CONTRACTS_HPP
+
+/*
+ * ESSENTIAL PROCESS:
+ * Builds authoritative C++ Exchange Contracts for {name} using
+ * microservice_toolbox::spec::ExchangeContract and ContractsEnvelope.
+ *
+ * DATA FLOW:
+ * 1. Input: Dynamic listen address and runtime semver.
+ * 2. Logic: Normalizes endpoints and constructs typed contract descriptors.
+ * 3. Output: Serializes ContractsEnvelope JSON and feeds ServiceSpec registration.
+ *
+ * KEY PARAMETERS:
+ * - listenAddr: Resolved host:port address from AppConfig::GetListenAddr().
+ */
+
+#include <string>
+#include <vector>
+
+#include "microservice_toolbox/spec/contracts.hpp"
+
+namespace {cap_name} {{
+namespace contracts {{
+
+// -----------------------------------------------------------------------------
+
+inline std::vector<microservice_toolbox::spec::ExchangeContract> BuildServiceContracts(const std::string& listenAddr) {{
+    using namespace microservice_toolbox::spec;
+    ExchangeContract primary;
+    primary.id = "tcp-wire";
+    primary.type = "Framed TCP / C++ Wire";
+    primary.tabLabel = "Wire Protocol";
+    primary.icon = "fa-exchange";
+    primary.direction = "inbound";
+    primary.transport = "SafeSocket TCP / Custom Binary";
+    primary.address = DisplayAddress(listenAddr);
+    int resolvedPort = ResolveContractPort(listenAddr);
+    primary.port = resolvedPort > 0 ? resolvedPort : {port};
+    primary.framing = "4-byte length prefix";
+    primary.auth = "Internal service mesh";
+    primary.summary = "{desc}";
+    primary.source = "{name}/src/contracts/contracts.hpp";
+    primary.peers = {{
+        ContractPeer{{"web_interface", "consumer", "Displays Exchange Contract tabs"}}
+    }};
+    primary.operations = {{
+        ContractOperation{{"Health", "FRAME", "{cap_name}/health", "Ping", "Pong", "Low-latency liveness probe"}},
+        ContractOperation{{"Status", "GET", "/api/v1/contracts", "", "ContractsEnvelope JSON", "Authoritative exchange contracts"}}
+    }};
+    primary.schemaFormat = "wire";
+    primary.schema = "{name} listening on " + primary.address;
+    return {{primary}};
+}}
+
+// -----------------------------------------------------------------------------
+
+inline microservice_toolbox::spec::ContractsEnvelope BuildContractsEnvelope(
+    const std::string& listenAddr,
+    const std::string& version) {{
+    return microservice_toolbox::spec::NewContractsEnvelope(
+        "{cap_name}",
+        version,
+        "{name}/src/contracts/contracts.hpp",
+        BuildServiceContracts(listen_addr_fallback(listenAddr)));
+}}
+
+}} // namespace contracts
+}} // namespace {cap_name}
+
+#endif
+"""
+    # Clean typo 'listen_addr_fallback(listenAddr)' -> just 'listenAddr' cleanly:
+    contracts_hpp = contracts_hpp.replace("listen_addr_fallback(listenAddr)", "listenAddr")
+    create_file(target_dir / "src/contracts/contracts.hpp", contracts_hpp, dry_run)
+
+    # 2. src/core/controller.hpp
+    controller_hpp = f"""#ifndef {cap_name.upper()}_CONTROLLER_HPP
+#define {cap_name.upper()}_CONTROLLER_HPP
+
+/*
+ * ESSENTIAL PROCESS:
+ * Central C++ domain controller managing lifecycle and live config updates for {name}.
+ *
+ * DATA FLOW:
+ * 1. Input: AppConfig pointer and shared Logger instance.
+ * 2. Logic: Resolves dynamic semver and applies live hot-reload configuration updates.
+ * 3. Output: Controlled start/stop execution and structured telemetry logs.
+ *
+ * KEY PARAMETERS:
+ * - appConfig: Resolved microservice_toolbox::config::AppConfig instance.
+ */
+
+#include <memory>
+#include <string>
+
+#include "microservice_toolbox/config/AppConfig.hpp"
+#include "microservice_toolbox/utils/Logger.hpp"
+#include "microservice_toolbox/version/Version.hpp"
+
+namespace {cap_name} {{
+namespace core {{
+
+// -----------------------------------------------------------------------------
+
+class Controller {{
+public:
+    Controller(std::shared_ptr<microservice_toolbox::config::AppConfig> cfg,
+               std::shared_ptr<microservice_toolbox::utils::Logger> logger)
+        : config_(std::move(cfg)), logger_(std::move(logger)) {{}}
+
+    std::string GetVersion() const {{
+        if (config_) {{
+            return config_->GetVersion();
+        }}
+        return microservice_toolbox::version::GetVersion();
+    }}
+
+    void Start(const std::string& addr) {{
+        if (logger_) {{
+            logger_->Info("{name} (version " + GetVersion() + ") controller running on " + addr);
+        }}
+    }}
+
+    void Stop() {{
+        if (logger_) {{
+            logger_->Info("{name} controller shutdown complete");
+        }}
+    }}
+
+    void OnLiveConfigUpdate(const std::string&) {{
+        if (logger_) {{
+            logger_->Info("{name} controller: applying dynamic configuration update without restart");
+        }}
+    }}
+
+private:
+    std::shared_ptr<microservice_toolbox::config::AppConfig> config_;
+    std::shared_ptr<microservice_toolbox::utils::Logger> logger_;
+}};
+
+}} // namespace core
+}} // namespace {cap_name}
+
+#endif
+"""
+    create_file(target_dir / "src/core/controller.hpp", controller_hpp, dry_run)
+
+    # 3. src/main.cpp
+    main_cpp = f"""/*
+ * ESSENTIAL PROCESS:
+ * Entry point for the C++17 {name} microservice. Loads AppConfig, initializes
+ * LifecycleManager, registers ServiceSpec + Exchange Contracts with web-interface,
+ * and starts the domain controller.
+ *
+ * DATA FLOW:
+ * 1. Input: Standalone/fleet configuration via microservice-toolbox AppConfig.
+ * 2. Logic: Publishes ServiceSpec and ExchangeContracts on background lifecycle thread.
+ * 3. Output: Runs core controller until SIGINT/SIGTERM signal shutdown.
+ *
+ * KEY PARAMETERS:
+ * - {cap_name}: Capability block defining listen address and endpoints.
+ */
+
+#include <iostream>
+#include <memory>
+#include <string>
+
+#include "microservice_toolbox/config/AppConfig.hpp"
+#include "microservice_toolbox/lifecycle/LifecycleManager.hpp"
+#include "microservice_toolbox/spec/spec.hpp"
+#include "contracts/contracts.hpp"
+#include "core/controller.hpp"
+
+// -----------------------------------------------------------------------------
+
+int main(int argc, char** argv) {{
+    std::shared_ptr<microservice_toolbox::config::AppConfig> appConfig =
+        microservice_toolbox::config::LoadConfig("standalone", argc, argv);
+    auto appLogger = appConfig ? appConfig->GetLogger() : nullptr;
+
+    std::string addr = appConfig->GetListenAddr("{cap_name}");
+    if (addr.empty()) {{
+        if (appLogger) {{
+            appLogger->Critical("Failed to resolve dynamic listen address for '{cap_name}'");
+        }}
+        return 1;
+    }}
+
+    {cap_name}::core::Controller ctrl(appConfig, appLogger);
+    microservice_toolbox::lifecycle::LifecycleManager lm;
+    lm.Register("StopService", [&ctrl]() {{ ctrl.Stop(); }});
+
+    microservice_toolbox::spec::ServiceSpec spec;
+    spec.name = "{name}";
+    spec.tag = "{name}-mfe";
+    spec.url = "http://" + addr;
+    spec.navTitle = "{name}";
+    spec.layer = "L2";
+    spec.category = "Domain Services";
+    spec.priority = 100;
+    spec.icon = "fa-cubes";
+    spec.description = "{desc}";
+    spec.protocol = "TCP Wire";
+    spec.framing = "Port {port}";
+    spec.docLink = "obsidian-brain/06-Microservices/{name}.md";
+    spec.contracts = {cap_name}::contracts::BuildServiceContracts(addr);
+
+    microservice_toolbox::spec::SpecPublisher::PublishWithLifecycle(
+        *appConfig, appLogger, &lm, "{cap_name}", spec);
+
+    ctrl.Start(addr);
+    lm.Wait();
+    return 0;
+}}
+"""
+    create_file(target_dir / "src/main.cpp", main_cpp, dry_run)
+
+    # 4. tests/test_basic.cpp
+    test_cpp = f"""/*
+ * ESSENTIAL PROCESS:
+ * Unit tests verifying C++ Exchange Contract generation and ServiceSpec serialization for {name}.
+ */
+
+#include <cassert>
+#include <iostream>
+
+#include "microservice_toolbox/spec/spec.hpp"
+#include "../src/contracts/contracts.hpp"
+
+int main() {{
+    auto env = {cap_name}::contracts::BuildContractsEnvelope("127.0.0.1:{port}", "0.0.1");
+    auto j = env.ToJson();
+    assert(j["service"] == "{cap_name}");
+    assert(j["reliable"] == true);
+    assert(j["exhaustive"] == true);
+    assert(j["contracts"].size() == 1);
+
+    microservice_toolbox::spec::ServiceSpec spec;
+    spec.name = "{name}";
+    spec.tag = "{name}-mfe";
+    spec.contracts = {cap_name}::contracts::BuildServiceContracts("127.0.0.1:{port}");
+    auto specJson = spec.ToJson();
+    assert(specJson["contracts"].size() == 1);
+
+    std::cout << "C++ scaffold tests passed for {name}." << std::endl;
+    return 0;
+}}
+"""
+    create_file(target_dir / "tests/test_basic.cpp", test_cpp, dry_run)
 
 # -----------------------------------------------------------------------------
 
@@ -829,6 +1719,38 @@ WORKDIR /{name}
 
 COPY --from=builder /workspace/{name}/target/release/{name} /{name}/{name}
 
+ENTRYPOINT ["/{name}/{name}"]
+"""
+    elif lang == "cpp":
+        dockerfile = f"""# === BUILD STAGE (Compile CGO shared libraries + C++ binary) ===
+FROM golang:1.25-alpine AS go-builder
+
+WORKDIR /workspace
+RUN apk add --no-cache git gcc musl-dev libc-dev
+RUN git clone --depth 1 -b develop https://github.com/Bastien-Antigravity/microservice-toolbox.git /workspace/microservice-toolbox && \\
+    git clone --depth 1 -b develop https://github.com/Bastien-Antigravity/distributed-config.git /workspace/distributed-config && \\
+    git clone --depth 1 -b develop https://github.com/Bastien-Antigravity/universal-logger.git /workspace/universal-logger && \\
+    cd /workspace/distributed-config && go build -buildmode=c-shared -o /workspace/libdistconf.so ./cmd/libdistconf && \\
+    cd /workspace/universal-logger && go build -buildmode=c-shared -o /workspace/libunilog.so ./src/cgo_bridge
+
+FROM alpine:3.20 AS cpp-builder
+RUN apk add --no-cache g++ make
+WORKDIR /workspace
+COPY --from=go-builder /workspace/microservice-toolbox /workspace/microservice-toolbox
+COPY --from=go-builder /workspace/libdistconf.so /usr/local/lib/libdistconf.so
+COPY --from=go-builder /workspace/distributed-config/distconf/libdistconf /workspace/distributed-config/distconf/libdistconf
+WORKDIR /workspace/{name}
+COPY . .
+RUN g++ -std=c++17 -O2 -Wall -Wextra -Isrc -I/workspace/microservice-toolbox/cpp/include -I/workspace/distributed-config/distconf/libdistconf src/main.cpp -o /{name}-bin -L/usr/local/lib -ldistconf
+
+# === RUNTIME STAGE ===
+FROM alpine:3.20
+LABEL org.opencontainers.image.source="https://github.com/Bastien-Antigravity/{name}"
+RUN apk add --no-cache ca-certificates tzdata libstdc++
+WORKDIR /{name}
+COPY --from=go-builder /workspace/libdistconf.so /usr/local/lib/libdistconf.so
+COPY --from=go-builder /workspace/libunilog.so /usr/local/lib/libunilog.so
+COPY --from=cpp-builder /{name}-bin /{name}/{name}
 ENTRYPOINT ["/{name}/{name}"]
 """
     else:
@@ -899,9 +1821,22 @@ networks:
     create_file(target_dir / "docker-compose.yml", compose_yml, dry_run)
 
     # 3. AGENTS.md
-    test_cmd = "go test -v ./..." if lang == "go" else ("pytest" if lang == "python" else "cargo test")
-    build_cmd = f"go build -o bin/{name} ./cmd/{name}" if lang == "go" else ("pip install -r requirements.txt" if lang == "python" else "cargo build")
-    run_cmd = f"./bin/{name}" if lang == "go" else ("python3 main.py" if lang == "python" else "./target/debug/" + name)
+    if lang == "go":
+        test_cmd = "go test -v ./..."
+        build_cmd = f"go build -o bin/{name} ./cmd/{name}"
+        run_cmd = f"./bin/{name}"
+    elif lang == "python":
+        test_cmd = "pytest"
+        build_cmd = "pip install -r requirements.txt"
+        run_cmd = "python3 main.py"
+    elif lang == "cpp":
+        test_cmd = "make test"
+        build_cmd = "make build"
+        run_cmd = f"./bin/{name}"
+    else:
+        test_cmd = "cargo test"
+        build_cmd = "cargo build"
+        run_cmd = f"./target/debug/{name}"
 
     agents_md = f"""# AGENTS.md: {name}
 
@@ -925,13 +1860,15 @@ networks:
 ```
 
 ## AI Development & Integration Guidelines
-1. **Bootstrap Ritual**: Initialized using `toolbox_bootstrap.BootstrapService("{name}")`. Never bypass the toolbox bootstrapper.
+1. **Bootstrap Ritual**: Initialized using `toolbox_bootstrap.BootstrapService("{name}")` (Go), `load_config` / `bootstrap_microservice` (Python/Rust), or `LoadConfig` (C++). Never bypass the toolbox bootstrapper.
 2. **Dynamic Port Resolution**: Always use `appConfig.GetListenAddr("{cap_name}")` or `GetCapability("{cap_name}", &cap)`. NEVER hardcode IP or port numbers.
 3. **Encrypted Secrets**: Sensitive values stored in configurations must remain encrypted as `ENC(...)` tokens until runtime decryption via `appConfig.DecryptSecret()`.
 4. **Header Ritual**: All source files MUST begin with the standard Triple-Block header (`ESSENTIAL PROCESS`, `DATA FLOW`, `KEY PARAMETERS`).
 5. **Section Dividers**: Use appropriate dividers (`// -----------------------------------------------------------------------------`) between exported methods and major sections.
 6. **Dynamic Fleet Hot-Reloading**: Microservices must register `OnLiveConfUpdate` / `on_live_conf_update` to dynamically reload configuration changes without restarting the daemon process.
-7. **Service Specification & OpenMFE Registration Standard**: All microservices must register their declarative specification using `spec.PublishWithLifecycle` (Go), `spec.publish_with_lifecycle` (Python), or `spec::publish_with_lifecycle` (Rust) during bootstrap with infinite resilience (`MaxRetries: -1`) and non-blocking execution. The microservice authoritatively provides its metadata (`Name`, `Tag`, `URL`, `Layer`, `Category`, `Description`, `Protocol`, and directly formatted `Framing`).
+7. **Service Specification, OpenMFE & Authoritative Exchange Contracts Standard**:
+   - Register declarative `ServiceSpec` + `Contracts` (`ExchangeContract[]`) during bootstrap using `spec.PublishWithLifecycle` (Go), `spec.publish_with_lifecycle` (Python), `spec::publish_with_lifecycle` (Rust), or `SpecPublisher::PublishWithLifecycle` (C++, with `contracts.hpp` / `contracts.h` for C ABI) with infinite resilience (`MaxRetries: -1`) and non-blocking execution.
+   - HTTP services MUST expose `GET /api/v1/contracts` (`ContractsEnvelope`) built from live runtime routes and embedded schemas, and OpenMFE components (`mfe.js`) MUST use `BastienMFEElement` + `window.BastienMFEContracts` inside `.openmfe-tabs-bar` (`div[3]`) without fabricating mock schemas or using brittle `?v=` CSS query strings.
 8. **Real-Time Transport WireTap & Dynamic Topology (`> L3` Ready)**: `BootstrapService` (Go) and `init_microservice` / `configure_from_config` (Python) automatically bind the lock-free WireTap transport telemetry engine (`microservice-toolbox/go/pkg/wiretap`, `microservice_toolbox/wiretap.py`) to `safe-socket`, gRPC (`teleremote`, `notification`, `network`), and NATS (`messaging`). Combined with `spec.PublishWithLifecycle`, this microservice (`L2`, `L3`, or `> L3` / `L4+`) and its live edges and segregated channels are synthesized automatically on `web-interface` (`src/router/mesh_topology.go`) with zero hardcoded topology changes in `web-interface`.
 """
     create_file(target_dir / "AGENTS.md", agents_md, dry_run)
@@ -1095,6 +2032,40 @@ clean:
 \tcargo clean
 """
         create_file(target_dir / "Makefile", makefile, dry_run)
+    elif lang == "cpp":
+        makefile = f"""VERSION ?= $(shell cat VERSION.txt 2>/dev/null || echo "0.0.1")
+CXX ?= g++
+DISTCONF_DIR ?= ../distributed-config/distconf/libdistconf
+TOOLBOX_CPP_INC ?= ../microservice-toolbox/cpp/include
+CXXFLAGS ?= -std=c++17 -Wall -Wextra -Isrc -I$(TOOLBOX_CPP_INC) -I$(DISTCONF_DIR) -DAPP_VERSION=\\"$(VERSION)\\"
+LDFLAGS ?= -L$(DISTCONF_DIR) -ldistconf -Wl,-rpath,$(DISTCONF_DIR)
+
+.PHONY: all build test version clean run
+
+all: build
+
+version:
+\t@echo $(VERSION)
+
+build:
+\t@echo "Building {name} (version $(VERSION))..."
+\t@mkdir -p bin
+\t$(CXX) $(CXXFLAGS) src/main.cpp -o bin/{name} $(LDFLAGS)
+
+test:
+\t@echo "Running C++ tests for {name} (version $(VERSION))..."
+\t@mkdir -p bin
+\t$(CXX) $(CXXFLAGS) tests/test_basic.cpp -o bin/test_basic $(LDFLAGS)
+\tDYLD_LIBRARY_PATH="$(DISTCONF_DIR):$$DYLD_LIBRARY_PATH" LD_LIBRARY_PATH="$(DISTCONF_DIR):$$LD_LIBRARY_PATH" ./bin/test_basic
+
+run:
+\tDYLD_LIBRARY_PATH="$(DISTCONF_DIR):$$DYLD_LIBRARY_PATH" ./bin/{name}
+
+clean:
+\t@echo "Cleaning build artifacts..."
+\t@rm -rf bin/ build/
+"""
+        create_file(target_dir / "Makefile", makefile, dry_run)
 
     # 7. quick-overview/ human onboarding
     qo_dir = target_dir / "quick-overview"
@@ -1222,7 +2193,7 @@ tags:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Fabricate a standard Bastien-Antigravity microservice skeleton.")
     parser.add_argument("--name", "-n", help="Microservice name (e.g. market-observer)")
-    parser.add_argument("--lang", "-l", choices=["go", "python", "rust"], default="go", help="Language (go, python, rust)")
+    parser.add_argument("--lang", "-l", choices=["go", "python", "rust", "cpp"], default="go", help="Language (go, python, rust, cpp)")
     parser.add_argument("--port", "-p", type=int, default=8090, help="Default capability listen port")
     parser.add_argument("--desc", "-d", default="Ecosystem microservice component", help="Short mission description")
     parser.add_argument("--dest", help="Destination path (defaults to ../<name>)")
@@ -1266,6 +2237,8 @@ def main() -> None:
         generate_python_scaffold(target_dir, name, port, desc, dry_run)
     elif lang == "rust":
         generate_rust_scaffold(target_dir, name, port, desc, dry_run)
+    elif lang == "cpp":
+        generate_cpp_scaffold(target_dir, name, port, desc, dry_run)
 
     # 2. Generate common ecosystem files
     generate_common_files(target_dir, name, lang, port, desc, dry_run)
@@ -1320,8 +2293,18 @@ def main() -> None:
     print("4. [watchdog-agent/src/config/heal.go] Add symlink target:")
     print(f'       filepath.Join(rootDir, "{name}", "standalone.yaml"),\n')
     print("5. [docker-deployment/scripts/common.py] Add to SERVICES_SPEC (for fleet.sh compile/status):")
-    bin_rel = f"{name}/bin/{name}" if lang == "go" else (f"{name}/target/debug/{name}" if lang == "rust" else "")
-    build_c = f'["go", "build", "-o", "bin/{name}" + EXE_EXT, "./cmd/{name}"]' if lang == "go" else ('["cargo", "build"]' if lang == "rust" else "None")
+    if lang == "go":
+        bin_rel = f"{name}/bin/{name}"
+        build_c = f'["go", "build", "-o", "bin/{name}" + EXE_EXT, "./cmd/{name}"]'
+    elif lang == "rust":
+        bin_rel = f"{name}/target/debug/{name}"
+        build_c = '["cargo", "build"]'
+    elif lang == "cpp":
+        bin_rel = f"{name}/bin/{name}"
+        build_c = '["make", "build"]'
+    else:
+        bin_rel = ""
+        build_c = "None"
     print(f"""       {{
          "name": "{name}",
          "proc_pattern": "{name}",
@@ -1354,7 +2337,8 @@ def main() -> None:
        (Or run: python3 obsidian-brain/08-Squad-Agent/main.py build-inventory)
 """)
     print("8. [UI & Remote Integration] (Optional / If Interactive):")
-    print("   - OpenMFE & Service Spec: Auto-registers with web-interface via spec.PublishWithLifecycle / spec.publish_with_lifecycle")
+    print("   - OpenMFE & Service Spec: Auto-registers with web-interface via spec.PublishWithLifecycle (Go) / spec.publish_with_lifecycle (Python) / spec::publish_with_lifecycle (Rust) / SpecPublisher::PublishWithLifecycle (C++)")
+    print("   - Exchange Contracts: Expose GET /api/v1/contracts & populate ServiceSpec.Contracts (Go/Python/Rust/C++) -> rendered via BastienMFEContracts in .openmfe-tabs-bar")
     print("   - Tele-Remote: Push dynamic UI menu over gRPC (Port 1863)")
     print("=" * 80 + "\n")
 

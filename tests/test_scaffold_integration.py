@@ -71,6 +71,9 @@ class TestScaffoldIntegration(unittest.TestCase):
             svc_dir / "src/core/controller.go",
             svc_dir / "src/interfaces/interfaces.go",
             svc_dir / "src/models/models.go",
+            svc_dir / "src/rest/contracts.go",
+            svc_dir / "src/rest/rest_handler.go",
+            svc_dir / "src/rest/mfe.js",
             svc_dir / "quick-overview/Architecture-Overview.md",
             svc_dir / "quick-overview/Features-Behavior.md",
             svc_dir / "quick-overview/Testing-Playbook.md",
@@ -133,6 +136,9 @@ class TestScaffoldIntegration(unittest.TestCase):
             svc_dir / "src/core/controller.py",
             svc_dir / "src/interfaces/service.py",
             svc_dir / "src/models/status.py",
+            svc_dir / "src/rest/contracts.py",
+            svc_dir / "src/rest/rest_handler.py",
+            svc_dir / "src/rest/mfe.js",
             svc_dir / "tests/test_basic.py",
         ]
         for f in expected_files:

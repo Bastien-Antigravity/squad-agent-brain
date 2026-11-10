@@ -256,7 +256,7 @@ class CommandController(Command):
             "validate-compliance": "Mechanically verifies source code invariants including shebangs, Triple-Block headers, dividers, ports, and mock pollution.",
             "format-compliance": "AST-based code refactorer and compliance auto-repair tool for Python source files.",
             "build-inventory": "Recursively scans the workspace to build and update the fleet-wide inventory.json.",
-            "scaffold-microservice": "Scaffolds standard-compliant Go, Rust, or Python microservices with complete mandatory layout.",
+            "scaffold-microservice": "Scaffolds standard-compliant Go, Rust, Python, or C++ microservices with complete mandatory layout.",
             "discord-client": "Connects Discord chat channels to the unified squad command controller.",
             "map-feats": "Crawls BDD specifications to map microservices to their behavioral feature files and displays the coverage map.",
             "fix-feats": "Standardizes BDD spec files by injecting missing domain tags, normalizing folder locations, and adding parent hub links.",

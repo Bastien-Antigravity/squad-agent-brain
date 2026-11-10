@@ -84,6 +84,11 @@ class SquadRESTHandler:
                 "brain_id": status_info.get("brain_id", "obsidian-brain")
             }
 
+        @router.get("/api/v1/contracts")
+        async def get_contracts(request: Request):
+            from src.rest.contracts import build_squad_agent_contracts
+            return build_squad_agent_contracts(app=request.app, config=getattr(self.controller, "config", None))
+
         @router.get("/api/v1/squad/commands")
         async def get_commands():
             return {

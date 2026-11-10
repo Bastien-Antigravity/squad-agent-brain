@@ -33,7 +33,7 @@ All operational scripts are invoked through the central `main.py` router:
 
 ### 1. Squad Lifecycle & Scaffolding
 - `squad-agent`: Main orchestrator. Runs preflight audits, synchronizes agent roles, and boots the AI squad environment.
-- `scaffold-microservice`: **Automated Microservice Generator**. Scaffolds new Go, Python, or Rust microservices with standard directories, the 12 mandatory root files & folders, BDD spec stubs, and registration snippets.
+- `scaffold-microservice`: **Automated Microservice Generator**. Scaffolds new Go, Python, Rust, or C++ microservices with standard directories, OpenMFE Exchange Contracts, the 12 mandatory root files & folders, BDD spec stubs, and registration snippets.
 - `scaffold-new-brain`: Generates a new standardized Obsidian documentation vault.
 - `init-new-brain`: Resets and initializes a fresh Obsidian workspace vault with standard structural folders and governance templates.
 - `switch-mode`: Protocol switcher toggling between Spec-First, Labs, and Fleet operational modes.
@@ -94,7 +94,7 @@ flowchart LR
    - Query RAG for existing interfaces, protocols, and ADRs.
    - Confirm compliance with `03-Tech-Stack/02-Project-Architecture/` standards (`11-Microservice-Integration-Standard.md`, `12-Docker-Deployment-Standards.md`).
 3. **Automated Scaffolding (`scaffold-microservice`)**:
-   - Run `python3 08-Squad-Agent/main.py scaffold-microservice --name <service-name> --lang <go|python|rust>` to generate the clean skeleton and all 12 mandatory root files & folders.
+   - Run `python3 08-Squad-Agent/main.py scaffold-microservice --name <service-name> --lang <go|python|rust|cpp>` to generate the clean skeleton, Exchange Contract stubs (`GET /api/v1/contracts` / `ServiceSpec.Contracts`), OpenMFE starter component, and all 12 mandatory root files & folders.
 4. **Implementation via Ecosystem SDKs**:
    - Use `microservice-toolbox` for `BootstrapService`, dynamic port resolution (`get_listen_addr`), and lifecycle management.
    - Use `universal-logger` for structured logging.
@@ -125,7 +125,8 @@ flowchart LR
 7. **Satellite Brain Sovereignty**: When scaffolding microservices for a satellite brain (e.g. `trading-brain`), pass `--dest <satellite>/06-Microservices/<name>` and `--brain <satellite>`. Code and BDD specifications MUST live inside the satellite brain; base ecosystem directories must NEVER be polluted.
 8. **Multi-Tenant NATS Topic Namespacing & Zero Crosstalk**: Chat topics are namespaced by `bastien-antigravity.{brain_id}.squad.chat`. Plain tags (`@developer`) remain strictly local. Cross-brain interactions MUST use compound tags `@{target_brain}:{role}` (e.g. `@root:developer`, `@trading-brain:trader`).
 9. **Discord Real-Time Streaming**: `discord-client` bridges NATS squad events live into a designated Discord channel with role emojis and forwards incoming user Discord messages into the event bus.
-10. **Real-Time Transport WireTap & Zero-Touch `> L3` Mesh Integration**: All microservices scaffolded via `scaffold-microservice` (`L2`, `L3`, `L4+`) automatically inherit declarative `spec.PublishWithLifecycle` registration and lock-free **WireTap** transport telemetry (`microservice-toolbox/go/pkg/wiretap`, `microservice_toolbox/wiretap.py`). New microservices must NEVER be hardcoded into `web-interface/src/router/base_ecosystem.go` (which is reserved strictly for the 11 foundational `L1–L3` base services); `web-interface/src/router/mesh_topology.go` dynamically synthesizes `> L3` and `EXT` nodes, live edges, and segregated channels at runtime.
+10. **Real-Time Transport WireTap & Zero-Touch `> L3` Mesh Integration**: All microservices scaffolded via `scaffold-microservice` (`L2`, `L3`, `L4+`) automatically inherit declarative `spec.PublishWithLifecycle` registration (with `Contracts`), `GET /api/v1/contracts` OpenMFE contract tabs, and lock-free **WireTap** transport telemetry (`microservice-toolbox/go/pkg/wiretap`, `microservice_toolbox/wiretap.py`). New microservices must NEVER be hardcoded into `web-interface/src/router/base_ecosystem.go` (which is reserved strictly for the 11 foundational `L1–L3` base services); `web-interface/src/router/mesh_topology.go` dynamically synthesizes `> L3` and `EXT` nodes, live edges, and segregated channels at runtime.
+11. **Authoritative Exchange Contracts (`src/rest/contracts.py`)**: `08-Squad-Agent` exposes live FastAPI routes, `squad_control.proto`, NATS topics, and PostgreSQL conversation memory DDLs on `GET /api/v1/contracts` and publishes them via `ServiceSpec.contracts` to `web-interface`.
 
 
 

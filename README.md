@@ -57,7 +57,7 @@ All tools are unified under the `main.py` router (`python3 08-Squad-Agent/main.p
 | `fleet-version` | **Semver Auditor**. Verifies dynamic semantic versioning across all 14 repositories against `VERSION.txt`. |
 | `bump-version` | **Semver Bumper**. Increments semver (`patch`, `minor`, `major`) across fleet repositories. |
 | `switch-mode` | **Protocol Switcher**. Atomically toggles between Spec-First, Labs, and Fleet modes. |
-| `scaffold-microservice` | **Microservice Generator**. Generates standard Go, Rust, or Python microservices with all 12 root files. |
+| `scaffold-microservice` | **Microservice Generator**. Generates standard Go, Rust, Python, or C++ microservices with Exchange Contracts & all 12 root files. |
 | `scaffold-new-brain` | **Vault Generator**. Creates new repositories or vault structures following standard DNA. |
 | `init-new-brain` | **Vault Reset**. Resets project variables, purges inbox tasks, and initializes session state. |
 | `unlock-vault` | **KMS Unlocker**. Removes KMS lock protections on sensitive vault files for updates. |
