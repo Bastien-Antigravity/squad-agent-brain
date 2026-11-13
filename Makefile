@@ -1,4 +1,4 @@
-VERSION ?= $(shell cat VERSION.txt 2>/dev/null || echo "0.0.1")
+VERSION ?= $(shell cat VERSION.txt)
 
 .PHONY: all test run clean version
 

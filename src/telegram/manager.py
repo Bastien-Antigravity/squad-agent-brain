@@ -35,6 +35,8 @@ class MenuManager:
         self.controller = controller
         self.logger = logger
         self.config = config
+        if controller is not None and callable(getattr(controller, "attach_telegram_menu", None)):
+            controller.attach_telegram_menu(self)
 
     # -----------------------------------------------------------------------------
 
@@ -101,6 +103,77 @@ class MenuManager:
             command_submenu.append(Action(label=f"Run {cmd_name}", callback=make_cmd_callback(cmd_name)))
 
         actions.append(Action(label="🚀 Execute Command", sub_menu=command_submenu))
+
+        # 4. AutoRepair Incidents Submenu
+        incident_submenu = []
+        ar_status = self.controller.get_autorepair_status()
+        ar_enabled = bool(ar_status.get("enabled", False))
+
+        async def handle_toggle_autorepair(user_input: str) -> None:
+            next_state = not ar_enabled
+            updated = self.controller.set_autorepair_enabled(next_state, reason="Toggled via Telegram menu")
+            if "error" in updated:
+                await self.tc.send_telemetry(f"❌ AutoRepair toggle failed: {updated['error']}")
+                return
+            badge = "ENABLED ▶️" if updated.get("enabled") else "PAUSED ⏸️"
+            await self.tc.send_telemetry(f"🩺 Fleet AutoRepair is now {badge} (mode={updated.get('execution_mode', 'unknown')}).")
+            self.rebuild_menu()
+
+        toggle_label = "⏸️ Disable AutoRepair" if ar_enabled else "▶️ Enable AutoRepair"
+        incident_submenu.append(Action(label=toggle_label, callback=handle_toggle_autorepair))
+
+        incidents = self.controller.list_incidents(limit=10)
+        pending = [i for i in incidents if i.get("status") in ("AWAITING_APPROVAL", "PROPOSAL_ONLY")]
+
+        async def handle_list_incidents(user_input: str) -> None:
+            current = self.controller.list_incidents(limit=10)
+            if not current:
+                await self.tc.send_telemetry("✅ Fleet AutoRepair: No active or recent incidents recorded.")
+                return
+            lines = ["🩺 Recent Fleet Incidents:"]
+            for item in current[:5]:
+                lines.append(
+                    f"- {item.get('incident_id')} | {item.get('service_name')} | T{item.get('tier', 4)} [{item.get('status')}]\n"
+                    f"  Cause: {str(item.get('root_cause', ''))[:120]}"
+                )
+            await self.tc.send_telemetry("\n".join(lines))
+
+        incident_submenu.append(Action(label="📋 Recent Incidents", callback=handle_list_incidents))
+
+        for inc in pending[:5]:
+            inc_id = inc.get("incident_id", "")
+            svc_name = inc.get("service_name", "unknown")
+
+            def make_approve_cb(target_id: str, target_svc: str):
+                async def approve_cb(user_input: str) -> None:
+                    await self.tc.send_telemetry(f"🔧 Approving AutoRepair incident {target_id} ({target_svc})...")
+                    ok, res = await self.controller.approve_incident(target_id)
+                    if ok:
+                        await self.tc.send_telemetry(f"✅ {target_id}: {res.get('status')} — {res.get('action_taken', '')}")
+                        self.rebuild_menu()
+                    else:
+                        await self.tc.send_telemetry(f"❌ {target_id}: {res.get('error') or res.get('action_taken', 'Approval aborted')}")
+                return approve_cb
+
+            def make_reject_cb(target_id: str):
+                async def reject_cb(user_input: str) -> None:
+                    ok, res = await self.controller.reject_incident(target_id, reason="Rejected via Telegram menu")
+                    if ok:
+                        await self.tc.send_telemetry(f"🛑 Rejected {target_id}.")
+                        self.rebuild_menu()
+                    else:
+                        await self.tc.send_telemetry(f"❌ Failed to reject {target_id}: {res.get('error', 'Unknown error')}")
+                return reject_cb
+
+            incident_submenu.append(
+                Action(label=f"✅ Approve {svc_name} ({inc_id[:10]})", callback=make_approve_cb(inc_id, svc_name))
+            )
+            incident_submenu.append(
+                Action(label=f"🛑 Reject {inc_id[:10]}", callback=make_reject_cb(inc_id))
+            )
+
+        state_tag = "ON" if ar_enabled else "PAUSED"
+        actions.append(Action(label=f"🩺 AutoRepair [{state_tag}] ({len(pending)})", sub_menu=incident_submenu))
 
         self.tc.update_actions(actions)
 

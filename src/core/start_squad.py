@@ -889,6 +889,20 @@ def start_engine() -> None:
     # 4. Start Telegram dynamic menu client
     SetupTelegram(config, controller, logger)
 
+    # 4.0.5 Start AutoRepair Incident Healer coordinator (fail-fast on missing/invalid config)
+    from src.agents.autorepair import AutoRepairCoordinator
+    incident_healer = AutoRepairCoordinator(
+        config=config,
+        logger=logger,
+        pg_pool=controller.pool,
+        event_bus=event_bus,
+        notif_client=controller.notif_client,
+        on_incident_change=controller.refresh_telegram_menu,
+    )
+    controller.incident_healer = incident_healer
+    controller.refresh_telegram_menu()
+    loop.create_task(incident_healer.start())
+
     # 4.1. Start Discord Multi-Agent Squad Chat Client (if configured)
     try:
         from src.clients.discord_client import DiscordClient, HAS_DISCORD

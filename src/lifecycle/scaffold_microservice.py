@@ -388,12 +388,9 @@ func NewController(appConfig *toolbox_config.AppConfig, logger unilog_interfaces
 
 // -----------------------------------------------------------------------------
 
-// Version returns the dynamically resolved version of the service from microservice-toolbox.
+// Version returns the resolved version of the service from VERSION.txt via microservice-toolbox.
 func (c *Controller) Version() string {{
-	if c.appConfig != nil {{
-		return c.appConfig.GetVersion()
-	}}
-	return "0.0.1"
+	return c.appConfig.GetVersion()
 }}
 
 // -----------------------------------------------------------------------------
@@ -650,6 +647,7 @@ import (
 	"net/http"
 
 	toolbox_config "github.com/Bastien-Antigravity/microservice-toolbox/go/pkg/config"
+	toolbox_version "github.com/Bastien-Antigravity/microservice-toolbox/go/pkg/version"
 	unilog_interfaces "github.com/Bastien-Antigravity/universal-logger/src/interfaces"
 )
 
@@ -708,7 +706,7 @@ func (h *Handler) version() string {{
 	if h.appConfig != nil {{
 		return h.appConfig.GetVersion()
 	}}
-	return "0.0.1"
+	return toolbox_version.Get()
 }}
 
 func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {{
@@ -785,7 +783,7 @@ def generate_rust_scaffold(target_dir: Path, name: str, port: int, desc: str, dr
 fn main() {{
     let version = std::fs::read_to_string("VERSION.txt")
         .or_else(|_| std::fs::read_to_string("../VERSION.txt"))
-        .unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_string());
+        .expect("CRITICAL: VERSION.txt not found (FAIL-FAST)");
     println!("cargo:rustc-env=APP_VERSION={{}}", version.trim());
     println!("cargo:rerun-if-changed=VERSION.txt");
     println!("cargo:rerun-if-changed=../VERSION.txt");
@@ -1027,6 +1025,7 @@ from pathlib import Path
 
 # Bootstrap configuration and logger via microservice-toolbox
 from microservice_toolbox.config.loader import load_config
+from microservice_toolbox.contracts import display_address, resolve_contract_port
 from microservice_toolbox.logger import UniLog
 from microservice_toolbox import publish_with_lifecycle, ServiceSpec
 from microservice_toolbox.wiretap import configure_from_config
@@ -1039,11 +1038,12 @@ def main():
     logger = UniLog(app_name="{name}", config_profile="standalone")
     configure_from_config("{name}", config)
 
-    # Resolve capability listen address (Fallback gracefully for local sandbox runs)
-    try:
-        listen_addr = config.get_listen_addr("{cap_name}") or ""
-    except Exception:
-        listen_addr = ""
+    # Resolve capability listen address dynamically (fail fast if unconfigured)
+    listen_addr = config.get_listen_addr("{cap_name}")
+    if not listen_addr:
+        raise RuntimeError("Failed to resolve listen address for capability '{cap_name}'")
+    resolved_port = resolve_contract_port(listen_addr)
+    framing_label = f"Port {{resolved_port}} REST" if resolved_port else display_address(listen_addr)
 
     # Instantiate and start the example worker controller
     controller = Controller(config=config, logger=logger)
@@ -1063,7 +1063,7 @@ def main():
         spec=ServiceSpec(
             name="{name}",
             tag="{name}-mfe",
-            url=f"http://{{listen_addr or '127.0.0.1'}}/static/mfe.js",
+            url=f"http://{{display_address(listen_addr)}}/static/mfe.js",
             nav_title="{name}",
             layer="L2",
             category="Domain Services",
@@ -1071,7 +1071,7 @@ def main():
             icon="fa-cubes",
             description="{desc}",
             protocol="HTTP/1.1 REST",
-            framing=f"Port {port} REST",
+            framing=framing_label,
             doc_link="obsidian-brain/06-Microservices/{name}.md",
             contracts=contract_env.get("contracts", []),
         ),
@@ -1129,14 +1129,8 @@ class Controller:
         self.version = self._load_version()
 
     def _load_version(self) -> str:
-        \"\"\"Loads version dynamically from microservice-toolbox / VERSION.txt.\"\"\"
-        if hasattr(self.config, "get_version"):
-            return self.config.get_version()
-        try:
-            from microservice_toolbox.version import get_version
-            return get_version(caller_file=__file__)
-        except Exception:
-            return "0.0.1"
+        \"\"\"Loads version strictly from VERSION.txt via microservice-toolbox.\"\"\"
+        return self.config.get_version()
 
     def start(self) -> None:
         # Example starter logic - replace with actual background workers
@@ -1258,18 +1252,14 @@ from microservice_toolbox.contracts import (
     extract_fastapi_operations,
     resolve_contract_port,
 )
+from microservice_toolbox.version import get_version
 
 # -----------------------------------------------------------------------------
 
 def build_service_contracts(app: Any = None, config: Any = None, version: str = "") -> Dict[str, Any]:
     \"\"\"Builds the authoritative Exchange Contracts envelope for {name}.\"\"\"
-    addr = ""
-    if config is not None and hasattr(config, "get_listen_addr"):
-        try:
-            addr = config.get_listen_addr("{cap_name}") or ""
-        except Exception:
-            addr = ""
-    ver = version or (config.get_version() if hasattr(config, "get_version") else "0.0.1")
+    addr = config.get_listen_addr("{cap_name}") if config is not None else ""
+    ver = version or (config.get_version() if config is not None else get_version(caller_file=__file__))
 
     rest_ops = extract_fastapi_operations(app)
     if not rest_ops:
@@ -1333,6 +1323,7 @@ from pathlib import Path
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 
+from microservice_toolbox.version import get_version
 from src.rest.contracts import build_service_contracts
 
 # -----------------------------------------------------------------------------
@@ -1351,7 +1342,7 @@ def register_routes(app, config=None) -> None:
 
     @app.get("/api/v1/health")
     async def health():
-        ver = config.get_version() if hasattr(config, "get_version") else "0.0.1"
+        ver = config.get_version() if config is not None else get_version(caller_file=__file__)
         return {{"service": "{cap_name}", "status": "Healthy", "version": ver}}
 
     @app.get("/api/v1/contracts")
@@ -1599,7 +1590,6 @@ int main(int argc, char** argv) {{
     microservice_toolbox::spec::ServiceSpec spec;
     spec.name = "{name}";
     spec.tag = "{name}-mfe";
-    spec.url = "http://" + addr;
     spec.navTitle = "{name}";
     spec.layer = "L2";
     spec.category = "Domain Services";
@@ -1607,10 +1597,11 @@ int main(int argc, char** argv) {{
     spec.icon = "fa-cubes";
     spec.description = "{desc}";
     spec.protocol = "TCP Wire";
-    spec.framing = "Port {port}";
+    spec.framing = "Port %s";
     spec.docLink = "obsidian-brain/06-Microservices/{name}.md";
     spec.contracts = {cap_name}::contracts::BuildServiceContracts(addr);
 
+    // SpecPublisher auto-enriches URL, Framing %s ports, Version (appConfig->GetVersion()), Node, and Health
     microservice_toolbox::spec::SpecPublisher::PublishWithLifecycle(
         *appConfig, appLogger, &lm, "{cap_name}", spec);
 
@@ -1860,16 +1851,17 @@ networks:
 ```
 
 ## AI Development & Integration Guidelines
-1. **Bootstrap Ritual**: Initialized using `toolbox_bootstrap.BootstrapService("{name}")` (Go), `load_config` / `bootstrap_microservice` (Python/Rust), or `LoadConfig` (C++). Never bypass the toolbox bootstrapper.
-2. **Dynamic Port Resolution**: Always use `appConfig.GetListenAddr("{cap_name}")` or `GetCapability("{cap_name}", &cap)`. NEVER hardcode IP or port numbers.
+1. **Bootstrap Ritual & Cold-Path Fail-Fast Validation**: Initialized using `toolbox_bootstrap.BootstrapService("{name}")` (Go), `load_config` / `bootstrap_microservice` (Python/Rust), or `LoadConfig` (C++). Validate configuration and `VERSION.txt` once at boot and fail fast on missing requirements; downstream hot paths MUST trust pre-validated `AppConfig` string values without redundant re-checks or locks (checking optionality only for genuinely optional parameters).
+2. **Dynamic Port Resolution & Zero Silent Fallback**: Always use `appConfig.GetListenAddr("{cap_name}")` / `GetCapability("{cap_name}", &cap)`. NEVER hardcode IPs (`127.0.0.1`, `0.0.0.0`), port numbers, or `"0.0.1"` fallbacks. (`VERSION.txt` is the sole version source; zero runtime `APP_VERSION`/`SERVICE_VERSION` overrides.)
 3. **Encrypted Secrets**: Sensitive values stored in configurations must remain encrypted as `ENC(...)` tokens until runtime decryption via `appConfig.DecryptSecret()`.
-4. **Header Ritual**: All source files MUST begin with the standard Triple-Block header (`ESSENTIAL PROCESS`, `DATA FLOW`, `KEY PARAMETERS`).
-5. **Section Dividers**: Use appropriate dividers (`// -----------------------------------------------------------------------------`) between exported methods and major sections.
-6. **Dynamic Fleet Hot-Reloading**: Microservices must register `OnLiveConfUpdate` / `on_live_conf_update` to dynamically reload configuration changes without restarting the daemon process.
-7. **Service Specification, OpenMFE & Authoritative Exchange Contracts Standard**:
+4. **Canonical Log Levels (`flexible-logger`)**: Use only the 12 canonical levels from `flexible-logger/src/models/level.go` (`NOTSET=0`, `DEBUG=1`, `STREAM=2`, `INFO=3`, `LOGON=4`, `LOGOUT=5`, `TRADE=6`, `SCHEDULE=7`, `REPORT=8`, `WARNING=9`, `ERROR=10`, `CRITICAL=11`); only `ERROR`/`CRITICAL` persist to TimescaleDB via `watchdog-agent`.
+5. **Header Ritual**: All source files MUST begin with the standard Triple-Block header (`ESSENTIAL PROCESS`, `DATA FLOW`, `KEY PARAMETERS`).
+6. **Section Dividers**: Use appropriate dividers (`// -----------------------------------------------------------------------------`) between exported methods and major sections.
+7. **Dynamic Fleet Hot-Reloading**: Microservices must register `OnLiveConfUpdate` / `on_live_conf_update` to dynamically reload configuration changes without restarting the daemon process.
+8. **Service Specification, OpenMFE & Authoritative Exchange Contracts Standard**:
    - Register declarative `ServiceSpec` + `Contracts` (`ExchangeContract[]`) during bootstrap using `spec.PublishWithLifecycle` (Go), `spec.publish_with_lifecycle` (Python), `spec::publish_with_lifecycle` (Rust), or `SpecPublisher::PublishWithLifecycle` (C++, with `contracts.hpp` / `contracts.h` for C ABI) with infinite resilience (`MaxRetries: -1`) and non-blocking execution.
    - HTTP services MUST expose `GET /api/v1/contracts` (`ContractsEnvelope`) built from live runtime routes and embedded schemas, and OpenMFE components (`mfe.js`) MUST use `BastienMFEElement` + `window.BastienMFEContracts` inside `.openmfe-tabs-bar` (`div[3]`) without fabricating mock schemas or using brittle `?v=` CSS query strings.
-8. **Real-Time Transport WireTap & Dynamic Topology (`> L3` Ready)**: `BootstrapService` (Go) and `init_microservice` / `configure_from_config` (Python) automatically bind the lock-free WireTap transport telemetry engine (`microservice-toolbox/go/pkg/wiretap`, `microservice_toolbox/wiretap.py`) to `safe-socket`, gRPC (`teleremote`, `notification`, `network`), and NATS (`messaging`). Combined with `spec.PublishWithLifecycle`, this microservice (`L2`, `L3`, or `> L3` / `L4+`) and its live edges and segregated channels are synthesized automatically on `web-interface` (`src/router/mesh_topology.go`) with zero hardcoded topology changes in `web-interface`.
+9. **Real-Time Transport WireTap & Dynamic Topology (`> L3` Ready)**: `BootstrapService` (Go) and `init_microservice` / `configure_from_config` (Python) automatically bind the lock-free WireTap transport telemetry engine (`microservice-toolbox/go/pkg/wiretap`, `microservice_toolbox/wiretap.py`) to `safe-socket`, gRPC (`teleremote`, `notification`, `network`), and NATS (`messaging`). Combined with `spec.PublishWithLifecycle`, this microservice (`L2`, `L3`, or `> L3` / `L4+`) and its live edges and segregated channels are synthesized automatically on `web-interface` (`src/router/mesh_topology.go`) with zero hardcoded topology changes in `web-interface`.
 """
     create_file(target_dir / "AGENTS.md", agents_md, dry_run)
 
@@ -1971,7 +1963,7 @@ See [AGENTS.md](AGENTS.md) for technical specifications, capability ports, and A
 
     # 7. Makefile (Dynamic Versioning Standard - Go, Rust, C++ compiled projects)
     if lang == "go":
-        makefile = f"""VERSION ?= $(shell cat VERSION.txt 2>/dev/null || echo "0.0.1")
+        makefile = f"""VERSION ?= $(shell cat VERSION.txt)
 LDFLAGS := -s -w -X 'github.com/Bastien-Antigravity/microservice-toolbox/go/pkg/version.BuildVersion=$(VERSION)'
 
 .PHONY: all build test race vet version clean run
@@ -2007,7 +1999,7 @@ clean:
 """
         create_file(target_dir / "Makefile", makefile, dry_run)
     elif lang == "rust":
-        makefile = f"""VERSION ?= $(shell cat VERSION.txt 2>/dev/null || echo "0.0.1")
+        makefile = f"""VERSION ?= $(shell cat VERSION.txt)
 
 .PHONY: all build test version clean run
 
@@ -2033,7 +2025,7 @@ clean:
 """
         create_file(target_dir / "Makefile", makefile, dry_run)
     elif lang == "cpp":
-        makefile = f"""VERSION ?= $(shell cat VERSION.txt 2>/dev/null || echo "0.0.1")
+        makefile = f"""VERSION ?= $(shell cat VERSION.txt)
 CXX ?= g++
 DISTCONF_DIR ?= ../distributed-config/distconf/libdistconf
 TOOLBOX_CPP_INC ?= ../microservice-toolbox/cpp/include

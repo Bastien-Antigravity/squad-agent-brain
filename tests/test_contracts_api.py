@@ -54,9 +54,15 @@ class TestSquadContractsAPI(unittest.TestCase):
         rest_targets = {op["target"] for op in by_id["rest-sse"]["operations"]}
         self.assertIn("/api/v1/squad/probe", rest_targets)
         self.assertIn("SquadControlService", by_id["grpc"]["schema"])
+        nats_targets = {op["target"] for op in by_id["nats-event-bus"]["operations"]}
+        self.assertIn("bastien-antigravity.test-brain.fleet.incident", nats_targets)
+        pg_targets = {op["target"] for op in by_id["postgres-memory"]["operations"]}
+        self.assertIn("watchdog_agent.fleet_error_logs", pg_targets)
+        self.assertIn("watchdog_agent.fleet_incidents", pg_targets)
 
     def test_rest_handler_contracts_endpoint(self):
         mock_controller = MagicMock()
+        mock_controller.config = None
         mock_controller.facade = MagicMock()
         mock_controller.facade.config = None
         mock_controller.get_status = AsyncMock(return_value={"healthy": True, "version": "0.0.1"})
@@ -72,6 +78,12 @@ class TestSquadContractsAPI(unittest.TestCase):
             self.assertEqual(data["service"], "agent_squad")
             self.assertTrue(data["reliable"])
             self.assertGreaterEqual(len(data["contracts"]), 4)
+            by_id = {c["id"]: c for c in data["contracts"]}
+            rest_targets = {op["target"] for op in by_id["rest-sse"]["operations"]}
+            self.assertIn("/api/v1/squad/incidents", rest_targets)
+            self.assertIn("/api/v1/squad/incidents/{incident_id}/approve", rest_targets)
+            self.assertIn("/api/v1/squad/autorepair/status", rest_targets)
+            self.assertIn("/api/v1/squad/autorepair/toggle", rest_targets)
 
 
 if __name__ == "__main__":

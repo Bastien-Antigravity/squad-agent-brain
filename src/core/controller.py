@@ -38,7 +38,7 @@ bootstrap_microservice(__file__, app_name="squad_agent_controller")
 
 from microservice_toolbox.logger import ensure_safe_logger
 from interfaces import Command, MemoryStore
-from lib.pg_pool import get_pg_pool, resolve_schema_name
+from lib.pg_pool import ensure_fleet_error_schema, get_pg_pool, list_fleet_incidents, resolve_schema_name
 from lib.memory import ShortTermMemory, PostgresMemoryStore, RAGMemoryStore, DualLayerMemoryStore
 
 # -----------------------------------------------------------------------------------------------
@@ -56,14 +56,17 @@ class CommandController(Command):
         self.logger = ensure_safe_logger(logger)
         self.schema = resolve_schema_name(__file__)
         self.pool = get_pg_pool(config=self.config, logger=self.logger)
+        if self.pool:
+            ensure_fleet_error_schema(self.pool, self.logger)
+        self.incident_healer: Optional[Any] = None
+        self._telegram_menu: Optional[Any] = None
         from pathlib import Path
         import os
         self.repo_root = Path(__file__).resolve().parent.parent.parent
-        raw_brain = os.getenv("TARGET_BRAIN_ID") or os.getenv("BRAIN_ID")
-        if not raw_brain and hasattr(self.config, "get_capability"):
-            cap = self.config.get_capability("squad_agent")
-            if isinstance(cap, dict):
-                raw_brain = cap.get("target_brain_id")
+        data = self.config.data or {}
+        caps = data.get("capabilities") or {}
+        squad_cap = {**(caps.get("squad_agent") or {}), **(data.get("squad_agent") or {})}
+        raw_brain = os.getenv("TARGET_BRAIN_ID") or squad_cap.get("target_brain_id")
         self.brain_id = (raw_brain if isinstance(raw_brain, str) and raw_brain.strip() else None) or "obsidian-brain"
         self.version = self._load_version()
         self.memory = self._setup_memory()
@@ -109,14 +112,11 @@ class CommandController(Command):
     # -----------------------------------------------------------------------------------------------
 
     def _load_version(self) -> str:
-        """Loads version dynamically from microservice-toolbox / VERSION.txt."""
-        if hasattr(self.config, "get_version"):
+        """Loads version dynamically from AppConfig / VERSION.txt (fail-fast)."""
+        if self.config is not None:
             return self.config.get_version()
-        try:
-            from microservice_toolbox.version import get_version
-            return get_version(caller_file=__file__)
-        except Exception:
-            return "0.0.1"
+        from microservice_toolbox.version import get_version
+        return get_version(caller_file=__file__)
 
     # -----------------------------------------------------------------------------------------------
 
@@ -430,6 +430,78 @@ class CommandController(Command):
                 LocalEventBus.publish(target_topic, payload_data)
         except Exception as e:
             self.logger.error(f"Failed to publish user message: {e}")
+
+    # -----------------------------------------------------------------------------------------------
+
+    def attach_telegram_menu(self, menu: Any) -> None:
+        """Registers the active Telegram MenuManager for reactive incident menu rebuilds."""
+        self._telegram_menu = menu
+
+    def refresh_telegram_menu(self) -> None:
+        """Triggers a live Telegram inline menu rebuild when fleet incidents change."""
+        if self._telegram_menu:
+            try:
+                self._telegram_menu.rebuild_menu()
+            except Exception as e:
+                self.logger.warning(f"{self.Name} : Could not refresh Telegram menu ({e}).")
+
+    def list_incidents(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """Lists recent fleet incidents tracked by AutoRepairCoordinator or TimescaleDB."""
+        if self.incident_healer:
+            return self.incident_healer.list_incidents(limit=limit)
+        if self.pool:
+            return list_fleet_incidents(self.pool, self.logger, brain_id=self.brain_id, limit=limit)
+        return []
+
+    def get_incident(self, incident_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieves a single fleet incident record by ID."""
+        if self.incident_healer:
+            return self.incident_healer.get_incident(incident_id)
+        if self.pool:
+            for item in list_fleet_incidents(self.pool, self.logger, limit=200):
+                if item.get("incident_id") == incident_id:
+                    return item
+        return None
+
+    async def approve_incident(self, incident_id: str) -> tuple[bool, Dict[str, Any]]:
+        """Applies an approved AutoRepair proposal and triggers Watchdog service restart."""
+        if not self.incident_healer:
+            return False, {"error": "AutoRepair coordinator is not initialized."}
+        return await self.incident_healer.approve_incident(incident_id)
+
+    async def reject_incident(self, incident_id: str, reason: str = "") -> tuple[bool, Dict[str, Any]]:
+        """Marks an AutoRepair incident proposal as rejected."""
+        if not self.incident_healer:
+            return False, {"error": "AutoRepair coordinator is not initialized."}
+        return await self.incident_healer.reject_incident(incident_id, reason=reason)
+
+    async def resolve_incident(self, incident_id: str, note: str = "") -> tuple[bool, Dict[str, Any]]:
+        """Marks an AutoRepair incident manually resolved without restarting services."""
+        if not self.incident_healer:
+            return False, {"error": "AutoRepair coordinator is not initialized."}
+        return await self.incident_healer.resolve_incident(incident_id, note=note)
+
+    def get_autorepair_status(self) -> Dict[str, Any]:
+        """Returns runtime AutoRepair enable/disable status, capabilities, and metrics."""
+        if not self.incident_healer:
+            return {"enabled": False, "initialized": False, "paused_reason": "AutoRepair coordinator is not initialized."}
+        status = self.incident_healer.get_autorepair_status()
+        status["initialized"] = True
+        return status
+
+    def set_autorepair_enabled(self, enabled: bool, reason: str = "", auto_apply: Optional[bool] = None) -> Dict[str, Any]:
+        """Enables or disables AutoRepair real-time triage dynamically on the fly."""
+        if not self.incident_healer:
+            return {"enabled": False, "initialized": False, "error": "AutoRepair coordinator is not initialized."}
+        status = self.incident_healer.set_enabled(enabled, reason=reason, auto_apply=auto_apply)
+        status["initialized"] = True
+        return status
+
+    def unfreeze_autorepair_service(self, service_name: str, brain_id: Optional[str] = None) -> Dict[str, Any]:
+        """Resets 3-strike circuit breaker freeze for a service."""
+        if not self.incident_healer:
+            return {"error": "AutoRepair coordinator is not initialized."}
+        return self.incident_healer.unfreeze_service(service_name, brain_id=brain_id)
 
     # -----------------------------------------------------------------------------------------------
 

@@ -169,7 +169,7 @@ except ImportError:
     def build_contracts_envelope(service: str, version: str, source: str, contracts: typeList[ExchangeContract]) -> typeDict[str, typeAny]:
         return {
             "service": service,
-            "version": version or "0.0.1",
+            "version": version,
             "reliable": True,
             "exhaustive": True,
             "generatedAt": dtDatetime.now(dtTimezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -208,11 +208,11 @@ def build_squad_agent_contracts(
     config: typeAny = None,
     version: str = "",
 ) -> typeDict[str, typeAny]:
-    data = getattr(config, "data", {}) or {}
-    caps = data.get("capabilities", {}) or {}
-    squad_cap = caps.get("squad_agent", {}) or {}
-    nats_cap = caps.get("nats", {}) or {}
-    pg_cap = caps.get("timescale_db", {}) or {}
+    data = getattr(config, "data", None) or {}
+    caps = data.get("capabilities") or {}
+    squad_cap = {**(caps.get("squad_agent") or {}), **(data.get("squad_agent") or {})}
+    nats_cap = {**(caps.get("nats") or {}), **(data.get("nats") or {})}
+    pg_cap = {**(caps.get("timescale_db") or {}), **(data.get("timescale_db") or {})}
 
     brain_id = (
         osMod.getenv("TARGET_BRAIN_ID")
@@ -221,25 +221,32 @@ def build_squad_agent_contracts(
         or "obsidian-brain"
     )
     prefix = nats_cap.get("subject_prefix") or "bastien-antigravity"
-    chat_topic = f"{prefix}.{brain_id}.squad.chat" if brain_id not in ("obsidian-brain", "root", "main", "") else f"{prefix}.squad.chat"
-    incident_topic = "bastien-antigravity.fleet.incident"
+    is_default_brain = brain_id in ("obsidian-brain", "root", "main", "")
+    chat_topic = f"{prefix}.{brain_id}.squad.chat" if not is_default_brain else f"{prefix}.squad.chat"
+    incident_topic = f"{prefix}.{brain_id}.fleet.incident" if not is_default_brain else f"{prefix}.fleet.incident"
 
-    rest_addr = ""
-    grpc_addr = ""
-    if config is not None:
-        for attr, target in (("get_listen_addr", "rest"), ("get_rest_addr", "rest"), ("get_grpc_listen_addr", "grpc")):
-            fn = getattr(config, attr, None)
-            if callable(fn):
-                try:
-                    val = fn("squad_agent") or ""
-                    if target == "rest" and val:
-                        rest_addr = val
-                    elif target == "grpc" and val:
-                        grpc_addr = val
-                except Exception:
-                    pass
+    def _safe_addr(getter: typeAny, cap_name: str, fallback_cap: typeDict[str, typeAny]) -> str:
+        if config is not None:
+            try:
+                val = getter(cap_name)
+                if val:
+                    return val
+            except KeyError:
+                pass
+        return f"{fallback_cap['ip']}:{fallback_cap['port']}" if fallback_cap.get("port") and fallback_cap.get("ip") else ""
 
-    ver = version or (config.get_version() if hasattr(config, "get_version") else "0.0.1")
+    rest_addr = _safe_addr(config.get_rest_addr, "squad_agent", squad_cap) if config is not None else ""
+    if not rest_addr and config is not None:
+        rest_addr = _safe_addr(config.get_listen_addr, "squad_agent", squad_cap)
+    grpc_addr = _safe_addr(config.get_grpc_listen_addr, "squad_agent", squad_cap) if config is not None else ""
+
+    if version:
+        ver = version
+    elif config is not None:
+        ver = config.get_version()
+    else:
+        from microservice_toolbox.version import get_version
+        ver = get_version(caller_file=__file__)
     rest_ops = extract_fastapi_operations(app)
     if not rest_ops:
         rest_ops = [
@@ -250,27 +257,22 @@ def build_squad_agent_contracts(
             ContractOperation(name="run_command_stream", kind="SSE", target="/api/v1/squad/run/{cmd_name}", output="text/event-stream", description="Stream subcommand execution stdout"),
             ContractOperation(name="stream_chat_messages", kind="SSE", target="/api/v1/squad/chat/stream/{session_id}", output="text/event-stream", description="Stream collaborative squad NATS chat turns via SSE"),
             ContractOperation(name="post_chat_message", kind="POST", target="/api/v1/squad/chat/{session_id}", input="{ message, brain_id }", output="{ success, message }", description="Publish operator chat prompt to NATS bus"),
+            ContractOperation(name="list_incidents", kind="GET", target="/api/v1/squad/incidents", output="{ success, incidents[], count }", description="List real-time fleet incidents and AutoRepair proposals"),
+            ContractOperation(name="get_incident", kind="GET", target="/api/v1/squad/incidents/{incident_id}", output="{ success, incident }", description="Retrieve details and diff proposal for a single fleet incident"),
+            ContractOperation(name="approve_incident", kind="POST", target="/api/v1/squad/incidents/{incident_id}/approve", output="{ success, incident }", description="Apply verified AutoRepair patch and restart target service via Watchdog"),
+            ContractOperation(name="reject_incident", kind="POST", target="/api/v1/squad/incidents/{incident_id}/reject", input="{ reason }", output="{ success, incident }", description="Reject an AutoRepair proposal without applying changes"),
+            ContractOperation(name="resolve_incident", kind="POST", target="/api/v1/squad/incidents/{incident_id}/resolve", input="{ note }", output="{ success, incident }", description="Mark an AutoRepair incident manually resolved"),
+            ContractOperation(name="get_autorepair_status", kind="GET", target="/api/v1/squad/autorepair/status", output="{ success, enabled, auto_apply, execution_mode, circuit_breaker }", description="Inspect live AutoRepair runtime toggle, mode, and circuit breaker state"),
+            ContractOperation(name="toggle_autorepair", kind="POST", target="/api/v1/squad/autorepair/toggle", input="{ enabled, reason?, auto_apply? }", output="{ success, enabled, paused_reason }", description="Enable or disable real-time AutoRepair on the fly"),
+            ContractOperation(name="unfreeze_autorepair", kind="POST", target="/api/v1/squad/autorepair/unfreeze", input="{ service_name, brain_id? }", output="{ success, service_name, was_frozen }", description="Clear 3-strike circuit breaker freeze for a service"),
             ContractOperation(name="get_contracts", kind="GET", target="/api/v1/contracts", output="ContractsEnvelope JSON", description="Self-describing microservice exchange contracts"),
         ]
 
     proto_text = read_schema_file(_SQUAD_PROTO_PATH)
     grpc_ops = extract_proto_operations(proto_text)
 
-    nats_addr = ""
-    pg_addr = ""
-    if config is not None and callable(getattr(config, "get_listen_addr", None)):
-        try:
-            nats_addr = config.get_listen_addr("nats") or ""
-        except Exception:
-            nats_addr = ""
-        try:
-            pg_addr = config.get_listen_addr("timescale_db") or ""
-        except Exception:
-            pg_addr = ""
-    if not nats_addr and nats_cap.get("port"):
-        nats_addr = f"{nats_cap.get('ip', '')}:{nats_cap.get('port')}"
-    if not pg_addr and pg_cap.get("port"):
-        pg_addr = f"{pg_cap.get('ip', '')}:{pg_cap.get('port')}"
+    nats_addr = _safe_addr(config.get_listen_addr, "nats", nats_cap) if config is not None else ""
+    pg_addr = _safe_addr(config.get_listen_addr, "timescale_db", pg_cap) if config is not None else ""
 
     contracts = [
         ExchangeContract(
@@ -326,7 +328,7 @@ def build_squad_agent_contracts(
             source="obsidian-brain/08-Squad-Agent/src/interfaces/interfaces.py + rest_handler.py",
             peers=[
                 ContractPeer(service="nats", role="broker", description="Central pub/sub event bus"),
-                ContractPeer(service="watchdog_agent", role="producer", description="Publishes fleet incidents to bastien-antigravity.fleet.incident"),
+                ContractPeer(service="watchdog_agent", role="producer", description=f"Publishes fleet incidents to {incident_topic}"),
             ],
             operations=[
                 ContractOperation(name="SquadChat", kind="PUB/SUB", target=chat_topic, input="{ session_id, sender, message, brain_id }", description="Multi-agent collaborative chat stream topic"),
@@ -354,6 +356,8 @@ def build_squad_agent_contracts(
             operations=[
                 ContractOperation(name="conversation_turns", kind="TABLE", target="conversation_turns", input="id, session_id, role, content, metadata, brain_id, created_at", description="Persistent turn memory per session"),
                 ContractOperation(name="squad_chat_logs", kind="TABLE", target="squad_chat_logs", input="id, session_id, sender, content, tool_calls, brain_id, created_at", description="Multi-agent tool & chat audit trail"),
+                ContractOperation(name="fleet_error_logs", kind="TABLE (RO)", target="watchdog_agent.fleet_error_logs", input="brain_id, service_name, level, filename, line_number, message", description="Correlated fleet ERROR/CRITICAL log history ingested by watchdog-agent"),
+                ContractOperation(name="fleet_incidents", kind="TABLE", target="watchdog_agent.fleet_incidents", input="incident_id, brain_id, service_name, tier, status, root_cause, proposed_patch", description="Persistent AutoRepair triage state and audit records"),
             ],
             schema_format="sql",
             schema=_SQUAD_SQL_DDL,

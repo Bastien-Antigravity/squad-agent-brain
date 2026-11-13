@@ -257,4 +257,102 @@ class SquadRESTHandler:
                 await self.controller.publish_user_message(session_id, message)
             return {"success": True, "message": "Message published successfully"}
 
+        @router.get("/api/v1/squad/incidents")
+        async def list_incidents(limit: int = Query(50, ge=1, le=200)):
+            incidents = self.controller.list_incidents(limit=limit)
+            return {"success": True, "incidents": incidents, "count": len(incidents)}
+
+        @router.get("/api/v1/squad/incidents/{incident_id}")
+        async def get_incident(incident_id: str):
+            incident = self.controller.get_incident(incident_id)
+            if not incident:
+                raise HTTPException(status_code=404, detail=f"Incident '{incident_id}' not found")
+            return {"success": True, "incident": incident}
+
+        def require_github() -> None:
+            if not self.is_github_configured():
+                raise HTTPException(
+                    status_code=403,
+                    detail="Squad Agent is disabled: GITHUB_TOKEN environment variable is not configured.",
+                )
+
+        async def read_json_dict(request: Request, *, required: bool = False) -> dict:
+            raw = await request.body()
+            if not raw or not raw.strip():
+                if required:
+                    raise HTTPException(status_code=400, detail="Invalid JSON body")
+                return {}
+            try:
+                body = await request.json()
+            except ValueError as exc:
+                if required:
+                    raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
+                return {}
+            if not isinstance(body, dict):
+                if required:
+                    raise HTTPException(status_code=400, detail="Invalid JSON body")
+                return {}
+            return body
+
+        @router.post("/api/v1/squad/incidents/{incident_id}/approve")
+        async def approve_incident(incident_id: str):
+            require_github()
+            ok, result = await self.controller.approve_incident(incident_id)
+            if not ok and "not found" in str(result.get("error", "")).lower():
+                raise HTTPException(status_code=404, detail=result["error"])
+            return {"success": ok, "incident": result}
+
+        @router.post("/api/v1/squad/incidents/{incident_id}/reject")
+        async def reject_incident(incident_id: str, request: Request):
+            require_github()
+            body = await read_json_dict(request)
+            reason = str(body.get("reason") or "")
+            ok, result = await self.controller.reject_incident(incident_id, reason=reason)
+            if not ok and "not found" in str(result.get("error", "")).lower():
+                raise HTTPException(status_code=404, detail=result["error"])
+            return {"success": ok, "incident": result}
+
+        @router.post("/api/v1/squad/incidents/{incident_id}/resolve")
+        async def resolve_incident(incident_id: str, request: Request):
+            require_github()
+            body = await read_json_dict(request)
+            note = str(body.get("note") or "")
+            ok, result = await self.controller.resolve_incident(incident_id, note=note)
+            if not ok and "not found" in str(result.get("error", "")).lower():
+                raise HTTPException(status_code=404, detail=result["error"])
+            return {"success": ok, "incident": result}
+
+        @router.get("/api/v1/squad/autorepair/status")
+        async def get_autorepair_status():
+            status = self.controller.get_autorepair_status()
+            return {"success": True, **status}
+
+        @router.post("/api/v1/squad/autorepair/toggle")
+        async def toggle_autorepair(request: Request):
+            require_github()
+            body = await read_json_dict(request, required=True)
+            if not isinstance(body.get("enabled"), bool):
+                raise HTTPException(status_code=400, detail="Missing boolean 'enabled' parameter")
+            reason = str(body.get("reason") or "")
+            auto_apply = body.get("auto_apply")
+            if auto_apply is not None and not isinstance(auto_apply, bool):
+                raise HTTPException(status_code=400, detail="Optional 'auto_apply' must be boolean")
+            status = self.controller.set_autorepair_enabled(body["enabled"], reason=reason, auto_apply=auto_apply)
+            if "error" in status:
+                raise HTTPException(status_code=503, detail=status["error"])
+            return {"success": True, **status}
+
+        @router.post("/api/v1/squad/autorepair/unfreeze")
+        async def unfreeze_autorepair_service(request: Request):
+            require_github()
+            body = await read_json_dict(request, required=True)
+            svc = str(body.get("service_name") or "").strip()
+            if not svc:
+                raise HTTPException(status_code=400, detail="Missing 'service_name' parameter")
+            brain_id = body.get("brain_id")
+            res = self.controller.unfreeze_autorepair_service(svc, brain_id=brain_id)
+            if "error" in res:
+                raise HTTPException(status_code=503, detail=res["error"])
+            return {"success": True, **res}
+
         app.include_router(router)

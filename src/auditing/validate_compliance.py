@@ -316,7 +316,7 @@ class ComplianceAuditor:
                             "file": str(file_path),
                             "line": idx,
                             "rule": "HARDCODED_VERSION_TRAVERSAL",
-                            "message": "Ad-hoc directory traversal searching for VERSION.txt detected. Call appConfig.GetVersion() or microservice_toolbox.version.get_version() instead."
+                            "message": "Ad-hoc directory traversal searching for VERSION.txt detected. Call appConfig.GetVersion() / app_config.get_version() instead."
                         })
 
         return violations
@@ -373,7 +373,7 @@ class ComplianceAuditor:
         output.append("  6. Output must route through universal-logger / UniLog (no bare print / println in production).")
         output.append("  7. Use bootstrap_microservice instead of legacy manual sys.path climbing.")
         output.append("  8. Load configuration via microservice-toolbox / distributed-config instead of direct YAML parsing.")
-        output.append("  9. Resolve dynamic version via appConfig.GetVersion() or microservice_toolbox.version.")
+        output.append("  9. Resolve dynamic version via the dedicated AppConfig method (appConfig.GetVersion() / app_config.get_version()).")
         return "\n".join(output)
 
     # -----------------------------------------------------------------------------
