@@ -19,7 +19,7 @@ httpcore==1.0.9
 httpx==0.28.1
 idna==3.18
 Markdown==3.10.2
--e git+https://github.com/Bastien-Antigravity/microservice-toolbox.git@030417d432b51ad76a8b15d70ce56bbef1e2e962#egg=microservice_toolbox&subdirectory=python
+microservice-toolbox @ git+https://github.com/Bastien-Antigravity/microservice-toolbox.git#subdirectory=python
 msgpack==1.2.1
 nats-py==2.15.0
 pillow==11.3.0

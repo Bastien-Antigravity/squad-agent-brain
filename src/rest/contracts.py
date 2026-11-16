@@ -212,7 +212,6 @@ def build_squad_agent_contracts(
     caps = data.get("capabilities") or {}
     squad_cap = {**(caps.get("squad_agent") or {}), **(data.get("squad_agent") or {})}
     nats_cap = {**(caps.get("nats") or {}), **(data.get("nats") or {})}
-    pg_cap = {**(caps.get("timescale_db") or {}), **(data.get("timescale_db") or {})}
 
     brain_id = (
         osMod.getenv("TARGET_BRAIN_ID")
@@ -225,20 +224,8 @@ def build_squad_agent_contracts(
     chat_topic = f"{prefix}.{brain_id}.squad.chat" if not is_default_brain else f"{prefix}.squad.chat"
     incident_topic = f"{prefix}.{brain_id}.fleet.incident" if not is_default_brain else f"{prefix}.fleet.incident"
 
-    def _safe_addr(getter: typeAny, cap_name: str, fallback_cap: typeDict[str, typeAny]) -> str:
-        if config is not None:
-            try:
-                val = getter(cap_name)
-                if val:
-                    return val
-            except KeyError:
-                pass
-        return f"{fallback_cap['ip']}:{fallback_cap['port']}" if fallback_cap.get("port") and fallback_cap.get("ip") else ""
-
-    rest_addr = _safe_addr(config.get_rest_addr, "squad_agent", squad_cap) if config is not None else ""
-    if not rest_addr and config is not None:
-        rest_addr = _safe_addr(config.get_listen_addr, "squad_agent", squad_cap)
-    grpc_addr = _safe_addr(config.get_grpc_listen_addr, "squad_agent", squad_cap) if config is not None else ""
+    rest_addr = config.get_listen_addr("squad_agent") if config is not None else ""
+    grpc_addr = config.get_grpc_listen_addr("squad_agent") if config is not None else ""
 
     if version:
         ver = version
@@ -271,8 +258,8 @@ def build_squad_agent_contracts(
     proto_text = read_schema_file(_SQUAD_PROTO_PATH)
     grpc_ops = extract_proto_operations(proto_text)
 
-    nats_addr = _safe_addr(config.get_listen_addr, "nats", nats_cap) if config is not None else ""
-    pg_addr = _safe_addr(config.get_listen_addr, "timescale_db", pg_cap) if config is not None else ""
+    nats_addr = config.get_listen_addr("nats") if config is not None else ""
+    pg_addr = config.get_listen_addr("timescale_db") if config is not None else ""
 
     contracts = [
         ExchangeContract(

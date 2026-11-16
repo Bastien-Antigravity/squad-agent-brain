@@ -365,7 +365,7 @@ class DualSquadEventBus(SquadEventBus):
                 topics_to_sub.append(f"{topic}.broadcast")
                 topics_to_sub.append(f"{topic}.agent.{role}")
             elif is_squad_chat and not role:
-                topics_to_sub.append(f"{topic}.*")
+                topics_to_sub.append(f"{topic}.>")
             else:
                 topics_to_sub.append(topic)
 

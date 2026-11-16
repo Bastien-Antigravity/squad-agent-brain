@@ -28,6 +28,7 @@ KEY PARAMETERS:
 - strict_headers: If True, requires all 3 header sections in all non-test source files.
 """
 
+import ast
 import os
 import sys
 import re
@@ -59,7 +60,7 @@ CANONICAL_PORTS = {
 }
 
 EXCLUDED_DIRS = {
-    ".git", ".venv", "venv", "node_modules", "target", "bin", 
+    ".git", ".venv", "venv", "node_modules", "target", "bin",
     "obj", "dist", "build", "vendor", ".rag_cache", "__pycache__"
 }
 
@@ -76,7 +77,123 @@ class ComplianceAuditor:
 
     # -----------------------------------------------------------------------------
 
-    def audit_file(self, file_path: Path) -> List[Dict[str, Any]]:
+    def audit_python_imports(self, file_path: Path, content: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Audits a Python source file for strict adherence to the Bastien Granular Functional Import
+        and camelCase Aliasing rules:
+          1. No whole-module `import <pkg>` outside the top bootstrap block.
+          2. All stdlib/external `from <pkg> import <sym>` must be aliased in camelCase (`as <pkgSym>`).
+          3. All imports from the same module must be combined onto a single line.
+          4. Local/internal project imports must NOT be aliased.
+          5. Wildcard imports (`from <pkg> import *`) are strictly prohibited.
+        """
+        violations: List[Dict[str, Any]] = []
+        if file_path.suffix.lower() != ".py":
+            return violations
+
+        if content is None:
+            try:
+                content = file_path.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                return violations
+
+        try:
+            tree = ast.parse(content, filename=str(file_path))
+        except SyntaxError:
+            return violations
+
+        from src.lib.improved_transformer import CodeTransformer
+
+        # Identify line where bootstrap_microservice / ensure_virtualenv finishes (if entrypoint)
+        lines = content.splitlines()
+        bootstrap_end_line = 0
+        for idx, l in enumerate(lines, 1):
+            if any(k in l for k in ("bootstrap_microservice(", "ensure_import_paths(", "import src.bootstrap as bootstrap")):
+                bootstrap_end_line = idx
+
+        seen_from_modules: Dict[str, int] = {}
+
+        for node in tree.body:
+            if isinstance(node, ast.Import):
+                # Allow `import os`, `import sys` inside entrypoint bootstrap block or `import src.bootstrap as bootstrap`
+                if node.lineno <= bootstrap_end_line:
+                    continue
+                for alias in node.names:
+                    if alias.name == "src.bootstrap" and alias.asname == "bootstrap":
+                        continue
+                    suggested_prefix = CodeTransformer.make_camel_alias(alias.name, "func")
+                    violations.append({
+                        "file": str(file_path),
+                        "line": node.lineno,
+                        "rule": "PYTHON_WHOLE_MODULE_IMPORT",
+                        "message": (
+                            f"Whole-module 'import {alias.name}' is prohibited outside bootstrap. "
+                            f"Use granular functional import with camelCase alias (e.g., 'from {alias.name} import func as {suggested_prefix}')."
+                        ),
+                    })
+            elif isinstance(node, ast.ImportFrom):
+                if node.lineno <= bootstrap_end_line:
+                    continue
+                mod_name = node.module or ""
+                level = node.level or 0
+                is_internal = CodeTransformer.is_internal_module(mod_name, level)
+
+                full_mod_key = ("." * level) + mod_name
+                if full_mod_key in seen_from_modules:
+                    violations.append({
+                        "file": str(file_path),
+                        "line": node.lineno,
+                        "rule": "PYTHON_SEPARATE_MODULE_IMPORTS",
+                        "message": (
+                            f"Multiple 'from {full_mod_key} import ...' lines detected (previous on line {seen_from_modules[full_mod_key]}). "
+                            f"Combine all symbols from '{full_mod_key}' onto a single line."
+                        ),
+                    })
+                else:
+                    seen_from_modules[full_mod_key] = node.lineno
+
+                for alias in node.names:
+                    if alias.name == "*":
+                        violations.append({
+                            "file": str(file_path),
+                            "line": node.lineno,
+                            "rule": "PYTHON_WILDCARD_IMPORT",
+                            "message": f"Wildcard import 'from {full_mod_key} import *' is prohibited.",
+                        })
+                        continue
+
+                    if is_internal:
+                        if alias.asname is not None:
+                            violations.append({
+                                "file": str(file_path),
+                                "line": node.lineno,
+                                "rule": "PYTHON_LOCAL_IMPORT_ALIASED",
+                                "message": (
+                                    f"Internal import 'from {full_mod_key} import {alias.name} as {alias.asname}' must NOT be aliased. "
+                                    f"The camelCase aliasing rule applies strictly to external and standard libraries."
+                                ),
+                            })
+                    else:
+                        # Allow bootstrap helpers unaliased
+                        if alias.name in ("bootstrap_microservice", "init_microservice", "ensure_virtualenv", "prepend_venv_bin", "ensure_import_paths", "get_venv_python"):
+                            continue
+                        expected_alias = CodeTransformer.make_camel_alias(mod_name, alias.name)
+                        if not alias.asname:
+                            violations.append({
+                                "file": str(file_path),
+                                "line": node.lineno,
+                                "rule": "PYTHON_UNALIASED_IMPORT",
+                                "message": (
+                                    f"Unaliased import '{alias.name}' from '{mod_name}'. "
+                                    f"Use Bastien camelCase aliasing: 'from {mod_name} import {alias.name} as {expected_alias}'."
+                                ),
+                            })
+
+        return violations
+
+    # -----------------------------------------------------------------------------
+
+    def audit_file(self, file_path: Path, strict_imports: bool = False) -> List[Dict[str, Any]]:
         """Audits a single source file and returns a list of detected violations."""
         violations = []
         if not file_path.is_file():
@@ -88,14 +205,14 @@ class ComplianceAuditor:
 
         filename = file_path.name
         is_test_file = (
-            filename.endswith("_test.go") or 
-            filename.startswith("test_") or 
+            filename.endswith("_test.go") or
+            filename.startswith("test_") or
             filename.endswith("_test.py") or
             "tests" in file_path.parts or
             "test" in file_path.parts
         )
         is_generated = (
-            filename.endswith(".pb.go") or 
+            filename.endswith(".pb.go") or
             filename.endswith(".capnp.go") or
             filename.endswith("_pb2.py") or
             filename.endswith("_pb2_grpc.py") or
@@ -147,7 +264,7 @@ class ComplianceAuditor:
                     })
             elif filename in ("main.py", "app.py"):
                 has_bootstrap = any(
-                    ("bootstrap_microservice" in l or "src.bootstrap" in l) and not l.strip().startswith("#") 
+                    ("bootstrap_microservice" in l or "src.bootstrap" in l) and not l.strip().startswith("#")
                     for l in lines
                 ) or "src/bootstrap" in str(file_path)
                 if not has_bootstrap:
@@ -255,8 +372,8 @@ class ComplianceAuditor:
 
                 # 5. Observability Invariant: No bare print/println in production code
                 cli_presenters = {
-                    "start_squad.py", "scaffold_microservice.py", "mission_help.py", 
-                    "switch_mode.py", "install_git_hooks.py", "fleet_commander.py", 
+                    "start_squad.py", "scaffold_microservice.py", "mission_help.py",
+                    "switch_mode.py", "install_git_hooks.py", "fleet_commander.py",
                     "fleet_version.py", "preflight_check.py", "joint_audit_purger.py",
                     "audit_ports.py", "ensure_frontmatter.py", "hardening_yaml.py",
                     "improved_transformer.py", "debloat_audit.py"
@@ -319,21 +436,25 @@ class ComplianceAuditor:
                             "message": "Ad-hoc directory traversal searching for VERSION.txt detected. Call appConfig.GetVersion() / app_config.get_version() instead."
                         })
 
+        # 9. Python Granular Functional Import & camelCase Aliasing Check
+        if ext == ".py" and not is_test_file and (strict_imports or "# strict:imports" in content[:500]):
+            violations.extend(self.audit_python_imports(file_path, content=content))
+
         return violations
 
     # -----------------------------------------------------------------------------
 
-    def audit_path(self, target_path: Path) -> List[Dict[str, Any]]:
+    def audit_path(self, target_path: Path, strict_imports: bool = False) -> List[Dict[str, Any]]:
         """Audits a path (file or recursive directory)."""
         all_violations = []
         if target_path.is_file():
-            return self.audit_file(target_path)
+            return self.audit_file(target_path, strict_imports=strict_imports)
 
         for root, dirs, files in os.walk(target_path):
             dirs[:] = [d for d in dirs if d not in EXCLUDED_DIRS and not d.startswith(".")]
             for f in sorted(files):
                 file_path = Path(root) / f
-                all_violations.extend(self.audit_file(file_path))
+                all_violations.extend(self.audit_file(file_path, strict_imports=strict_imports))
 
         return all_violations
 
@@ -408,6 +529,7 @@ def main():
     parser = argparse.ArgumentParser(description="Mechanical Code Compliance Auditor")
     parser.add_argument("path", nargs="?", default=".", help="Target file or directory path to audit (defaults to current dir)")
     parser.add_argument("--staged", action="store_true", help="Audit only Git staged files (pre-commit mode)")
+    parser.add_argument("--strict-imports", action="store_true", help="Enforce strict Python granular imports and camelCase aliasing")
     parser.add_argument("--json", action="store_true", help="Output raw JSON format")
     parser.add_argument("--fix", action="store_true", help="Auto-repair detected formatting & header violations in Python files")
     args = parser.parse_args()
@@ -425,7 +547,7 @@ def main():
         violations = auditor.audit_staged()
     else:
         target = Path(args.path).resolve()
-        violations = auditor.audit_path(target)
+        violations = auditor.audit_path(target, strict_imports=args.strict_imports)
 
     if args.json:
         print(json.dumps(violations, indent=2))

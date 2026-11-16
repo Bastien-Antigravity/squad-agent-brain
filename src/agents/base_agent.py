@@ -143,9 +143,10 @@ class BaseAgent:
     Base squad agent client handling SquadEventBus routing, PostgreSQL log indexing,
     and role-specific Google GenAI SDK model generation.
     """
-    def __init__(self, *, role_name: str, prompt_file: str, config: Any, logger: Any, pg_pool: Any, event_bus: SquadEventBus):
+    def __init__(self, *, role_name: str, prompt_file: str, config: Any, logger: Any, pg_pool: Any, event_bus: SquadEventBus, extra_prompt_files: Optional[List[str]] = None):
         self.role_name = role_name
         self.prompt_file = prompt_file
+        self.extra_prompt_files = extra_prompt_files or []
         self.config = config
         self.logger = logger
         self.pool = pg_pool
@@ -190,15 +191,48 @@ class BaseAgent:
         )
 
     def _load_system_prompt(self) -> str:
-        """Reads the agent role's system instruction from KMS files."""
-        vault_root, _ = resolve_vault_and_workspace(__file__)
+        """
+        Compiles the agent role's complete system instruction by combining:
+        1. Role-specific persona prompt from 07-Core-KMS/Role-Prompts/
+        2. Workspace Root AGENTS.md (Non-Negotiable Engineering & Language Invariants)
+        3. Active Session Rituals (00-AI-Orchestration/Workflows/ACTIVE-RITUALS.md)
+        4. Optional specialist appendices (e.g. Squad/*.md for DeveloperAgent)
+        """
+        vault_root, workspace_root = resolve_vault_and_workspace(__file__)
+        sections: List[str] = []
+
         prompt_path = vault_root / "07-Core-KMS" / "Role-Prompts" / self.prompt_file
         if prompt_path.exists():
             try:
-                return prompt_path.read_text(encoding="utf-8")
+                sections.append(prompt_path.read_text(encoding="utf-8"))
             except Exception as e:
                 self.logger.error(f"Agent {self.role_name}: Failed to read prompt file {self.prompt_file}: {e}")
-        return f"You are the {self.role_name} AI squad agent."
+        else:
+            sections.append(f"You are the {self.role_name} AI squad agent.")
+
+        root_agents_md = workspace_root / "AGENTS.md"
+        if root_agents_md.exists():
+            try:
+                sections.append(root_agents_md.read_text(encoding="utf-8"))
+            except Exception as e:
+                self.logger.debug(f"Agent {self.role_name}: Could not read root AGENTS.md: {e}")
+
+        active_rituals_md = vault_root / "00-AI-Orchestration" / "Workflows" / "ACTIVE-RITUALS.md"
+        if active_rituals_md.exists():
+            try:
+                sections.append(active_rituals_md.read_text(encoding="utf-8"))
+            except Exception as e:
+                self.logger.debug(f"Agent {self.role_name}: Could not read ACTIVE-RITUALS.md: {e}")
+
+        for extra_rel in getattr(self, "extra_prompt_files", []):
+            extra_path = vault_root / "07-Core-KMS" / "Role-Prompts" / extra_rel
+            if extra_path.exists():
+                try:
+                    sections.append(extra_path.read_text(encoding="utf-8"))
+                except Exception as e:
+                    self.logger.debug(f"Agent {self.role_name}: Could not read extra prompt {extra_rel}: {e}")
+
+        return "\n\n---\n\n".join(sections)
 
     def _refresh_llm_config(self) -> None:
         """Dynamically re-reads LLM configuration from config capability or environment for live hot-reload."""
@@ -354,7 +388,7 @@ class BaseAgent:
             
             # Turn budget loop for parallel tool calls and multi-turn execution
             loop_turn = 0
-            MAX_TOOL_TURNS = 5
+            MAX_TOOL_TURNS = 10
             current_response = response
             
             while loop_turn < MAX_TOOL_TURNS:
@@ -504,8 +538,6 @@ class BaseAgent:
                         content = _fold_python_code(content)
                     elif ext in ("js", "ts", "go", "rs", "cpp", "h", "hpp", "cc"):
                         content = _fold_generic_code(content)
-                    elif ext in ("js", "ts", "go", "rs", "cpp", "h", "hpp", "cc"):
-                        content = _fold_generic_code(content)
                 return content
             except Exception as e:
                 return f"Error reading file {path_arg}: {e}"
@@ -525,6 +557,19 @@ class BaseAgent:
             try:
                 file_path.parent.mkdir(parents=True, exist_ok=True)
                 file_path.write_text(content_arg, encoding="utf-8")
+                if file_path.suffix.lower() in (".py", ".go", ".rs", ".cpp", ".h", ".hpp"):
+                    try:
+                        from src.auditing.validate_compliance import ComplianceAuditor
+                        auditor = ComplianceAuditor(workspace_root=workspace_root)
+                        violations = auditor.audit_file(file_path, strict_imports=True)
+                        if violations:
+                            v_lines = [f"  - [{v['rule']}] Line {v['line']}: {v['message']}" for v in violations[:8]]
+                            return (
+                                f"Success writing to file {path_arg}, BUT {len(violations)} ecosystem compliance violation(s) "
+                                f"were detected and MUST be fixed immediately:\n" + "\n".join(v_lines)
+                            )
+                    except Exception:
+                        pass
                 return f"Success writing to file {path_arg}"
             except Exception as e:
                 return f"Error writing file {path_arg}: {e}"
@@ -652,14 +697,15 @@ class BaseAgent:
             return
             
         loop = asyncio.get_event_loop()
+        active_brain = self.current_source_brain or self.target_brain_id or "obsidian-brain"
         def db_insert():
             conn = self.pool.getconn()
             try:
                 with conn.cursor() as cursor:
                     cursor.execute('SET search_path TO "08-Squad-Agent", public')
                     cursor.execute(
-                        "INSERT INTO squad_chat_logs (session_id, sender, content, tool_calls) VALUES (%s, %s, %s, %s)",
-                        (session_id, self.role_name, content, json.dumps(tool_calls or []))
+                        "INSERT INTO squad_chat_logs (session_id, sender, content, tool_calls, brain_id) VALUES (%s, %s, %s, %s, %s)",
+                        (session_id, self.role_name, content, json.dumps(tool_calls or []), active_brain)
                     )
                 conn.commit()
             except Exception as e:

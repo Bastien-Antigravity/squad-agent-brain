@@ -189,7 +189,10 @@ def validate_proposed_diff(diff_text: str, git_root: Path, service_dir: Path) ->
                 continue
             if token.startswith("a/") or token.startswith("b/"):
                 token = token[2:]
-            if token.startswith(f"{git_root.name}/"):
+            nested_prefix = f"{git_root.parent.name}/{git_root.name}/"
+            if token.startswith(nested_prefix):
+                token = token[len(nested_prefix):]
+            elif token.startswith(f"{git_root.name}/"):
                 token = token[len(git_root.name) + 1:]
             raw_paths.append(token)
 
@@ -732,9 +735,12 @@ class AutoRepairCoordinator:
         return git_root, rel_subdir
 
     def _apply_patch_in_dir(self, git_root: Path, diff_text: str) -> subprocess.CompletedProcess:
-        """Applies a unified diff at git_root, handling workspace-prefixed paths (-p2) cleanly."""
+        """Applies a unified diff at git_root, handling workspace-prefixed paths (-p2 / -p3) cleanly."""
         cmd = ["git", "apply", "--whitespace=nowarn", "-"]
-        if f"--- a/{git_root.name}/" in diff_text and f"+++ b/{git_root.name}/" in diff_text:
+        nested_prefix = f"{git_root.parent.name}/{git_root.name}/"
+        if f"--- a/{nested_prefix}" in diff_text and f"+++ b/{nested_prefix}" in diff_text:
+            cmd = ["git", "apply", "-p3", "--whitespace=nowarn", "-"]
+        elif f"--- a/{git_root.name}/" in diff_text and f"+++ b/{git_root.name}/" in diff_text:
             cmd = ["git", "apply", "-p2", "--whitespace=nowarn", "-"]
         return subprocess.run(
             cmd,

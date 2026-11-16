@@ -185,109 +185,149 @@ class CodeTransformer:
         return code
 
     # -----------------------------------------------------------------------------------------------
+    @staticmethod
+    def make_camel_alias(module_name: str, symbol_name: str) -> str:
+        """
+        Computes the canonical Bastien camelCase import alias `[module][SymbolName]`.
+        Examples:
+          - ('os.path', 'join') -> 'osPathJoin'
+          - ('datetime', 'datetime') -> 'dtDateTime'
+          - ('json', 'dumps') -> 'jsonDumps'
+          - ('typing', 'Optional') -> 'typeOptional'
+          - ('yaml', 'safe_load') -> 'yamlSafeLoad'
+        """
+        prefix_overrides = {
+            "typing": "type",
+            "datetime": "dt",
+        }
+        if module_name in prefix_overrides:
+            mod_prefix = prefix_overrides[module_name]
+        else:
+            raw_parts = [p for seg in module_name.split(".") for p in seg.split("_") if p]
+            if not raw_parts:
+                mod_prefix = module_name
+            else:
+                mod_prefix = raw_parts[0].lower() + "".join(p.capitalize() for p in raw_parts[1:])
+
+        if symbol_name == "datetime":
+            sym_suffix = "DateTime"
+        elif "_" in symbol_name:
+            sym_suffix = "".join(p.capitalize() for p in symbol_name.split("_") if p)
+        elif symbol_name:
+            sym_suffix = symbol_name[0].upper() + symbol_name[1:]
+        else:
+            sym_suffix = symbol_name
+
+        return f"{mod_prefix}{sym_suffix}"
+
+    # -----------------------------------------------------------------------------------------------
+    @staticmethod
+    def is_internal_module(module_name: Optional[str], level: int = 0) -> bool:
+        """Returns True if the import targets an internal project/ecosystem local module."""
+        if level and level > 0:
+            return True
+        if not module_name:
+            return False
+        internal_roots = (
+            "src", "lib", "interfaces", "agents", "auditing", "bootstrap", "clients",
+            "core", "evaluation", "extraction", "facade", "factory", "fleet",
+            "grpc_control", "helpers", "identity", "lifecycle", "maintenance",
+            "memory", "models", "planner", "rest", "safety", "skills", "specs",
+            "telegram", "tests", "utils", "web",
+        )
+        root_pkg = module_name.split(".")[0]
+        return root_pkg in internal_roots
+
+    # -----------------------------------------------------------------------------------------------
     def _ensure_granular_imports(self, code: str) -> str:
         """
-        Refactored version using AST to safely identify and transform imports and their usages.
+        Refactored version using AST to safely identify and transform whole-module imports
+        and unaliased external/stdlib imports into granular camelCase aliased imports.
         """
         try:
             tree = ast.parse(code)
         except SyntaxError:
-            # Fallback to regex if code is invalid (unlikely here)
             return self._ensure_granular_imports_regex(code)
 
-        # 1. Identify all imports and their usages
-        imports_to_replace = {} # old_name -> new_name
-        standard_functional_imports = set()
-        typing_imports = {} # name -> alias
+        # 1. Identify all top-level imports and classify them
+        imports_to_replace = {}  # local_bound_name -> module_name (for whole-module `import X`)
+        from_symbol_to_alias = {}  # local_bound_name -> (module_name, original_symbol, target_alias)
+        grouped_from_imports = {}  # module_name -> dict of {original_symbol: target_alias}
         external_imports = []
         internal_imports = []
 
-        class ImportVisitor(ast.NodeVisitor):
-            def visit_Import(self, node):
+        for node in tree.body:
+            if isinstance(node, ast.Import):
                 for alias in node.names:
-                    if alias.name in ['os', 'sys', 're']:
-                        imports_to_replace[alias.asname or alias.name] = alias.name
+                    bound_name = alias.asname or alias.name
+                    if self.is_internal_module(alias.name, 0):
+                        internal_imports.append(f"import {alias.name}")
                     else:
-                        external_imports.append(ast.unparse(node))
-            
-            def visit_ImportFrom(self, node):
-                if node.module == 'typing':
-                    for alias in node.names:
-                        typing_imports[alias.name] = f"type{alias.name}"
-                elif node.module in ['os.path', 'sys', 're']:
-                    for alias in node.names:
-                        # Map functional imports to their aliased names
-                        if node.module == 'os.path' and alias.name == 'join':
-                            standard_functional_imports.add("from os.path import join as osPathJoin")
-                        elif node.module == 'os.path' and alias.name == 'exists':
-                            standard_functional_imports.add("from os.path import exists as osPathExists")
-                        elif node.module == 'sys' and alias.name == 'exit':
-                            standard_functional_imports.add("from sys import exit as sysExit")
-                        elif node.module == 're' and alias.name == 'search':
-                            standard_functional_imports.add("from re import search as reSearch")
-                        elif node.module == 're' and alias.name == 'match':
-                            standard_functional_imports.add("from re import match as reMatch")
+                        imports_to_replace[bound_name] = alias.name
+            elif isinstance(node, ast.ImportFrom):
+                mod_name = node.module or ""
+                if self.is_internal_module(mod_name, node.level or 0):
+                    # Rule: Do NOT alias local/internal libraries
+                    prefix_dots = "." * (node.level or 0)
+                    clean_names = [a.name for a in node.names]
+                    internal_imports.append(f"from {prefix_dots}{mod_name} import {', '.join(clean_names)}")
                 else:
-                    # Check if internal
-                    is_internal = node.module.startswith(('agents', 'core', 'utils', 'evaluation', 'skills', 'specs', 'tests')) or node.level > 0
-                    if is_internal:
-                        internal_imports.append(ast.unparse(node))
-                    else:
-                        external_imports.append(ast.unparse(node))
+                    for alias in node.names:
+                        if alias.name == "*":
+                            continue
+                        orig_sym = alias.name
+                        bound_name = alias.asname or orig_sym
+                        target_alias = alias.asname or self.make_camel_alias(mod_name, orig_sym)
+                        from_symbol_to_alias[bound_name] = (mod_name, orig_sym, target_alias)
+                        grouped_from_imports.setdefault(mod_name, {})[orig_sym] = target_alias
 
-        visitor = ImportVisitor()
-        visitor.visit(tree)
+        # 2. Transform the code (usages) and track which whole-module attributes were used
+        outer_self = self
 
-        # 2. Transform the code (usages)
         class UsageTransformer(ast.NodeTransformer):
-            def __init__(self, imports_to_replace, typing_imports):
-                self.imports_to_replace = imports_to_replace
-                self.typing_imports = typing_imports
-                self.used_functional = set()
-                self.used_typing = set()
+            def __init__(self):
+                self.used_from_imports = {}  # module_name -> {orig_sym: target_alias}
+                self.unresolved_whole_modules = set()
+
+            def _register_used(self, mod_name: str, sym_name: str) -> str:
+                alias = grouped_from_imports.get(mod_name, {}).get(sym_name) or outer_self.make_camel_alias(mod_name, sym_name)
+                self.used_from_imports.setdefault(mod_name, {})[sym_name] = alias
+                return alias
 
             def visit_Attribute(self, node):
-                node = self.generic_visit(node)
-                if isinstance(node.value, ast.Name) and node.value.id in self.imports_to_replace:
-                    module = self.imports_to_replace[node.value.id]
-                    if module == 'os' and node.attr == 'path':
-                        # Special case for os.path.join -> osPathJoin
-                        pass # Handled by deeper Attribute or Call
-                    elif module == 'os' and node.attr == 'join': # if someone did os.join (incorrect but let's be safe)
-                        self.used_functional.add("from os.path import join as osPathJoin")
-                        return ast.Name(id='osPathJoin', ctx=node.ctx)
-                
-                # Handle os.path.join
-                if isinstance(node.value, ast.Attribute) and \
-                   isinstance(node.value.value, ast.Name) and \
-                   node.value.value.id in self.imports_to_replace and \
-                   self.imports_to_replace[node.value.value.id] == 'os' and \
-                   node.value.attr == 'path':
-                    if node.attr == 'join':
-                        self.used_functional.add("from os.path import join as osPathJoin")
-                        return ast.Name(id='osPathJoin', ctx=node.ctx)
-                    if node.attr == 'exists':
-                        self.used_functional.add("from os.path import exists as osPathExists")
-                        return ast.Name(id='osPathExists', ctx=node.ctx)
-                
-                return node
+                # First check 2-level attributes like os.path.join or urllib.request.urlopen
+                if (
+                    isinstance(node.value, ast.Attribute)
+                    and isinstance(node.value.value, ast.Name)
+                    and node.value.value.id in imports_to_replace
+                ):
+                    root_mod = imports_to_replace[node.value.value.id]
+                    sub_mod = f"{root_mod}.{node.value.attr}"
+                    alias = self._register_used(sub_mod, node.attr)
+                    return ast.Name(id=alias, ctx=node.ctx)
+
+                # Check 1-level attributes like json.dumps, time.sleep, re.search, sys.exit
+                if isinstance(node.value, ast.Name) and node.value.id in imports_to_replace:
+                    mod_name = imports_to_replace[node.value.id]
+                    alias = self._register_used(mod_name, node.attr)
+                    return ast.Name(id=alias, ctx=node.ctx)
+
+                return self.generic_visit(node)
 
             def visit_Name(self, node):
-                if node.id in self.typing_imports:
-                    self.used_typing.add(node.id)
-                    return ast.Name(id=self.typing_imports[node.id], ctx=node.ctx)
-                if node.id == 'join' and 'os' in self.imports_to_replace: # if from os.path import join was there
-                     self.used_functional.add("from os.path import join as osPathJoin")
-                     return ast.Name(id='osPathJoin', ctx=node.ctx)
-                # ... other mappings if needed
+                if isinstance(node.ctx, ast.Load) and node.id in from_symbol_to_alias:
+                    mod_name, orig_sym, target_alias = from_symbol_to_alias[node.id]
+                    self.used_from_imports.setdefault(mod_name, {})[orig_sym] = target_alias
+                    return ast.Name(id=target_alias, ctx=node.ctx)
+                if isinstance(node.ctx, ast.Load) and node.id in imports_to_replace:
+                    self.unresolved_whole_modules.add(imports_to_replace[node.id])
                 return node
 
-        transformer = UsageTransformer(imports_to_replace, typing_imports)
+        # Remove top-level imports before visiting body so we only track body usages
+        tree.body = [n for n in tree.body if not isinstance(n, (ast.Import, ast.ImportFrom))]
+        transformer = UsageTransformer()
         new_tree = transformer.visit(tree)
-        
-        # Remove original imports from tree to avoid double printing
-        new_tree.body = [n for n in new_tree.body if not isinstance(n, (ast.Import, ast.ImportFrom))]
-        
+
         # Reconstruct code
         body_code = ast.unparse(new_tree)
 
@@ -298,16 +338,28 @@ class CodeTransformer:
         else:
             header = "#!/usr/bin/env python\n# coding:utf-8"
 
-        # Prepare final import lists
+        # Merge grouped_from_imports that were explicitly declared with those discovered from attribute access
+        merged_from = {}
+        for mod_name, sym_map in grouped_from_imports.items():
+            for sym_name, alias in sym_map.items():
+                # Keep if used in body or if it wasn't a typing-only unused symbol
+                if mod_name in transformer.used_from_imports and sym_name in transformer.used_from_imports[mod_name]:
+                    merged_from.setdefault(mod_name, {})[sym_name] = alias
+                elif mod_name != "typing":
+                    merged_from.setdefault(mod_name, {})[sym_name] = alias
+        for mod_name, sym_map in transformer.used_from_imports.items():
+            for sym_name, alias in sym_map.items():
+                merged_from.setdefault(mod_name, {})[sym_name] = alias
+
+        for mod_name in sorted(merged_from.keys()):
+            sym_map = merged_from[mod_name]
+            parts = [f"{sym} as { sym_map[sym] }" for sym in sorted(sym_map.keys())]
+            external_imports.append(f"from {mod_name} import " + ", ".join(parts))
+
+        for mod_name in sorted(transformer.unresolved_whole_modules):
+            external_imports.append(f"import {mod_name}")
+
         final_external = sorted(list(set(external_imports)))
-        for func in transformer.used_functional:
-            final_external.append(func)
-        
-        if transformer.used_typing:
-            aliased = [f"{n} as {typing_imports[n]}" for n in sorted(transformer.used_typing)]
-            final_external.append("from typing import " + ", ".join(aliased))
-            
-        final_external = sorted(list(set(final_external)))
         final_internal = sorted(list(set(internal_imports)))
 
         # Build import block
@@ -323,7 +375,7 @@ class CodeTransformer:
         if import_lines:
             # FORCE EXACTLY 3 BLANK LINES (4 newlines)
             final_code += "\n".join(import_lines) + "\n\n\n\n"
-        
+
         final_code += body_code
         return final_code
 

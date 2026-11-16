@@ -365,7 +365,13 @@ def main():
 
     for name, p in targets:
         curr_info = inspect_repo_version(p)
-        curr_ver = curr_info["version_txt"] or "0.0.1"
+        curr_ver = curr_info["version_txt"]
+        if not curr_ver:
+            if args.set_version:
+                curr_ver = "0.0.0"
+            else:
+                print(f"{C_RED}❌ [{name}] Missing or empty VERSION.txt (FAIL-FAST per AGENTS.md Rule #3){C_RESET}")
+                continue
 
         if args.set_version:
             new_ver = args.set_version.strip().lstrip("v")

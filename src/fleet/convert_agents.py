@@ -214,6 +214,25 @@ To prevent context degradation, you MUST begin EVERY single response with the fo
 
                     processed_agents.add(spec_name)
 
+    # Ensure workspace root .agents/skills symlink points to obsidian-brain/.agents/skills
+    # so Antigravity AI IDE sessions opened at workspace root discover all 22 Squad skills.
+    try:
+        ws_agents_dir = Path(workspace_root) / ".agents"
+        ws_skills_link = ws_agents_dir / "skills"
+        vault_skills_dir = Path(vault_root) / ".agents" / "skills"
+        if vault_skills_dir.exists() and Path(workspace_root).resolve() != Path(vault_root).resolve():
+            ws_agents_dir.mkdir(parents=True, exist_ok=True)
+            rel_target = os.path.relpath(vault_skills_dir, ws_agents_dir)
+            if ws_skills_link.is_symlink():
+                if os.readlink(ws_skills_link) != rel_target:
+                    ws_skills_link.unlink()
+                    ws_skills_link.symlink_to(rel_target)
+            elif not ws_skills_link.exists():
+                ws_skills_link.symlink_to(rel_target)
+            logger.info(f"🔗 Linked workspace skills: {ws_skills_link} -> {rel_target}")
+    except OSError as e:
+        logger.warning(f"⚠️ Could not link workspace .agents/skills: {e}")
+
 # -----------------------------------------------------------------------------------------------
 
 if __name__ == "__main__":

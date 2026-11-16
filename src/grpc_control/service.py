@@ -37,10 +37,11 @@ class SquadControlServiceImpl(squad_control_pb2_grpc.SquadControlServiceServicer
 
     async def GetStatus(self, request, context):
         status = await self.controller.get_status()
+        ver = status.get("version") or (self.controller.config.get_version() if hasattr(self.controller, "config") and hasattr(self.controller.config, "get_version") else getattr(self.controller, "version", ""))
         return squad_control_pb2.GetStatusResponse(
             healthy=status.get("healthy", True),
             status=status.get("status", "running"),
-            version=status.get("version", "0.0.1"),
+            version=ver,
             timestamp=status.get("timestamp", int(time.time()))
         )
 

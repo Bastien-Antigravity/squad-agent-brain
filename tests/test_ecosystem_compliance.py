@@ -248,6 +248,69 @@ def connect():
         self.assertIn("DIRECT_YAML_PARSE", rules)
         self.assertIn("HARDCODED_PORT", rules)
 
+    def test_catches_python_granular_import_and_alias_violations(self):
+        """Verifies that whole-module imports and unaliased stdlib imports are flagged in strict mode."""
+        bad_py = self.test_dir / "unaliased_worker.py"
+        bad_py.write_text("""#!/usr/bin/env python
+# coding:utf-8
+
+\"\"\"
+ESSENTIAL PROCESS:
+Worker with non-compliant imports.
+
+DATA FLOW:
+1. Serializes payload.
+
+KEY PARAMETERS:
+- payload: Input dictionary.
+\"\"\"
+
+import json
+from os.path import join
+from .storage import Storage as aliasedStorage
+
+# -----------------------------------------------------------------------------------------------
+
+def serialize(payload):
+    return json.dumps(payload), join("a", "b"), aliasedStorage
+""")
+        violations = self.auditor.audit_file(bad_py, strict_imports=True)
+        rules = [v["rule"] for v in violations]
+        self.assertIn("PYTHON_WHOLE_MODULE_IMPORT", rules)
+        self.assertIn("PYTHON_UNALIASED_IMPORT", rules)
+        self.assertIn("PYTHON_LOCAL_IMPORT_ALIASED", rules)
+
+        compliant_py = self.test_dir / "compliant_worker.py"
+        compliant_py.write_text("""#!/usr/bin/env python
+# coding:utf-8
+
+\"\"\"
+ESSENTIAL PROCESS:
+Worker with compliant Bastien granular camelCase aliased imports.
+
+DATA FLOW:
+1. Serializes payload.
+
+KEY PARAMETERS:
+- payload: Input dictionary.
+\"\"\"
+
+from json import dumps as jsonDumps
+from os.path import join as osPathJoin, exists as osPathExists
+from typing import Any as typeAny, Dict as typeDict
+
+from .storage import Storage
+
+# -----------------------------------------------------------------------------------------------
+
+def serialize(payload: typeDict[str, typeAny]) -> str:
+    if osPathExists(osPathJoin("a", "b")):
+        return jsonDumps(payload)
+    return str(Storage)
+""")
+        clean_violations = self.auditor.audit_file(compliant_py, strict_imports=True)
+        self.assertEqual(clean_violations, [])
+
 
 if __name__ == "__main__":
     unittest.main()

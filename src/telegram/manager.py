@@ -55,7 +55,7 @@ class MenuManager:
                 msg = f"🚀 Squad Status: {status.get('status', 'running')}\n"
                 msg += f"- Healthy: {status.get('healthy', True)}\n"
                 msg += f"- Active Mode: {mode_name} (Mode {mode})\n"
-                msg += f"- Version: {status.get('version', '0.0.1')}"
+                msg += f"- Version: {status['version']}"
                 await self.tc.send_telemetry(msg)
             except Exception as err:
                 await self.tc.send_telemetry(f"❌ Error fetching status: {err}")

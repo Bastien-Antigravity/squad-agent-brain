@@ -29,6 +29,16 @@ class DeveloperAgent(BaseAgent):
     Lead Developer agent daemon. Specialized in reading/writing source files,
     compiling code, and implementing logic changes.
     """
+    SPECIALIST_PROMPTS = [
+        "03-Developer/Squad/Python-Integration-Specialist.md",
+        "03-Developer/Squad/Go-Systems-Specialist.md",
+        "03-Developer/Squad/Rust-Safety-Specialist.md",
+        "03-Developer/Squad/CPP-Low-Latency-Specialist.md",
+        "03-Developer/Squad/Web-UI-Specialist.md",
+        "03-Developer/Squad/Timescale-Data-Specialist.md",
+        "03-Developer/Squad/Excel-VBA-Specialist.md",
+    ]
+
     def __init__(self, *, config: Any, logger: Any, pg_pool: Any, event_bus: SquadEventBus):
         super().__init__(
             role_name="developer",
@@ -36,6 +46,7 @@ class DeveloperAgent(BaseAgent):
             config=config,
             logger=logger,
             pg_pool=pg_pool,
-            event_bus=event_bus
+            event_bus=event_bus,
+            extra_prompt_files=self.SPECIALIST_PROMPTS,
         )
         self.tools = [query_rag_engine, read_workspace_file, write_workspace_file, execute_shell_command]

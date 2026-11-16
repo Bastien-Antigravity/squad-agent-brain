@@ -106,6 +106,18 @@ class TestAutoRepairHelpers(unittest.TestCase):
             self.assertTrue(ok, reason)
             self.assertEqual(paths, ["my-svc/app.py"])
 
+            vault_dir = Path(tmpdir) / "obsidian-brain"
+            submodule_root = vault_dir / "09-RAG-Engine"
+            submodule_root.mkdir(parents=True)
+            nested_diff = (
+                "--- a/obsidian-brain/09-RAG-Engine/src/app.py\n"
+                "+++ b/obsidian-brain/09-RAG-Engine/src/app.py\n"
+                "@@ -1 +1 @@\n-x=1\n+x=2\n"
+            )
+            ok, reason, paths = validate_proposed_diff(nested_diff, submodule_root, submodule_root)
+            self.assertTrue(ok, reason)
+            self.assertEqual(paths, ["src/app.py"])
+
 
 class TestAutoRepairCoordinator(unittest.IsolatedAsyncioTestCase):
     async def test_handle_incident_proposal_only_dedupe_and_menu_callback(self):

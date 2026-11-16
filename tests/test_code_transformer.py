@@ -91,5 +91,24 @@ class TestCodeTransformer(unittest.TestCase):
             updated_content = file_path.read_text(encoding="utf-8")
             self.assertTrue(updated_content.startswith("#!/usr/bin/env python\n# coding:utf-8\n"))
 
+    def test_granular_import_and_camelcase_aliasing_transform(self):
+        raw_code = (
+            "import json\n"
+            "import os\n"
+            "from typing import Optional, Dict\n"
+            "from .storage import Storage\n\n"
+            "class DataHandler:\n"
+            "    def process(self, payload: Optional[Dict]):\n"
+            "        p = os.path.join('a', 'b')\n"
+            "        return json.dumps({'path': p})\n"
+        )
+        transformed = self.transformer.transform(code=raw_code, class_name="DataHandler")
+        self.assertIn("from json import dumps as jsonDumps", transformed)
+        self.assertIn("from os.path import join as osPathJoin", transformed)
+        self.assertIn("from typing import Dict as typeDict, Optional as typeOptional", transformed)
+        self.assertIn("from .storage import Storage", transformed)
+        self.assertIn("osPathJoin(", transformed)
+        self.assertIn("jsonDumps(", transformed)
+
 if __name__ == "__main__":
     unittest.main()

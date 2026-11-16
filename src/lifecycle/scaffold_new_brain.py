@@ -265,7 +265,8 @@ def scaffold_brain(
     create_symlink(target_path / "standalone.yaml", "../docker-deployment/modes/local/config/native.yaml", dry_run)
 
     # VERSION.txt
-    create_file(target_path / "VERSION.txt", "0.0.1\n", dry_run)
+    active_version = bootstrap.config.get_version()
+    create_file(target_path / "VERSION.txt", f"{active_version}\n", dry_run)
 
     # .gitignore
     gitignore_content = """# Environments
@@ -404,6 +405,9 @@ services:
       - SQUAD_PORT=${{SA_PORT:-{sa_port}}}
       - BRAIN_ID=${{BRAIN_ID:-{target_name}}}
       - TARGET_BRAIN_ID=${{BRAIN_ID:-{target_name}}}
+      - OBSIDIAN_VAULT_PATH=/app/brain
+      - BRAIN_DIR=/app/brain
+      - WORKSPACE_ROOT=/app/brain
       - SA_PORT=${{SA_PORT:-{sa_port}}}
       - SA_GRPC_PORT=${{SA_GRPC_PORT:-{sa_grpc_port}}}
       - TS_IP=timescale-db
@@ -414,7 +418,10 @@ services:
       - NATS_IP=nats-server
       - NATS_PORT=4222
       - RG_IP=rag-engine
-      - RG_REST_PORT=8093
+      - RG_PORT=8090
+      - RG_GRPC_PORT=8091
+      - RAG_PORT=8082
+      - RG_REST_PORT=8082
       - WB_IP=web-interface
       - WB_PORT=5000
       - BASTIEN_PRIVATE_KEY_PATH=/etc/bastien/private.pem

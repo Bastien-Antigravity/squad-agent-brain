@@ -67,17 +67,29 @@ def get_logger(name: str = "SquadLogger") -> Any:
 def resolve_vault_and_workspace(script_file: str) -> Tuple[Path, Path]:
     """
     Dynamically resolves the vault root (obsidian-brain or custom brain) and workspace root (parent of vault).
+    Honors explicit Docker/container environment overrides (OBSIDIAN_VAULT_PATH, BRAIN_DIR, WORKSPACE_ROOT).
     """
     current = Path(script_file).resolve().parent
     vault_root = None
-    for parent in [current] + list(current.parents):
-        if (parent / "08-Squad-Agent").is_dir() and (parent / "00-AI-Orchestration").is_dir():
-            vault_root = parent
-            break
-        if parent.name == "obsidian-brain" or parent.name.endswith("-brain"):
-            vault_root = parent
-            break
-            
+
+    env_vault = os.environ.get("OBSIDIAN_VAULT_PATH") or os.environ.get("BRAIN_DIR")
+    if env_vault:
+        candidate = Path(env_vault).resolve()
+        if candidate.is_dir():
+            vault_root = candidate
+
+    if not vault_root:
+        for parent in [current] + list(current.parents):
+            if (parent / "08-Squad-Agent").is_dir() and (parent / "00-AI-Orchestration").is_dir():
+                vault_root = parent
+                break
+            if parent.name == "obsidian-brain" or parent.name.endswith("-brain"):
+                vault_root = parent
+                break
+
+    if not vault_root and Path("/app/brain").is_dir():
+        vault_root = Path("/app/brain").resolve()
+
     if not vault_root:
         # Fallback to parent of script dir if run directly from 08-Squad-Agent
         for parent in [current] + list(current.parents):
@@ -86,15 +98,24 @@ def resolve_vault_and_workspace(script_file: str) -> Tuple[Path, Path]:
                 break
         if not vault_root:
             vault_root = current
-            
+
     workspace_root = None
-    for p in [vault_root] + list(vault_root.parents):
-        if (p / "docker-deployment").exists() and (p / "microservice-toolbox").exists():
-            workspace_root = p
-            break
-        if (p / "Bastien-Antigravity" / "docker-deployment").exists():
-            workspace_root = p / "Bastien-Antigravity"
-            break
+    env_workspace = os.environ.get("WORKSPACE_ROOT")
+    if env_workspace:
+        candidate_ws = Path(env_workspace).resolve()
+        if candidate_ws.is_dir():
+            workspace_root = candidate_ws
+
+    if not workspace_root:
+        for p in [vault_root] + list(vault_root.parents):
+            if (p / "docker-deployment").exists() and (p / "microservice-toolbox").exists():
+                workspace_root = p
+                break
+            if (p / "Bastien-Antigravity" / "docker-deployment").exists():
+                workspace_root = p / "Bastien-Antigravity"
+                break
+    if not workspace_root and Path("/workspace").is_dir():
+        workspace_root = Path("/workspace").resolve()
     if not workspace_root:
         workspace_root = vault_root.parent
     return vault_root, workspace_root
