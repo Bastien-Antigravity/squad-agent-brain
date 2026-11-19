@@ -17,6 +17,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 # Add src to sys.path
 SQUAD_AGENT_DIR = Path(__file__).resolve().parent.parent
@@ -33,6 +34,7 @@ from src.lifecycle.scaffold_microservice import (
     generate_bdd_spec,
     create_file,
     create_symlink,
+    resolve_workspace_root,
 )
 
 
@@ -229,7 +231,11 @@ class TestScaffoldUnits(unittest.TestCase):
 
         standalone = self.test_dir / "standalone.yaml"
         self.assertTrue(standalone.is_symlink())
-        self.assertEqual(os.readlink(standalone), "../docker-deployment/modes/local/config/native.yaml")
+        self.assertTrue(standalone.exists(), "standalone.yaml symlink must not be dangling")
+        self.assertTrue(
+            os.readlink(standalone).endswith("docker-deployment/modes/local/config/native.yaml"),
+            f"Unexpected standalone.yaml symlink target: {os.readlink(standalone)}",
+        )
 
     def test_generate_common_files_python(self):
         """Verify Python Dockerfile includes multi-stage build and microservice-toolbox installation."""
@@ -271,6 +277,63 @@ class TestScaffoldUnits(unittest.TestCase):
         self.assertIn(f"microservice: {name}", content)
         self.assertIn("Scenario 1: Clean Startup with Valid Configuration", content)
         self.assertIn("Scenario 2: Graceful Termination on OS Signal", content)
+
+    def test_runtime_stage_oci_source_label_all_languages(self):
+        """Verify final runtime stage in all 4 Dockerfiles includes OCI source label."""
+        for lang in ("go", "rust", "python", "cpp"):
+            svc_name = f"oci-{lang}-svc"
+            svc_dir = self.test_dir / lang
+            generate_common_files(svc_dir, svc_name, lang=lang, port=8120, desc="OCI label test", dry_run=False)
+            dockerfile = (svc_dir / "Dockerfile").read_text(encoding="utf-8")
+            stages = dockerfile.split("\nFROM ")
+            self.assertGreaterEqual(len(stages), 2, f"{lang} Dockerfile must be multi-stage")
+            runtime_stage = stages[-1]
+            self.assertIn(
+                f'LABEL org.opencontainers.image.source="https://github.com/Bastien-Antigravity/{svc_name}"',
+                runtime_stage,
+                f"{lang} Dockerfile final runtime stage missing OCI source label",
+            )
+
+    def test_generate_common_files_fleet_mode_docker(self):
+        """Verify --fleet-mode docker symlinks standalone.yaml to host-bridge.yaml (127.0.0.2)."""
+        name = "test-docker-bridge-svc"
+        generate_common_files(
+            self.test_dir,
+            name,
+            lang="go",
+            port=8125,
+            desc="Docker host-bridge test",
+            dry_run=False,
+            fleet_mode="docker",
+        )
+        standalone = self.test_dir / "standalone.yaml"
+        self.assertTrue(standalone.is_symlink())
+        self.assertTrue(standalone.exists(), "host-bridge standalone.yaml symlink must not be dangling")
+        self.assertTrue(
+            os.readlink(standalone).endswith("docker-deployment/modes/docker/config/host-bridge.yaml"),
+            f"Unexpected docker fleet-mode symlink target: {os.readlink(standalone)}",
+        )
+
+    def test_bastien_core_root_resolution_and_python_bootstrap(self):
+        """Verify BASTIEN_CORE_ROOT overrides workspace root resolution and Python main.py bootstrap."""
+        mock_core = self.test_dir / "mock-core"
+        (mock_core / "docker-deployment" / "modes" / "local" / "config").mkdir(parents=True, exist_ok=True)
+        (mock_core / "docker-deployment" / "modes" / "local" / "config" / "native.yaml").write_text(
+            "common:\n  name: common\n", encoding="utf-8"
+        )
+        (mock_core / "microservice-toolbox" / "python").mkdir(parents=True, exist_ok=True)
+
+        with patch.dict(os.environ, {"BASTIEN_CORE_ROOT": str(mock_core)}, clear=False):
+            resolved = resolve_workspace_root()
+        self.assertEqual(resolved, mock_core.resolve())
+
+        py_dir = self.test_dir / "external-py-svc"
+        generate_python_scaffold(py_dir, "external-py-svc", 8126, "External L4 Python service", dry_run=False, layer="L4")
+        main_py = (py_dir / "main.py").read_text(encoding="utf-8")
+        self.assertIn("BASTIEN_CORE_ROOT", main_py)
+        self.assertIn("microservice-toolbox", main_py)
+        self.assertIn("bootstrap_microservice", main_py)
+        ast.parse(main_py)
 
 
 if __name__ == "__main__":

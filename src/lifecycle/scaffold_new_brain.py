@@ -32,6 +32,7 @@ from socket import AF_INET as socketAF_INET, SOCK_STREAM as socketSOCK_STREAM, s
 from subprocess import run as subprocessRun
 from sys import executable as sysExecutable
 from typing import Any as typeAny, Dict as typeDict, Optional as typeOptional, Set as typeSet, Tuple as typeTuple
+from urllib.parse import quote as urllibQuote
 from urllib.request import Request as urllibRequest, urlopen as urllibUrlopen
 from yaml import safe_dump as yamlSafeDump
 
@@ -87,9 +88,9 @@ def resolve_active_fleet_host(app_config: typeAny = None) -> str:
 
 # -----------------------------------------------------------------------------------------------
 
-def _resolve_rag_purge_url(app_config: typeAny) -> str:
+def _resolve_rag_base_url(app_config: typeAny) -> str:
     """
-    Resolves the 09-RAG-Engine REST purge URL via AppConfig.get_rest_addr('rag_engine')
+    Resolves the 09-RAG-Engine REST base URL via AppConfig.get_rest_addr('rag_engine')
     with container-safe and Docker-loopback host translation (zero hardcoded ports).
     """
     rest_addr = app_config.get_rest_addr("rag_engine")
@@ -103,7 +104,47 @@ def _resolve_rag_purge_url(app_config: typeAny) -> str:
         if not is_port_in_use(port_num, "127.0.0.1") and is_port_in_use(port_num, "127.0.0.2"):
             host = "127.0.0.2"
 
-    return f"http://{host}:{port_str}/api/v1/vault/purge"
+    return f"http://{host}:{port_str}"
+
+# -----------------------------------------------------------------------------------------------
+
+def _resolve_rag_purge_url(app_config: typeAny) -> str:
+    """Resolves the 09-RAG-Engine REST purge URL."""
+    return f"{_resolve_rag_base_url(app_config)}/api/v1/vault/purge"
+
+# -----------------------------------------------------------------------------------------------
+
+def _register_workspace_with_rag(
+    brain_id: str,
+    target_path: pathPath,
+    active_logger: typeAny
+) -> None:
+    """
+    Non-fatally registers a newly scaffolded brain workspace with 09-RAG-Engine
+    via POST /api/v1/workspaces/register. Logs a warning if RAG Engine is offline.
+    """
+    try:
+        register_url = f"{_resolve_rag_base_url(bootstrap.config)}/api/v1/workspaces/register"
+        req_body = jsonDumps({
+            "brain_id": brain_id,
+            "workspace_path": str(target_path.parent),
+            "vault_path": str(target_path),
+        }).encode("utf-8")
+        req = urllibRequest(
+            register_url,
+            data=req_body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllibUrlopen(req, timeout=2.5) as resp:
+            if 200 <= resp.status < 300:
+                active_logger.info(
+                    f"ScaffoldNewBrain : Registered workspace '{brain_id}' with 09-RAG-Engine ({register_url})."
+                )
+    except Exception as e:
+        active_logger.warning(
+            f"ScaffoldNewBrain : Could not register workspace '{brain_id}' with 09-RAG-Engine (offline or unreachable): {e}"
+        )
 
 # -----------------------------------------------------------------------------------------------
 
@@ -318,18 +359,32 @@ def generate_sandbox_standalone_yaml(
     vault_root: pathPath,
     target_name: str,
     sa_port: int,
-    sa_grpc_port: int
+    sa_grpc_port: int,
+    fleet_mode: str = "auto"
 ) -> str:
     """
     Generates an isolated, self-contained standalone.yaml for a sandbox satellite brain.
     Prevents any write or symlink coupling to the live native.yaml configuration.
     """
-    active_host = resolve_active_fleet_host(bootstrap.config)
+    if fleet_mode == "docker":
+        active_host = "127.0.0.2"
+    elif fleet_mode == "local":
+        active_host = "127.0.0.1"
+    else:
+        active_host = resolve_active_fleet_host(bootstrap.config)
+
     raw_text = ""
-    candidates = [
-        vault_root / "standalone.yaml",
-        vault_root.parent / "docker-deployment" / "modes" / "local" / "config" / "native.yaml",
-    ]
+    if active_host == "127.0.0.2":
+        candidates = [
+            vault_root.parent / "docker-deployment" / "modes" / "docker" / "config" / "host-bridge.yaml",
+            vault_root / "standalone.yaml",
+            vault_root.parent / "docker-deployment" / "modes" / "local" / "config" / "native.yaml",
+        ]
+    else:
+        candidates = [
+            vault_root / "standalone.yaml",
+            vault_root.parent / "docker-deployment" / "modes" / "local" / "config" / "native.yaml",
+        ]
     for candidate in candidates:
         try:
             text = candidate.read_text(encoding="utf-8")
@@ -374,6 +429,7 @@ def generate_sandbox_standalone_yaml(
         isolated_text,
     )
     if active_host != "127.0.0.1":
+        isolated_text = isolated_text.replace(":-127.0.0.1}", f":-{active_host}}}")
         isolated_text = isolated_text.replace(":127.0.0.1}", f":{active_host}}}")
     return isolated_text
 
@@ -488,7 +544,7 @@ def destroy_sandbox_brain(
                 f"docker compose -f {resolved_target}/docker-compose.yaml down -v --remove-orphans"
             )
 
-    # 2. Purge brain_id from 09-RAG-Engine REST API (resolved dynamically via AppConfig.get_rest_addr)
+    # 2. Purge brain_id & workspace registration from 09-RAG-Engine REST API (resolved dynamically via AppConfig.get_rest_addr)
     try:
         purge_url = _resolve_rag_purge_url(bootstrap.config)
         req_body = jsonDumps({"brain_id": target_name}).encode("utf-8")
@@ -503,6 +559,15 @@ def destroy_sandbox_brain(
                 logger.info(f"   🧹 Purged brain_id='{target_name}' vectors & AST from 09-RAG-Engine ({purge_url}).")
     except Exception as e:
         logger.debug(f"ScaffoldNewBrain : 09-RAG-Engine purge skipped (offline or unreachable): {e}")
+
+    try:
+        del_url = f"{_resolve_rag_base_url(bootstrap.config)}/api/v1/workspaces/{urllibQuote(target_name, safe='')}"
+        del_req = urllibRequest(del_url, method="DELETE")
+        with urllibUrlopen(del_req, timeout=2.5) as del_resp:
+            if 200 <= del_resp.status < 300:
+                logger.info(f"   🧹 Deregistered workspace '{target_name}' from 09-RAG-Engine ({del_url}).")
+    except Exception as e:
+        logger.debug(f"ScaffoldNewBrain : 09-RAG-Engine workspace deregister skipped (offline or unreachable): {e}")
 
     # 3. Purge brain_id from PostgreSQL tables if database is reachable (psycopg2 %s placeholders)
     try:
@@ -552,7 +617,8 @@ def scaffold_brain(
     launch_docker: bool = False,
     sa_port: typeOptional[int] = None,
     sa_grpc_port: typeOptional[int] = None,
-    sandbox: bool = False
+    sandbox: bool = False,
+    fleet_mode: str = "auto"
 ) -> None:
     """
     Executes complete scaffolding of a new Bastien-Antigravity brain vault.
@@ -648,27 +714,35 @@ def scaffold_brain(
     logger.info("ScaffoldNewBrain : Creating root ecosystem files...")
     
     # standalone.yaml: self-contained file in sandbox mode, resolved non-dangling symlink in standard mode
+    use_docker_fleet = (
+        fleet_mode == "docker"
+        or (fleet_mode == "auto" and resolve_active_fleet_host(bootstrap.config) == "127.0.0.2")
+    )
     if sandbox:
-        isolated_yaml = generate_sandbox_standalone_yaml(vault_root, target_name, sa_port, sa_grpc_port)
+        isolated_yaml = generate_sandbox_standalone_yaml(vault_root, target_name, sa_port, sa_grpc_port, fleet_mode=fleet_mode)
         create_file(target_path / "standalone.yaml", isolated_yaml, dry_run)
         seed_sandbox_repo_control(target_path, target_name, sa_port, dry_run)
         config_link_doc = "standalone.yaml (Self-contained sandbox profile)"
     else:
         _, resolved_ws_root = resolve_vault_and_workspace(__file__)
-        native_candidates = [
-            vault_root.parent / "docker-deployment" / "modes" / "local" / "config" / "native.yaml",
-            resolved_ws_root / "docker-deployment" / "modes" / "local" / "config" / "native.yaml",
+        if use_docker_fleet:
+            cfg_rel_parts = ("docker-deployment", "modes", "docker", "config", "host-bridge.yaml")
+        else:
+            cfg_rel_parts = ("docker-deployment", "modes", "local", "config", "native.yaml")
+        fleet_candidates = [
+            vault_root.parent.joinpath(*cfg_rel_parts),
+            resolved_ws_root.joinpath(*cfg_rel_parts),
         ]
-        native_yaml = next((c for c in native_candidates if c.is_file()), None)
-        if native_yaml is not None:
+        fleet_yaml = next((c for c in fleet_candidates if c.is_file()), None)
+        if fleet_yaml is not None:
             try:
-                link_target = osPathRelpath(str(native_yaml), str(target_path.resolve()))
+                link_target = osPathRelpath(str(fleet_yaml), str(target_path.resolve()))
             except ValueError:
-                link_target = str(native_yaml.resolve())
+                link_target = str(fleet_yaml.resolve())
             create_symlink(target_path / "standalone.yaml", link_target, dry_run)
             config_link_doc = f"standalone.yaml -> {link_target}"
         else:
-            isolated_yaml = generate_sandbox_standalone_yaml(vault_root, target_name, sa_port, sa_grpc_port)
+            isolated_yaml = generate_sandbox_standalone_yaml(vault_root, target_name, sa_port, sa_grpc_port, fleet_mode=fleet_mode)
             create_file(target_path / "standalone.yaml", isolated_yaml, dry_run)
             config_link_doc = "standalone.yaml (Self-contained generated profile)"
 
@@ -677,7 +751,7 @@ def scaffold_brain(
     if dry_run or (target_path / "standalone.yaml").exists():
         create_symlink(target_path / "08-Squad-Agent" / "standalone.yaml", "../standalone.yaml", dry_run)
     else:
-        fallback_yaml = generate_sandbox_standalone_yaml(vault_root, target_name, sa_port, sa_grpc_port)
+        fallback_yaml = generate_sandbox_standalone_yaml(vault_root, target_name, sa_port, sa_grpc_port, fleet_mode=fleet_mode)
         create_file(target_path / "08-Squad-Agent" / "standalone.yaml", fallback_yaml, dry_run)
 
     # VERSION.txt
@@ -1054,6 +1128,10 @@ Human-readable overview and quick-start reference for this domain vault.
     if launch_docker and not dry_run:
         launch_satellite_docker(target_path, target_name, sa_port)
 
+    # 7. Non-fatally register workspace with 09-RAG-Engine
+    if not dry_run:
+        _register_workspace_with_rag(target_name, target_path, logger)
+
     logger.info(f"ScaffoldNewBrain : SUCCESS! Your new Command Center is ready at: {target_path}")
 
 # -----------------------------------------------------------------------------------------------
@@ -1071,6 +1149,7 @@ def main() -> None:
     parser.add_argument("--destroy", action="store_true", help="Destroy an isolated sandbox brain and purge its brain_id from RAG/PostgreSQL")
     parser.add_argument("--port", "-p", type=int, default=None, help="Explicit host HTTP port for squad-agent (defaults to auto-allocating 8185+)")
     parser.add_argument("--grpc-port", type=int, default=None, help="Explicit host gRPC port for squad-agent (defaults to port + 2)")
+    parser.add_argument("--fleet-mode", choices=["auto", "local", "docker"], default="auto", help="Base fleet config target for standalone.yaml ('auto' probes active fleet, 'local' -> native.yaml 127.0.0.1, 'docker' -> host-bridge.yaml 127.0.0.2)")
     args = parser.parse_args()
 
     target_name = args.name.strip()
@@ -1114,7 +1193,8 @@ def main() -> None:
         launch_docker=args.docker,
         sa_port=args.port,
         sa_grpc_port=args.grpc_port,
-        sandbox=args.sandbox
+        sandbox=args.sandbox,
+        fleet_mode=args.fleet_mode
     )
 
 # -----------------------------------------------------------------------------

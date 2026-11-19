@@ -342,9 +342,11 @@ class TestScaffoldBrain(unittest.TestCase):
 
         self.assertTrue(ok)
         self.assertFalse(target_path.exists())
-        self.assertEqual(len(captured_urls), 1)
+        self.assertEqual(len(captured_urls), 2)
         self.assertTrue(captured_urls[0][0].endswith(":8093/api/v1/vault/purge"))
         self.assertEqual(captured_urls[0][1], "POST")
+        self.assertTrue(captured_urls[1][0].endswith(f":8093/api/v1/workspaces/{target_name}"))
+        self.assertEqual(captured_urls[1][1], "DELETE")
 
         delete_stmts = [sql for sql, _ in captured_sql if "DELETE FROM" in sql]
         self.assertGreaterEqual(len(delete_stmts), 1)
@@ -411,6 +413,84 @@ class TestScaffoldBrain(unittest.TestCase):
         self.assertFalse((copied_squad / ".shipper_offsets.json").exists())
         self.assertFalse((copied_squad / "extra.log").exists())
         self.assertTrue((copied_squad / "standalone.yaml").is_symlink())
+
+    def test_scaffold_brain_fleet_mode_docker(self):
+        """Verifies --fleet-mode docker links/bases standalone.yaml on host-bridge.yaml (127.0.0.2)."""
+        std_name = "docker-bridge-brain"
+        std_path = self.test_dir / std_name
+        scaffold_brain(
+            std_name,
+            std_path,
+            self.vault_root,
+            dry_run=False,
+            sa_port=8215,
+            sa_grpc_port=8217,
+            sandbox=False,
+            fleet_mode="docker",
+        )
+        std_link = std_path / "standalone.yaml"
+        self.assertTrue(std_link.is_symlink())
+        self.assertTrue(std_link.exists(), "host-bridge.yaml symlink must resolve cleanly")
+        self.assertTrue(
+            os.readlink(std_link).endswith("docker-deployment/modes/docker/config/host-bridge.yaml"),
+            f"Unexpected docker fleet_mode symlink: {os.readlink(std_link)}",
+        )
+        self.assertIn("127.0.0.2", std_link.read_text(encoding="utf-8"))
+
+        sb_name = "docker-sandbox-brain"
+        sb_path = self.test_dir / sb_name
+        scaffold_brain(
+            sb_name,
+            sb_path,
+            self.vault_root,
+            dry_run=False,
+            sa_port=8225,
+            sa_grpc_port=8227,
+            sandbox=True,
+            fleet_mode="docker",
+        )
+        sb_yaml = (sb_path / "standalone.yaml").read_text(encoding="utf-8")
+        self.assertIn("127.0.0.2", sb_yaml)
+        self.assertIn(f"target_brain_id: ${{TARGET_BRAIN_ID:{sb_name}}}", sb_yaml)
+
+    def test_register_workspace_with_rag_posts_and_stays_non_fatal(self):
+        """Verifies _register_workspace_with_rag posts workspace payload and never fails when offline."""
+        import json
+        from unittest.mock import MagicMock, patch
+        from src.lifecycle.scaffold_new_brain import _register_workspace_with_rag
+
+        captured = []
+
+        class _FakeResp:
+            status = 200
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                return False
+
+        def _fake_urlopen(req, timeout=2.5):
+            captured.append((req.full_url, req.get_method(), json.loads(req.data.decode("utf-8"))))
+            return _FakeResp()
+
+        target_path = self.test_dir / "reg-brain"
+        mock_logger = MagicMock()
+        with patch("src.lifecycle.scaffold_new_brain.urllibUrlopen", side_effect=_fake_urlopen):
+            _register_workspace_with_rag("reg-brain", target_path, mock_logger)
+
+        self.assertEqual(len(captured), 1)
+        url, method, body = captured[0]
+        self.assertTrue(url.endswith(":8093/api/v1/workspaces/register"))
+        self.assertEqual(method, "POST")
+        self.assertEqual(body["brain_id"], "reg-brain")
+        self.assertEqual(body["workspace_path"], str(target_path.parent))
+        self.assertEqual(body["vault_path"], str(target_path))
+        mock_logger.info.assert_called()
+
+        # Offline RAG Engine must log warning and NOT raise
+        mock_logger_offline = MagicMock()
+        with patch("src.lifecycle.scaffold_new_brain.urllibUrlopen", side_effect=OSError("Connection refused")):
+            _register_workspace_with_rag("reg-brain", target_path, mock_logger_offline)
+        mock_logger_offline.warning.assert_called()
 
 
 if __name__ == "__main__":

@@ -23,7 +23,7 @@ KEY PARAMETERS:
 
 from argparse import ArgumentParser as argparseArgumentParser
 from json import dumps as jsonDumps, loads as jsonLoads
-from os import symlink as osSymlink
+from os import environ as osEnviron, symlink as osSymlink
 from os.path import relpath as osPathRelpath
 from pathlib import Path as pathPath
 from sys import exit as sysExit
@@ -32,14 +32,20 @@ from sys import exit as sysExit
 
 def resolve_workspace_root() -> pathPath:
     """Resolves the Bastien-Antigravity workspace root dynamically."""
-    current = pathPath(__file__).resolve()
-    ancestors = [current] + list(current.parents)
-
     def _is_valid_workspace(candidate: pathPath) -> bool:
         return (
             (candidate / "docker-deployment" / "modes" / "local" / "config" / "native.yaml").is_file()
             and (candidate / "microservice-toolbox" / "python").is_dir()
         )
+
+    core_root_env = osEnviron.get("BASTIEN_CORE_ROOT", "").strip()
+    if core_root_env:
+        env_candidate = pathPath(core_root_env).expanduser().resolve()
+        if _is_valid_workspace(env_candidate):
+            return env_candidate
+
+    current = pathPath(__file__).resolve()
+    ancestors = [current] + list(current.parents)
 
     for parent in ancestors:
         if _is_valid_workspace(parent):
@@ -1045,10 +1051,25 @@ KEY PARAMETERS:
 - {cap_name}: Primary capability configuration.
 \"\"\"
 
-import sys
-from pathlib import Path
+from os import environ as osEnviron
+from pathlib import Path as pathPath
+from sys import path as sysPath
+
+_core_root_env = osEnviron.get("BASTIEN_CORE_ROOT", "").strip()
+if _core_root_env:
+    _toolbox_dir = pathPath(_core_root_env).expanduser().resolve() / "microservice-toolbox" / "python"
+    if _toolbox_dir.is_dir() and str(_toolbox_dir) not in sysPath:
+        sysPath.insert(0, str(_toolbox_dir))
+for _ancestor in pathPath(__file__).resolve().parents:
+    _candidate = _ancestor / "microservice-toolbox" / "python"
+    if _candidate.is_dir():
+        if str(_candidate) not in sysPath:
+            sysPath.append(str(_candidate))
+        break
 
 # Bootstrap configuration and logger via microservice-toolbox
+from microservice_toolbox.utils.bootstrap import bootstrap_microservice
+bootstrap_microservice(__file__, app_name="{name}")
 from microservice_toolbox.config.loader import load_config
 from microservice_toolbox.contracts import display_address, resolve_contract_port
 from microservice_toolbox.logger import UniLog
@@ -1672,7 +1693,16 @@ int main() {{
 
 # -----------------------------------------------------------------------------
 
-def generate_common_files(target_dir: pathPath, name: str, lang: str, port: int, desc: str, dry_run: bool, layer: str = "L3") -> None:
+def generate_common_files(
+    target_dir: pathPath,
+    name: str,
+    lang: str,
+    port: int,
+    desc: str,
+    dry_run: bool,
+    layer: str = "L3",
+    fleet_mode: str = "local"
+) -> None:
     """Generates files mandatory across all languages: Dockerfile, compose, AGENTS.md, etc."""
     cap_name = name.replace("-", "_")
     workspace_root = resolve_workspace_root()
@@ -1685,18 +1715,24 @@ def generate_common_files(target_dir: pathPath, name: str, lang: str, port: int,
     ):
         standalone_link_target = "../../standalone.yaml"
     else:
-        local_native_candidates = [
-            workspace_root / "docker-deployment" / "modes" / "local" / "config" / "native.yaml",
-            target_dir.parent / "docker-deployment" / "modes" / "local" / "config" / "native.yaml",
-        ]
-        local_native = next((c for c in local_native_candidates if c.is_file()), None)
-        if local_native is not None:
-            try:
-                standalone_link_target = osPathRelpath(str(local_native), str(target_dir.resolve()))
-            except ValueError:
-                standalone_link_target = str(local_native.resolve())
+        if fleet_mode == "docker":
+            cfg_rel_parts = ("docker-deployment", "modes", "docker", "config", "host-bridge.yaml")
+            fallback_rel_target = "../docker-deployment/modes/docker/config/host-bridge.yaml"
         else:
-            standalone_link_target = "../docker-deployment/modes/local/config/native.yaml"
+            cfg_rel_parts = ("docker-deployment", "modes", "local", "config", "native.yaml")
+            fallback_rel_target = "../docker-deployment/modes/local/config/native.yaml"
+        fleet_cfg_candidates = [
+            workspace_root.joinpath(*cfg_rel_parts),
+            target_dir.parent.joinpath(*cfg_rel_parts),
+        ]
+        fleet_cfg = next((c for c in fleet_cfg_candidates if c.is_file()), None)
+        if fleet_cfg is not None:
+            try:
+                standalone_link_target = osPathRelpath(str(fleet_cfg), str(target_dir.resolve()))
+            except ValueError:
+                standalone_link_target = str(fleet_cfg.resolve())
+        else:
+            standalone_link_target = fallback_rel_target
 
     # 1. Dockerfile (Multi-stage compliant with 12-Docker-Deployment-Standards.md)
     if lang == "go":
@@ -1728,6 +1764,8 @@ RUN go mod tidy && \\
 # === RUNTIME STAGE ===
 FROM alpine:3.20
 
+LABEL org.opencontainers.image.source="https://github.com/Bastien-Antigravity/{name}"
+
 RUN apk add --no-cache ca-certificates tzdata
 
 WORKDIR /{name}
@@ -1752,6 +1790,8 @@ RUN cargo build --release
 
 # === RUNTIME STAGE ===
 FROM alpine:3.20
+
+LABEL org.opencontainers.image.source="https://github.com/Bastien-Antigravity/{name}"
 
 RUN apk add --no-cache ca-certificates tzdata
 
@@ -2363,6 +2403,7 @@ def main() -> None:
     parser.add_argument("--desc", "-d", default="Ecosystem microservice component", help="Short mission description")
     parser.add_argument("--dest", help="Destination path (defaults to ../<name> or <brain>/06-Microservices/<name> in sandbox mode)")
     parser.add_argument("--brain", help="Target knowledge brain directory (defaults to domain brain or obsidian-brain)")
+    parser.add_argument("--fleet-mode", choices=["local", "docker"], default="local", help="Base fleet config target for standalone.yaml ('local' -> native.yaml on 127.0.0.1, 'docker' -> host-bridge.yaml on 127.0.0.2)")
     parser.add_argument("--sandbox", "--isolated", dest="sandbox", action="store_true", help="Scaffold inside the target satellite brain's 06-Microservices/<name> folder and register in sandbox standalone.yaml")
     parser.add_argument("--dry-run", action="store_true", help="Preview file fabrication without writing to disk")
 
@@ -2423,7 +2464,7 @@ def main() -> None:
         generate_cpp_scaffold(target_dir, name, port, desc, dry_run, layer=layer)
 
     # 2. Generate common ecosystem files
-    generate_common_files(target_dir, name, lang, port, desc, dry_run, layer=layer)
+    generate_common_files(target_dir, name, lang, port, desc, dry_run, layer=layer, fleet_mode=args.fleet_mode)
 
     # 3. Generate BDD specification stub & 06-Microservices/<name>.md
     generate_bdd_spec(brain_dir, name, desc, dry_run)
