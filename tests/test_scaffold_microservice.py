@@ -175,7 +175,15 @@ class TestScaffoldUnits(unittest.TestCase):
 
         reqs = self.test_dir / "requirements.txt"
         self.assertTrue(reqs.exists(), "requirements.txt must exist")
-        self.assertIn("microservice-toolbox", reqs.read_text(encoding="utf-8"))
+        reqs_text = reqs.read_text(encoding="utf-8")
+        self.assertIn(
+            "microservice-toolbox @ git+https://github.com/Bastien-Antigravity/microservice-toolbox.git@develop#subdirectory=python",
+            reqs_text,
+        )
+        self.assertIn(
+            "unilog @ git+https://github.com/Bastien-Antigravity/universal-logger.git@develop#subdirectory=unilog/python",
+            reqs_text,
+        )
 
     def test_generate_cpp_scaffold_and_common_files(self):
         """Verify C++ scaffolding creates main.cpp, controller.hpp, contracts.hpp, tests, Makefile, and Dockerfile."""
@@ -329,11 +337,90 @@ class TestScaffoldUnits(unittest.TestCase):
 
         py_dir = self.test_dir / "external-py-svc"
         generate_python_scaffold(py_dir, "external-py-svc", 8126, "External L4 Python service", dry_run=False, layer="L4")
+        generate_common_files(py_dir, "external-py-svc", lang="python", port=8126, desc="External L4 Python service", dry_run=False, layer="L4")
         main_py = (py_dir / "main.py").read_text(encoding="utf-8")
         self.assertIn("BASTIEN_CORE_ROOT", main_py)
         self.assertIn("microservice-toolbox", main_py)
         self.assertIn("bootstrap_microservice", main_py)
         ast.parse(main_py)
+        self.assertEqual((py_dir / "VERSION.txt").read_text(encoding="utf-8").strip(), "0.0.1")
+
+    def test_external_vs_core_go_github_imports_and_makefile(self):
+        """Verify external Go scaffolds omit local replace directives and use v0.0.1 + GOPRIVATE."""
+        # 1. External domain directory (outside workspace_root)
+        ext_go_dir = self.test_dir / "external-domain" / "ext-go-svc"
+        generate_go_scaffold(ext_go_dir, "ext-go-svc", 8301, "External Go service", dry_run=False, layer="L4")
+        generate_common_files(ext_go_dir, "ext-go-svc", lang="go", port=8301, desc="External Go service", dry_run=False, layer="L4")
+
+        ext_go_mod = (ext_go_dir / "go.mod").read_text(encoding="utf-8")
+        self.assertNotIn("replace (", ext_go_mod)
+        self.assertNotIn("=>", ext_go_mod)
+        self.assertIn("github.com/Bastien-Antigravity/microservice-toolbox v0.0.1", ext_go_mod)
+        self.assertIn("github.com/Bastien-Antigravity/universal-logger v0.0.1", ext_go_mod)
+        self.assertNotIn("v0.0.0", ext_go_mod)
+
+        ext_makefile = (ext_go_dir / "Makefile").read_text(encoding="utf-8")
+        self.assertIn("GOPRIVATE=github.com/Bastien-Antigravity/*", ext_makefile)
+        self.assertEqual((ext_go_dir / "VERSION.txt").read_text(encoding="utf-8").strip(), "0.0.1")
+
+        # 2. Core workspace directory (inside mocked workspace_root)
+        mock_core = self.test_dir / "mock-core-ws"
+        (mock_core / "docker-deployment" / "modes" / "local" / "config").mkdir(parents=True, exist_ok=True)
+        (mock_core / "docker-deployment" / "modes" / "local" / "config" / "native.yaml").write_text(
+            "common:\n  name: common\n", encoding="utf-8"
+        )
+        (mock_core / "microservice-toolbox" / "python").mkdir(parents=True, exist_ok=True)
+
+        core_go_dir = mock_core / "core-go-svc"
+        with patch.dict(os.environ, {"BASTIEN_CORE_ROOT": str(mock_core)}, clear=False):
+            generate_go_scaffold(core_go_dir, "core-go-svc", 8302, "Core Go service", dry_run=False)
+            generate_common_files(core_go_dir, "core-go-svc", lang="go", port=8302, desc="Core Go service", dry_run=False)
+
+        core_go_mod = (core_go_dir / "go.mod").read_text(encoding="utf-8")
+        self.assertIn("replace (", core_go_mod)
+        self.assertIn("github.com/Bastien-Antigravity/microservice-toolbox => ../microservice-toolbox", core_go_mod)
+        self.assertIn("github.com/Bastien-Antigravity/microservice-toolbox v0.0.1", core_go_mod)
+        self.assertNotIn("v0.0.0", core_go_mod)
+
+    def test_rust_github_cargo_toml_and_version(self):
+        """Verify Rust scaffold Cargo.toml pins v0.0.1 and GitHub develop branch for microservice-toolbox."""
+        rs_dir = self.test_dir / "ext-rust-svc"
+        generate_rust_scaffold(rs_dir, "ext-rust-svc", 8303, "External Rust service", dry_run=False, layer="L4")
+        generate_common_files(rs_dir, "ext-rust-svc", lang="rust", port=8303, desc="External Rust service", dry_run=False, layer="L4")
+
+        cargo_toml = (rs_dir / "Cargo.toml").read_text(encoding="utf-8")
+        self.assertIn('version = "0.0.1"', cargo_toml)
+        self.assertIn(
+            'microservice-toolbox = { git = "https://github.com/Bastien-Antigravity/microservice-toolbox.git", branch = "develop" }',
+            cargo_toml,
+        )
+        self.assertEqual((rs_dir / "VERSION.txt").read_text(encoding="utf-8").strip(), "0.0.1")
+
+    def test_cpp_cmakelists_fetchcontent_and_external_makefile(self):
+        """Verify C++ scaffold generates CMakeLists.txt with FetchContent and clean external Makefile."""
+        ext_cpp_dir = self.test_dir / "external-domain" / "ext-cpp-svc"
+        generate_cpp_scaffold(ext_cpp_dir, "ext-cpp-svc", 8304, "External C++ service", dry_run=False, layer="L4")
+        generate_common_files(ext_cpp_dir, "ext-cpp-svc", lang="cpp", port=8304, desc="External C++ service", dry_run=False, layer="L4")
+
+        cmake_path = ext_cpp_dir / "CMakeLists.txt"
+        self.assertTrue(cmake_path.exists(), "CMakeLists.txt must be generated for C++ scaffolds")
+        cmake_text = cmake_path.read_text(encoding="utf-8")
+        self.assertIn("FetchContent_Declare(", cmake_text)
+        self.assertIn("https://github.com/Bastien-Antigravity/microservice-toolbox.git", cmake_text)
+        self.assertIn("GIT_TAG        develop", cmake_text)
+        self.assertIn("SOURCE_SUBDIR  cpp", cmake_text)
+        self.assertIn("microservice_toolbox::toolbox", cmake_text)
+        self.assertIn("LIBDISTCONF_PATH", cmake_text)
+        self.assertIn("$ENV{HOME}/.bastien/lib", cmake_text)
+        self.assertIn("/usr/local/lib", cmake_text)
+        self.assertNotIn("../microservice-toolbox", cmake_text)
+
+        ext_makefile = (ext_cpp_dir / "Makefile").read_text(encoding="utf-8")
+        self.assertNotIn("../microservice-toolbox", ext_makefile)
+        self.assertNotIn("../distributed-config", ext_makefile)
+        self.assertIn("cmake", ext_makefile)
+        self.assertIn("-std=c++17", ext_makefile)
+        self.assertEqual((ext_cpp_dir / "VERSION.txt").read_text(encoding="utf-8").strip(), "0.0.1")
 
 
 if __name__ == "__main__":

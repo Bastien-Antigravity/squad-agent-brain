@@ -88,7 +88,18 @@ def create_symlink(target_path: pathPath, link_target: str, dry_run: bool = Fals
     osSymlink(link_target, target_path)
     print(f"  🔗 Symlinked: {target_path} -> {link_target}")
 
-# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------------------
+
+def _is_core_workspace(target_dir: pathPath, workspace_root: pathPath) -> bool:
+    """Returns True when target_dir resides inside the local core Bastien-Antigravity workspace."""
+    if pathPath("/workspace/microservice-toolbox").exists() and str(target_dir).startswith("/app"):
+        return True
+    return (
+        (workspace_root / "microservice-toolbox").exists()
+        and target_dir.resolve().is_relative_to(workspace_root.resolve())
+    )
+
+# -----------------------------------------------------------------------------------------------
 
 def _to_pascal_case(name: str) -> str:
     """Converts a kebab/snake identifier into PascalCase."""
@@ -485,29 +496,20 @@ type StatusPayload struct {{
     create_file(target_dir / "src/models/models.go", models_go, dry_run)
 
     # 5. go.mod
-    replace_prefix = ".."
-    if pathPath("/workspace/microservice-toolbox").exists() and str(target_dir).startswith("/app"):
-        replace_prefix = "/workspace"
-    else:
-        ws_root = resolve_workspace_root()
-        if (ws_root / "microservice-toolbox").exists():
+    ws_root = resolve_workspace_root()
+    is_docker_workspace = pathPath("/workspace/microservice-toolbox").exists() and str(target_dir).startswith("/app")
+    is_core_workspace = _is_core_workspace(target_dir, ws_root)
+
+    replace_block = ""
+    if is_core_workspace:
+        if is_docker_workspace:
+            replace_prefix = "/workspace"
+        else:
             try:
-                replace_prefix = osPathRelpath(str(ws_root), str(target_dir.resolve()))
+                replace_prefix = osPathRelpath(str(ws_root.resolve()), str(target_dir.resolve()))
             except ValueError:
                 replace_prefix = ".."
-
-    go_mod = f"""module github.com/Bastien-Antigravity/{name}
-
-go 1.25
-
-require (
-	github.com/Bastien-Antigravity/distributed-config v0.0.0
-	github.com/Bastien-Antigravity/flexible-logger v0.0.0
-	github.com/Bastien-Antigravity/microservice-toolbox v0.0.0
-	github.com/Bastien-Antigravity/safe-socket v0.0.0
-	github.com/Bastien-Antigravity/universal-logger v0.0.0
-)
-
+        replace_block = f"""
 replace (
 	github.com/Bastien-Antigravity/distributed-config => {replace_prefix}/distributed-config
 	github.com/Bastien-Antigravity/flexible-logger => {replace_prefix}/flexible-logger
@@ -516,6 +518,19 @@ replace (
 	github.com/Bastien-Antigravity/universal-logger => {replace_prefix}/universal-logger
 )
 """
+
+    go_mod = f"""module github.com/Bastien-Antigravity/{name}
+
+go 1.25
+
+require (
+	github.com/Bastien-Antigravity/distributed-config v0.0.1
+	github.com/Bastien-Antigravity/flexible-logger v0.0.1
+	github.com/Bastien-Antigravity/microservice-toolbox v0.0.1
+	github.com/Bastien-Antigravity/safe-socket v0.0.1
+	github.com/Bastien-Antigravity/universal-logger v0.0.1
+)
+{replace_block}"""
     create_file(target_dir / "go.mod", go_mod, dry_run)
 
     # 6. .golangci.yml
@@ -1261,8 +1276,8 @@ class StatusPayload:
     create_file(target_dir / "src/models/status.py", status_py, dry_run)
 
     # 5. requirements.txt
-    reqs_txt = """microservice-toolbox
-universal-logger
+    reqs_txt = """microservice-toolbox @ git+https://github.com/Bastien-Antigravity/microservice-toolbox.git@develop#subdirectory=python
+unilog @ git+https://github.com/Bastien-Antigravity/universal-logger.git@develop#subdirectory=unilog/python
 fastapi
 uvicorn
 pytest
@@ -2058,6 +2073,7 @@ See [AGENTS.md](AGENTS.md) for technical specifications, capability ports, and A
     # 7. Makefile (Dynamic Versioning Standard - Go, Rust, C++ compiled projects)
     if lang == "go":
         makefile = f"""VERSION ?= $(shell cat VERSION.txt)
+export GOPRIVATE=github.com/Bastien-Antigravity/*
 LDFLAGS := -s -w -X 'github.com/Bastien-Antigravity/microservice-toolbox/go/pkg/version.BuildVersion=$(VERSION)'
 
 .PHONY: all build test race vet version clean run
@@ -2119,11 +2135,85 @@ clean:
 """
         create_file(target_dir / "Makefile", makefile, dry_run)
     elif lang == "cpp":
-        try:
-            cpp_ws_rel = osPathRelpath(str(workspace_root), str(target_dir.resolve())) if (workspace_root / "microservice-toolbox").exists() else ".."
-        except ValueError:
-            cpp_ws_rel = ".."
-        makefile = f"""VERSION ?= $(shell cat VERSION.txt)
+        cmake_lists = f"""cmake_minimum_required(VERSION 3.20)
+
+file(STRINGS "${{CMAKE_CURRENT_SOURCE_DIR}}/VERSION.txt" APP_VERSION LIMIT_COUNT 1)
+string(STRIP "${{APP_VERSION}}" APP_VERSION)
+
+project({name} LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+include(FetchContent)
+FetchContent_Declare(
+    microservice_toolbox
+    GIT_REPOSITORY https://github.com/Bastien-Antigravity/microservice-toolbox.git
+    GIT_TAG        develop
+    SOURCE_SUBDIR  cpp
+)
+FetchContent_MakeAvailable(microservice_toolbox)
+
+find_library(DISTCONF_LIB
+    NAMES distconf
+    HINTS
+        "${{LIBDISTCONF_PATH}}"
+        "$ENV{{LIBDISTCONF_PATH}}"
+        "$ENV{{HOME}}/.bastien/lib"
+        "/usr/local/lib"
+)
+find_path(DISTCONF_INCLUDE_DIR
+    NAMES libdistconf.h
+    HINTS
+        "${{LIBDISTCONF_PATH}}"
+        "$ENV{{LIBDISTCONF_PATH}}"
+        "$ENV{{HOME}}/.bastien/include"
+        "$ENV{{HOME}}/.bastien/lib"
+        "/usr/local/include"
+)
+if(NOT DISTCONF_LIB)
+    message(FATAL_ERROR "libdistconf not found. Set -DLIBDISTCONF_PATH=... or install to ~/.bastien/lib or /usr/local/lib")
+endif()
+
+get_filename_component(DISTCONF_LIB_DIR "${{DISTCONF_LIB}}" DIRECTORY)
+
+add_executable({name} src/main.cpp)
+target_include_directories({name} PRIVATE src)
+if(DISTCONF_INCLUDE_DIR)
+    target_include_directories({name} PRIVATE "${{DISTCONF_INCLUDE_DIR}}")
+endif()
+target_compile_definitions({name} PRIVATE APP_VERSION="${{APP_VERSION}}")
+target_link_libraries({name} PRIVATE microservice_toolbox::toolbox "${{DISTCONF_LIB}}")
+set_target_properties({name} PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${{CMAKE_CURRENT_SOURCE_DIR}}/bin"
+    BUILD_RPATH "${{DISTCONF_LIB_DIR}}"
+    INSTALL_RPATH "${{DISTCONF_LIB_DIR}}"
+)
+
+enable_testing()
+add_executable(test_basic tests/test_basic.cpp)
+target_include_directories(test_basic PRIVATE src)
+if(DISTCONF_INCLUDE_DIR)
+    target_include_directories(test_basic PRIVATE "${{DISTCONF_INCLUDE_DIR}}")
+endif()
+target_compile_definitions(test_basic PRIVATE APP_VERSION="${{APP_VERSION}}")
+target_link_libraries(test_basic PRIVATE microservice_toolbox::toolbox "${{DISTCONF_LIB}}")
+set_target_properties(test_basic PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${{CMAKE_CURRENT_SOURCE_DIR}}/bin"
+    BUILD_RPATH "${{DISTCONF_LIB_DIR}}"
+    INSTALL_RPATH "${{DISTCONF_LIB_DIR}}"
+)
+add_test(NAME test_basic COMMAND test_basic)
+"""
+        create_file(target_dir / "CMakeLists.txt", cmake_lists, dry_run)
+
+        if _is_core_workspace(target_dir, workspace_root):
+            try:
+                cpp_ws_rel = osPathRelpath(str(workspace_root.resolve()), str(target_dir.resolve()))
+            except ValueError:
+                cpp_ws_rel = ".."
+            makefile = f"""VERSION ?= $(shell cat VERSION.txt)
 CXX ?= g++
 DISTCONF_DIR ?= {cpp_ws_rel}/distributed-config/distconf/libdistconf
 TOOLBOX_CPP_INC ?= {cpp_ws_rel}/microservice-toolbox/cpp/include
@@ -2154,6 +2244,39 @@ run:
 clean:
 \t@echo "Cleaning build artifacts..."
 \t@rm -rf bin/ build/
+"""
+        else:
+            makefile = f"""VERSION ?= $(shell cat VERSION.txt)
+CXX ?= g++
+CXXFLAGS ?= -std=c++17 -Wall -Wextra
+BUILD_DIR ?= build
+LIBDISTCONF_PATH ?=
+
+.PHONY: all configure build test version clean run
+
+all: build
+
+version:
+\t@echo $(VERSION)
+
+configure:
+\tcmake -S . -B $(BUILD_DIR) -DCMAKE_CXX_COMPILER="$(CXX)" -DCMAKE_CXX_FLAGS="$(CXXFLAGS)" -DLIBDISTCONF_PATH="$(LIBDISTCONF_PATH)"
+
+build: configure
+\t@echo "Building {name} (version $(VERSION))..."
+\tcmake --build $(BUILD_DIR) --target {name}
+
+test: configure
+\t@echo "Running C++ tests for {name} (version $(VERSION))..."
+\tcmake --build $(BUILD_DIR) --target test_basic
+\tctest --test-dir $(BUILD_DIR) --output-on-failure
+
+run:
+\t./bin/{name}
+
+clean:
+\t@echo "Cleaning build artifacts..."
+\t@rm -rf bin/ $(BUILD_DIR)/
 """
         create_file(target_dir / "Makefile", makefile, dry_run)
 
