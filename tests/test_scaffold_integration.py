@@ -31,6 +31,7 @@ from src.lifecycle.scaffold_microservice import (
     generate_python_scaffold,
     generate_common_files,
     generate_bdd_spec,
+    register_sandbox_service,
 )
 
 
@@ -171,6 +172,62 @@ class TestScaffoldIntegration(unittest.TestCase):
         compose_data = yaml.safe_load(compose_content)
         self.assertEqual(compose_data["services"][svc_name]["ports"], [f"${{HOST_IP:-127.0.0.1}}:{port}:{port}"])
         self.assertEqual(compose_data["networks"]["teleremote-network"]["name"], "teleremote-network")
+
+    def test_isolated_sandbox_brain_microservice_scaffolding(self):
+        """Verifies scaffolding a microservice inside an isolated sandbox brain (06-Microservices/<svc>)."""
+        import json
+
+        sandbox_brain = self.workspace_tmp / "alpha-sandbox-brain"
+        (sandbox_brain / "06-Microservices").mkdir(parents=True, exist_ok=True)
+        (sandbox_brain / "02-Business-BDD" / "02-Behavior-Specs").mkdir(parents=True, exist_ok=True)
+        repo_ctrl = sandbox_brain / "05-Fleet-Operation" / "00-Repo-Control"
+        repo_ctrl.mkdir(parents=True, exist_ok=True)
+
+        # Create a self-contained sandbox standalone.yaml and isolated inventory
+        (sandbox_brain / "standalone.yaml").write_text(
+            "common:\n    name: common\n\ncapabilities:\n    squad_agent:\n        target_brain_id: alpha-sandbox-brain\n",
+            encoding="utf-8"
+        )
+        (repo_ctrl / "inventory.json").write_text(
+            json.dumps({"isolated_sandbox": True, "repositories": []}, indent=2),
+            encoding="utf-8"
+        )
+        (repo_ctrl / "service-registry.json").write_text(
+            json.dumps({"services": []}, indent=2),
+            encoding="utf-8"
+        )
+
+        svc_name = "alpha-order-engine"
+        svc_dir = sandbox_brain / "06-Microservices" / svc_name
+        port = 8192
+        desc = "Isolated sandbox order routing microservice"
+
+        generate_go_scaffold(svc_dir, svc_name, port, desc, dry_run=False)
+        generate_common_files(svc_dir, svc_name, "go", port, desc, dry_run=False)
+        generate_bdd_spec(sandbox_brain, svc_name, desc, dry_run=False)
+        register_sandbox_service(sandbox_brain, svc_dir, svc_name, port, dry_run=False)
+
+        # 1. Symlink inside 06-Microservices/<svc> must point to ../../standalone.yaml
+        symlink = svc_dir / "standalone.yaml"
+        self.assertTrue(symlink.is_symlink())
+        self.assertEqual(os.readlink(symlink), "../../standalone.yaml")
+
+        # 2. Both 06-Microservices/<svc>.md and 02-Business-BDD/02-Behavior-Specs/<svc>/FEAT-001-Initialization.md exist
+        self.assertTrue((sandbox_brain / "06-Microservices" / f"{svc_name}.md").is_file())
+        self.assertTrue(
+            (sandbox_brain / "02-Business-BDD" / "02-Behavior-Specs" / svc_name / "FEAT-001-Initialization.md").is_file()
+        )
+
+        # 3. Capability and repository must be registered in the sandbox brain's standalone.yaml & inventory
+        sandbox_yaml = (sandbox_brain / "standalone.yaml").read_text(encoding="utf-8")
+        self.assertIn("alpha_order_engine:", sandbox_yaml)
+        self.assertIn(f"ALPHA_ORDER_ENGINE_PORT:{port}", sandbox_yaml)
+
+        inv_data = json.loads((repo_ctrl / "inventory.json").read_text(encoding="utf-8"))
+        self.assertTrue(any(r.get("name") == svc_name for r in inv_data["repositories"]))
+
+        reg_data = json.loads((repo_ctrl / "service-registry.json").read_text(encoding="utf-8"))
+        self.assertTrue(any(s.get("name") == svc_name and s.get("default_port") == port for s in reg_data["services"]))
 
 
 if __name__ == "__main__":

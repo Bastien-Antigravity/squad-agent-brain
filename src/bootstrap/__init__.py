@@ -10,18 +10,24 @@ configuration loader and the UniLog logging engine exactly once.
 DATA FLOW:
 1. Resolves workspace and virtualenv paths.
 2. Directs execution to the virtualenv Python interpreter.
-3. Loads standalone YAML configuration profile via microservice-toolbox.
+3. Loads production or standalone YAML configuration profile via microservice-toolbox.
 4. Spawns the UniLog logger singleton and sets it on the config handle.
+
+KEY PARAMETERS:
+- config: Singleton AppConfig instance.
+- logger: Singleton UniLog logger instance.
 """
 
 import sys
-from pathlib import Path
+from os import environ as osEnviron
+from os.path import exists as osPathExists
+from pathlib import Path as pathPath
 
-# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------------------
 # 1. Path & Virtual Environment Bootstrapping
 # Inject microservice-toolbox path dynamically so we can import bootstrap_microservice
-_self_dir = Path(__file__).resolve()
-_toolbox_env = Path(sys.path[0]).parent if "MICROSERVICE_TOOLBOX_PATH" in sys.path else None
+_self_dir = pathPath(__file__).resolve()
+_toolbox_env = pathPath(sys.path[0]).parent if "MICROSERVICE_TOOLBOX_PATH" in sys.path else None
 _workspace_root = None
 for parent in [_self_dir] + list(_self_dir.parents):
     if (parent / "microservice-toolbox").exists():
@@ -31,7 +37,7 @@ for parent in [_self_dir] + list(_self_dir.parents):
         _workspace_root = parent / "Bastien-Antigravity"
         break
 if not _workspace_root:
-    for p in [Path.cwd()] + list(Path.cwd().parents):
+    for p in [pathPath.cwd()] + list(pathPath.cwd().parents):
         if (p / "microservice-toolbox").exists():
             _workspace_root = p
             break
@@ -48,16 +54,25 @@ if _toolbox_path.exists() and str(_toolbox_path) not in sys.path:
 from microservice_toolbox.utils.bootstrap import bootstrap_microservice
 bootstrap_microservice(__file__, app_name="squad_agent")
 
-# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------------------
 # 2. Singleton Instantiation (Config & Logger)
 from microservice_toolbox.config.loader import load_config as toolboxLoadConfig
+from microservice_toolbox.logger import UniLog as toolboxUniLog
 
 # Scan argv to determine the profile without running a full CLI parser
-_profile = "standalone"
+_profile = None
 for i in range(1, len(sys.argv) - 1):
     if sys.argv[i] in ["--profile", "-p"]:
         _profile = sys.argv[i + 1]
         break
+
+if not _profile:
+    _is_docker = osEnviron.get("DOCKER_ENV") == "true" or osPathExists("/.dockerenv")
+    _service_root = _self_dir.parent.parent.parent
+    if _is_docker and (_service_root / "production.yaml").exists():
+        _profile = "production"
+    else:
+        _profile = "standalone"
 
 # Load configuration exactly once
 config = toolboxLoadConfig(_profile, input_args=[])
@@ -75,10 +90,9 @@ if len(sys.argv) >= 2:
     if cmd_arg != "main.py":
         _app_name = f"squad_agent_{cmd_arg}"
 
-from microservice_toolbox.logger import UniLog
-logger = UniLog(
-    app_name=_app_name, 
-    config_profile="standalone", 
+logger = toolboxUniLog(
+    app_name=_app_name,
+    config_profile=_profile,
     logger_profile="devel",
     log_level=_lvl,
     config_handle=_config_handle

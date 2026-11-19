@@ -30,7 +30,9 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ github.repository }}
+          images: |
+            ${{ env.REGISTRY }}/${{ github.repository }}
+            ${{ env.REGISTRY }}/bastien-antigravity/squad-agent
           tags: |
             type=ref,event=branch
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}

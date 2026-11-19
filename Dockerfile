@@ -13,7 +13,8 @@ RUN git clone --depth 1 -b develop https://github.com/Bastien-Antigravity/univer
 RUN git clone --depth 1 -b develop https://github.com/Bastien-Antigravity/flexible-logger.git /workspace/flexible-logger
 
 WORKDIR /workspace/universal-logger
-RUN CGO_ENABLED=1 CGO_CFLAGS="-D_GNU_SOURCE -std=gnu11" GOWORK=off go build -v -buildmode=c-shared -o /workspace/libunilog.so ./src/cgo_bridge
+RUN go mod tidy && \
+    CGO_ENABLED=1 CGO_CFLAGS="-D_GNU_SOURCE -std=gnu11" GOWORK=off go build -v -buildmode=c-shared -o /workspace/libunilog.so ./src/cgo_bridge
 
 # === PYTHON RUNTIME STAGE ===
 FROM python:3.12-slim-bookworm
@@ -27,18 +28,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential git netcat-openbsd \
     && rm -rf /var/lib/apt/lists/*
 
-# Install compiled libunilog.so system-wide
+# Install compiled libunilog.so and ecosystem Python packages from builder stage
 COPY --from=go-builder /workspace/libunilog.so /usr/local/lib/libunilog.so
 RUN ldconfig
 
-# Clone & install microservice-toolbox python package
-RUN git clone --depth 1 -b develop https://github.com/Bastien-Antigravity/microservice-toolbox.git /tmp/microservice-toolbox && \
-    pip install --no-cache-dir /tmp/microservice-toolbox/python && \
-    rm -rf /tmp/microservice-toolbox
+COPY --from=go-builder /workspace/microservice-toolbox/python /tmp/microservice-toolbox-python
+COPY --from=go-builder /workspace/universal-logger/unilog/python /tmp/unilog-python
 
-# Install service dependencies
+# Install service dependencies (filter private git URLs) and local ecosystem packages
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN grep -v "git+https://github.com/Bastien-Antigravity" requirements.txt > /tmp/requirements.txt && \
+    pip install --no-cache-dir -r /tmp/requirements.txt && \
+    pip install --no-cache-dir /tmp/microservice-toolbox-python /tmp/unilog-python && \
+    rm -rf /tmp/requirements.txt /tmp/microservice-toolbox-python /tmp/unilog-python
 
 # Copy service source code
 COPY . .

@@ -22,6 +22,7 @@ KEY PARAMETERS:
 """
 
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
@@ -466,6 +467,18 @@ type StatusPayload struct {{
     create_file(target_dir / "src/models/models.go", models_go, dry_run)
 
     # 5. go.mod
+    replace_prefix = ".."
+    if "06-Microservices" in target_dir.parts:
+        if Path("/workspace/microservice-toolbox").exists() and str(target_dir).startswith("/app"):
+            replace_prefix = "/workspace"
+        else:
+            ws_root = resolve_workspace_root()
+            if (ws_root / "microservice-toolbox").exists():
+                try:
+                    replace_prefix = os.path.relpath(ws_root, target_dir)
+                except ValueError:
+                    replace_prefix = ".."
+
     go_mod = f"""module github.com/Bastien-Antigravity/{name}
 
 go 1.25
@@ -479,11 +492,11 @@ require (
 )
 
 replace (
-	github.com/Bastien-Antigravity/distributed-config => ../distributed-config
-	github.com/Bastien-Antigravity/flexible-logger => ../flexible-logger
-	github.com/Bastien-Antigravity/microservice-toolbox => ../microservice-toolbox
-	github.com/Bastien-Antigravity/safe-socket => ../safe-socket
-	github.com/Bastien-Antigravity/universal-logger => ../universal-logger
+	github.com/Bastien-Antigravity/distributed-config => {replace_prefix}/distributed-config
+	github.com/Bastien-Antigravity/flexible-logger => {replace_prefix}/flexible-logger
+	github.com/Bastien-Antigravity/microservice-toolbox => {replace_prefix}/microservice-toolbox
+	github.com/Bastien-Antigravity/safe-socket => {replace_prefix}/safe-socket
+	github.com/Bastien-Antigravity/universal-logger => {replace_prefix}/universal-logger
 )
 """
     create_file(target_dir / "go.mod", go_mod, dry_run)
@@ -1675,7 +1688,8 @@ COPY . .
 
 # Ensure dependencies are tidy and build binary
 RUN go mod tidy && \\
-    CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /{name}-bin ./cmd/{name}
+    VERSION=$(cat VERSION.txt) && \\
+    CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w -X 'github.com/Bastien-Antigravity/microservice-toolbox/go/pkg/version.BuildVersion=${{VERSION}}'" -o /{name}-bin ./cmd/{name}
 
 # === RUNTIME STAGE ===
 FROM alpine:3.20
@@ -1685,6 +1699,7 @@ RUN apk add --no-cache ca-certificates tzdata
 WORKDIR /{name}
 
 COPY --from=builder /{name}-bin /{name}/{name}
+COPY --from=builder /workspace/{name}/VERSION.txt ./VERSION.txt
 
 ENTRYPOINT ["/{name}/{name}"]
 """
@@ -1709,6 +1724,7 @@ RUN apk add --no-cache ca-certificates tzdata
 WORKDIR /{name}
 
 COPY --from=builder /workspace/{name}/target/release/{name} /{name}/{name}
+COPY --from=builder /workspace/{name}/VERSION.txt ./VERSION.txt
 
 ENTRYPOINT ["/{name}/{name}"]
 """
@@ -1732,7 +1748,8 @@ COPY --from=go-builder /workspace/libdistconf.so /usr/local/lib/libdistconf.so
 COPY --from=go-builder /workspace/distributed-config/distconf/libdistconf /workspace/distributed-config/distconf/libdistconf
 WORKDIR /workspace/{name}
 COPY . .
-RUN g++ -std=c++17 -O2 -Wall -Wextra -Isrc -I/workspace/microservice-toolbox/cpp/include -I/workspace/distributed-config/distconf/libdistconf src/main.cpp -o /{name}-bin -L/usr/local/lib -ldistconf
+RUN VERSION=$(cat VERSION.txt) && \\
+    g++ -std=c++17 -O2 -Wall -Wextra -DAPP_VERSION=\\"${{VERSION}}\\" -Isrc -I/workspace/microservice-toolbox/cpp/include -I/workspace/distributed-config/distconf/libdistconf src/main.cpp -o /{name}-bin -L/usr/local/lib -ldistconf
 
 # === RUNTIME STAGE ===
 FROM alpine:3.20
@@ -1742,6 +1759,7 @@ WORKDIR /{name}
 COPY --from=go-builder /workspace/libdistconf.so /usr/local/lib/libdistconf.so
 COPY --from=go-builder /workspace/libunilog.so /usr/local/lib/libunilog.so
 COPY --from=cpp-builder /{name}-bin /{name}/{name}
+COPY --from=cpp-builder /workspace/{name}/VERSION.txt ./VERSION.txt
 ENTRYPOINT ["/{name}/{name}"]
 """
     else:
@@ -2071,12 +2089,19 @@ clean:
 
     # 8. standalone.yaml symlink
     workspace_root = resolve_workspace_root()
-    native_yaml = workspace_root / "docker-deployment" / "modes" / "local" / "config" / "native.yaml"
-    if native_yaml.exists():
-        rel_link = os.path.relpath(native_yaml, target_dir)
-        create_symlink(target_dir / "standalone.yaml", rel_link, dry_run)
+    brain_root_candidate = target_dir.parent.parent if target_dir.parent.name == "06-Microservices" else None
+    if brain_root_candidate and (
+        (brain_root_candidate / "standalone.yaml").exists()
+        or (brain_root_candidate / "standalone.yaml").is_symlink()
+    ):
+        create_symlink(target_dir / "standalone.yaml", "../../standalone.yaml", dry_run)
     else:
-        create_symlink(target_dir / "standalone.yaml", "../docker-deployment/modes/local/config/native.yaml", dry_run)
+        local_native = target_dir.parent / "docker-deployment" / "modes" / "local" / "config" / "native.yaml"
+        if local_native.exists():
+            rel_link = os.path.relpath(local_native, target_dir)
+            create_symlink(target_dir / "standalone.yaml", rel_link, dry_run)
+        else:
+            create_symlink(target_dir / "standalone.yaml", "../docker-deployment/modes/local/config/native.yaml", dry_run)
 
     # 9. .github CI/CD Workflows and Dependabot (from 05-Fleet-Operation/04-Templates)
     templates_dir = workspace_root / "obsidian-brain" / "05-Fleet-Operation" / "04-Templates"
@@ -2133,7 +2158,7 @@ dist/
 # -----------------------------------------------------------------------------
 
 def generate_bdd_spec(brain_dir: Path, name: str, desc: str, dry_run: bool) -> None:
-    """Generates the initial BDD behavior specification note in 02-Business-BDD."""
+    """Generates the initial BDD behavior specification note in 02-Business-BDD and service spec in 06-Microservices."""
     bdd_dir = brain_dir / "02-Business-BDD" / "02-Behavior-Specs" / name
     feat_file = bdd_dir / "FEAT-001-Initialization.md"
 
@@ -2180,6 +2205,108 @@ tags:
 """
     create_file(feat_file, content, dry_run)
 
+    if (brain_dir / "06-Microservices").is_dir():
+        svc_doc = brain_dir / "06-Microservices" / f"{name}.md"
+        svc_doc_content = f"""---
+microservice: {name}
+type: specification
+status: active
+tags:
+- '#service/{name}'
+- '#type/specification'
+- '#state/active'
+- '#zone/3-fleet'
+---
+# 📦 Microservice Specification: {name}
+
+## 🎯 Mission
+{desc}
+
+## 🔗 Behavioral Specifications
+- [[02-Business-BDD/02-Behavior-Specs/{name}/FEAT-001-Initialization|FEAT-001: Initialization & Lifecycle Management]]
+"""
+        create_file(svc_doc, svc_doc_content, dry_run)
+
+# -----------------------------------------------------------------------------
+
+def register_sandbox_service(
+    brain_dir: Path,
+    target_dir: Path,
+    name: str,
+    port: int,
+    dry_run: bool = False
+) -> None:
+    """
+    When operating inside an isolated sandbox brain (where standalone.yaml is a regular
+    file rather than a symlink to live native.yaml), automatically registers the newly
+    scaffolded microservice capability and repository entry in the sandbox brain.
+    """
+    standalone_path = brain_dir / "standalone.yaml"
+    if not standalone_path.is_file() or standalone_path.is_symlink():
+        return
+
+    cap_name = name.replace("-", "_")
+    env_port_key = f"{name.upper().replace('-', '_')}_PORT"
+
+    if dry_run:
+        print(f"  [DRY-RUN] Would register capability '{cap_name}' (port {port}) in {standalone_path}")
+        return
+
+    raw_yaml = standalone_path.read_text(encoding="utf-8")
+    if f"    {cap_name}:" not in raw_yaml:
+        cap_snippet = (
+            f"    {cap_name}:\n"
+            f"        ip: ${{HOST_IP:127.0.0.1}}\n"
+            f"        port: \"${{{env_port_key}:{port}}}\"\n"
+        )
+        if "capabilities:\n" in raw_yaml:
+            raw_yaml = raw_yaml.replace("capabilities:\n", f"capabilities:\n{cap_snippet}", 1)
+        else:
+            raw_yaml = raw_yaml.rstrip() + f"\n\ncapabilities:\n{cap_snippet}"
+        standalone_path.write_text(raw_yaml, encoding="utf-8")
+        print(f"  ✅ Registered capability '{cap_name}' (port {port}) in sandbox {standalone_path}")
+
+    repo_ctrl = brain_dir / "05-Fleet-Operation" / "00-Repo-Control"
+    inv_file = repo_ctrl / "inventory.json"
+    if inv_file.is_file():
+        try:
+            inv_data = json.loads(inv_file.read_text(encoding="utf-8"))
+            if inv_data.get("isolated_sandbox"):
+                repos = inv_data.setdefault("repositories", [])
+                if not any(r.get("name") == name for r in repos):
+                    try:
+                        rel_p = "./" + os.path.relpath(target_dir, brain_dir)
+                    except ValueError:
+                        rel_p = f"./06-Microservices/{name}"
+                    repos.append({
+                        "name": name,
+                        "path": rel_p,
+                        "remote": f"https://github.com/Bastien-Antigravity/{name}.git",
+                        "master_branch": "develop",
+                        "repo_type": "level1-microservice"
+                    })
+                    inv_file.write_text(json.dumps(inv_data, indent=2) + "\n", encoding="utf-8")
+        except Exception as e:
+            print(f"  ⚠️ Sandbox inventory update skipped: {e}")
+
+    reg_file = repo_ctrl / "service-registry.json"
+    if reg_file.is_file():
+        try:
+            reg_data = json.loads(reg_file.read_text(encoding="utf-8"))
+            services = reg_data.setdefault("services", [])
+            if not any(s.get("name") == name for s in services):
+                services.append({
+                    "name": name,
+                    "image": f"ghcr.io/bastien-antigravity/{name}",
+                    "default_port": port,
+                    "protocol": "REST",
+                    "archetype": "Microservice",
+                    "classification": "level1_microservice"
+                })
+                reg_file.write_text(json.dumps(reg_data, indent=2) + "\n", encoding="utf-8")
+        except Exception as e:
+            print(f"  ⚠️ Sandbox service-registry update skipped: {e}")
+
 # -----------------------------------------------------------------------------
 
 def main() -> None:
@@ -2188,8 +2315,9 @@ def main() -> None:
     parser.add_argument("--lang", "-l", choices=["go", "python", "rust", "cpp"], default="go", help="Language (go, python, rust, cpp)")
     parser.add_argument("--port", "-p", type=int, default=8090, help="Default capability listen port")
     parser.add_argument("--desc", "-d", default="Ecosystem microservice component", help="Short mission description")
-    parser.add_argument("--dest", help="Destination path (defaults to ../<name>)")
+    parser.add_argument("--dest", help="Destination path (defaults to ../<name> or <brain>/06-Microservices/<name> in sandbox mode)")
     parser.add_argument("--brain", help="Target knowledge brain directory (defaults to domain brain or obsidian-brain)")
+    parser.add_argument("--sandbox", "--isolated", dest="sandbox", action="store_true", help="Scaffold inside the target satellite brain's 06-Microservices/<name> folder and register in sandbox standalone.yaml")
     parser.add_argument("--dry-run", action="store_true", help="Preview file fabrication without writing to disk")
 
     args = parser.parse_args()
@@ -2207,15 +2335,30 @@ def main() -> None:
     dry_run = args.dry_run
 
     workspace_root = resolve_workspace_root()
-    target_dir = Path(args.dest).resolve() if args.dest else workspace_root / name
     if args.brain:
         brain_dir = Path(args.brain).resolve()
-    elif (target_dir.parent / "trading-brain").exists():
-        brain_dir = target_dir.parent / "trading-brain"
-    elif (Path.cwd() / "02-Business-BDD").exists():
-        brain_dir = Path.cwd()
+    elif (Path.cwd() / "02-Business-BDD").exists() and (Path.cwd() / "06-Microservices").exists():
+        brain_dir = Path.cwd().resolve()
     else:
         brain_dir = workspace_root / "obsidian-brain"
+
+    is_satellite_sandbox = (
+        args.sandbox
+        or brain_dir.name != "obsidian-brain"
+        or (
+            (brain_dir / "standalone.yaml").is_file()
+            and not (brain_dir / "standalone.yaml").is_symlink()
+        )
+    )
+
+    if args.dest:
+        target_dir = Path(args.dest).resolve()
+    elif is_satellite_sandbox:
+        target_dir = (brain_dir / "06-Microservices" / name).resolve()
+    else:
+        target_dir = workspace_root / name
+        if not args.brain and (target_dir.parent / "obsidian-brain").exists():
+            brain_dir = target_dir.parent / "obsidian-brain"
 
     print(f"\n🚀 Fabricating microservice '{name}' ({lang}) at {target_dir}...")
 
@@ -2235,8 +2378,12 @@ def main() -> None:
     # 2. Generate common ecosystem files
     generate_common_files(target_dir, name, lang, port, desc, dry_run)
 
-    # 3. Generate BDD specification stub
+    # 3. Generate BDD specification stub & 06-Microservices/<name>.md
     generate_bdd_spec(brain_dir, name, desc, dry_run)
+
+    # 4. Auto-register in sandbox standalone.yaml and inventory if operating in isolated sandbox brain
+    if is_satellite_sandbox:
+        register_sandbox_service(brain_dir, target_dir, name, port, dry_run)
 
     cap_name = name.replace("-", "_")
 

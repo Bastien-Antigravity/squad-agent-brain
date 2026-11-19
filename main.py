@@ -54,6 +54,7 @@ COMMANDS_MAP = {
     "persona-extractor": "extraction.persona_extractor",
     "scaffold-microservice": "lifecycle.scaffold_microservice",
     "scaffold-new-brain": "lifecycle.scaffold_new_brain",
+    "destroy-sandbox": "lifecycle.scaffold_new_brain",
     "squad-agent": "core.start_squad",
     "switch-mode": "core.switch_mode",
     "unlock-vault": "lifecycle.unlock_vault",
@@ -92,6 +93,8 @@ def main():
     
     # Shift arguments to remove "main.py" and the command name
     sys.argv = [sys.argv[0]] + sys.argv[2:]
+    if cmd_arg == "destroy-sandbox" and "--destroy" not in sys.argv:
+        sys.argv.append("--destroy")
     
     # Import and run command
     try:

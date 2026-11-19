@@ -18,18 +18,18 @@ KEY PARAMETERS:
 - target_dir: Path to the generated Antigravity/Gemini agent definitions.
 """
 
-import os
-from pathlib import Path
+from argparse import ArgumentParser as argparseArgumentParser
+from glob import glob as globGlob
+from os import listdir as osListdir, makedirs as osMakedirs, readlink as osReadlink, remove as osRemove, rmdir as osRmdir
+from os.path import basename as osPathBasename, dirname as osPathDirname, exists as osPathExists, isdir as osPathIsdir, join as osPathJoin, relpath as osPathRelpath
+from pathlib import Path as pathPath
+from re import DOTALL as reDotAll, sub as reSub
 import src.bootstrap as bootstrap
 from src.lib.orchestration_lib import resolve_vault_and_workspace, get_logger
 
 vault_root, workspace_root = resolve_vault_and_workspace(__file__)
 
 logger = get_logger("ConvertAgents")
-
-from os import listdir as osListdir, makedirs as osMakedirs
-from os.path import dirname as osPathDirname, abspath as osPathAbspath, join as osPathJoin, isdir as osPathIsdir, exists as osPathExists
-from glob import glob as globGlob
 
 # No registry import needed. We output directly to target agent directories.
 
@@ -40,7 +40,6 @@ def build_skill_markdown(role_name: str, raw_prompt_content: str) -> str:
     Canonical builder for Antigravity IDE SKILL.md files from source Role-Prompts.
     Shared by convert_agents.py and check_coherence.py to guarantee zero template drift.
     """
-    from re import sub as reSub, DOTALL as reDotAll
     clean_body = reSub(r'^---.*?---\s*', '', raw_prompt_content, flags=reDotAll)
     yaml_frontmatter = f"""---
 name: {role_name}
@@ -72,6 +71,14 @@ To prevent context degradation, you MUST begin EVERY single response with the fo
 # -----------------------------------------------------------------------------------------------
 
 def main() -> None:
+    parser = argparseArgumentParser(description="Compile squad role prompts into Antigravity skills.")
+    parser.add_argument(
+        "--skip-workspace-link",
+        action="store_true",
+        help="Skip updating workspace root .agents/skills symlink (enforced automatically for non-obsidian-brain vaults).",
+    )
+    args, _ = parser.parse_known_args()
+
     # Resolve roots dynamically using the shared vault/workspace helper
     # (script is in vault_root/08-Squad-Agent)
     # vault_root and workspace_root are already resolved at import time.
@@ -117,15 +124,15 @@ def main() -> None:
                         skill_md = osPathJoin(dir_path, "SKILL.md")
                         if osPathExists(skill_md):
                             try:
-                                os.remove(skill_md)
-                                os.rmdir(dir_path)
+                                osRemove(skill_md)
+                                osRmdir(dir_path)
                             except OSError as e:
                                 logger.error(f"   ⚠️ Could not purge skill {f}: {e}")
         else:
             for f in osListdir(target):
                 if f.endswith(".md"):
                     try:
-                        os.remove(osPathJoin(target, f))
+                        osRemove(osPathJoin(target, f))
                     except OSError as e:
                         logger.error(f"   ⚠️ Could not purge {f}: {e}")
 
@@ -134,7 +141,7 @@ def main() -> None:
 
     # Process all active source directories in precedence order
     for source_dir in active_source_dirs:
-        logger.info(f"📥 Processing roles from: {os.path.basename(os.path.dirname(source_dir))}")
+        logger.info(f"📥 Processing roles from: {osPathBasename(osPathDirname(source_dir))}")
         for folder in osListdir(source_dir):
             folder_path = osPathJoin(source_dir, folder)
             if osPathIsdir(folder_path):
@@ -148,7 +155,7 @@ def main() -> None:
                 md_files = globGlob(osPathJoin(folder_path, "*.md"))
                 if md_files:
                     # Prioritize files starting with "Prompt-"
-                    prompt_files = [f for f in md_files if os.path.basename(f).startswith("Prompt-")]
+                    prompt_files = [f for f in md_files if osPathBasename(f).startswith("Prompt-")]
                     md_file = prompt_files[0] if prompt_files else md_files[0]
                     
                     with open(md_file, 'r', encoding='utf-8') as f:
@@ -213,22 +220,24 @@ def main() -> None:
 
     # Ensure workspace root .agents/skills symlink points to obsidian-brain/.agents/skills
     # so Antigravity AI IDE sessions opened at workspace root discover all 22 Squad skills.
-    try:
-        ws_agents_dir = Path(workspace_root) / ".agents"
-        ws_skills_link = ws_agents_dir / "skills"
-        vault_skills_dir = Path(vault_root) / ".agents" / "skills"
-        if vault_skills_dir.exists() and Path(workspace_root).resolve() != Path(vault_root).resolve():
-            ws_agents_dir.mkdir(parents=True, exist_ok=True)
-            rel_target = os.path.relpath(vault_skills_dir, ws_agents_dir)
-            if ws_skills_link.is_symlink():
-                if os.readlink(ws_skills_link) != rel_target:
-                    ws_skills_link.unlink()
+    # Never overwrite the workspace root symlink when scaffolding or running inside a satellite/sandbox brain.
+    if not args.skip_workspace_link and pathPath(vault_root).name == "obsidian-brain":
+        try:
+            ws_agents_dir = pathPath(workspace_root) / ".agents"
+            ws_skills_link = ws_agents_dir / "skills"
+            vault_skills_dir = pathPath(vault_root) / ".agents" / "skills"
+            if vault_skills_dir.exists() and pathPath(workspace_root).resolve() != pathPath(vault_root).resolve():
+                ws_agents_dir.mkdir(parents=True, exist_ok=True)
+                rel_target = osPathRelpath(vault_skills_dir, ws_agents_dir)
+                if ws_skills_link.is_symlink():
+                    if osReadlink(ws_skills_link) != rel_target:
+                        ws_skills_link.unlink()
+                        ws_skills_link.symlink_to(rel_target)
+                elif not ws_skills_link.exists():
                     ws_skills_link.symlink_to(rel_target)
-            elif not ws_skills_link.exists():
-                ws_skills_link.symlink_to(rel_target)
-            logger.info(f"🔗 Linked workspace skills: {ws_skills_link} -> {rel_target}")
-    except OSError as e:
-        logger.warning(f"⚠️ Could not link workspace .agents/skills: {e}")
+                logger.info(f"🔗 Linked workspace skills: {ws_skills_link} -> {rel_target}")
+        except OSError as e:
+            logger.warning(f"⚠️ Could not link workspace .agents/skills: {e}")
 
 # -----------------------------------------------------------------------------------------------
 

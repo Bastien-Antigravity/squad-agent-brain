@@ -142,12 +142,22 @@ class TestScaffoldBrain(unittest.TestCase):
         # 5. Docker Orchestration Files Content Verification
         compose_text = (target_path / "docker-compose.yaml").read_text(encoding="utf-8")
         self.assertIn("teleremote-network", compose_text)
-        self.assertIn(f"squad-agent-{target_name}", compose_text)
+        self.assertIn("ghcr.io/bastien-antigravity/squad-agent:${TAG:-develop}", compose_text)
+        self.assertIn(f"squad-agent-${{BRAIN_ID:-{target_name}}}", compose_text)
+        self.assertIn("127.0.0.2", compose_text)
         self.assertIn("SA_PORT", compose_text)
+        self.assertIn("RG_REST_PORT=8093", compose_text)
         self.assertIn("standalone.yaml:/app/standalone.yaml:ro", compose_text)
+        self.assertIn("standalone.yaml:/app/brain/standalone.yaml:ro", compose_text)
+
+        # Verify 08-Squad-Agent/standalone.yaml is present and readable even in an isolated temp folder
+        inner_cfg = target_path / "08-Squad-Agent" / "standalone.yaml"
+        self.assertTrue(inner_cfg.exists(), "08-Squad-Agent/standalone.yaml must be resolvable")
 
         makefile_text = (target_path / "Makefile").read_text(encoding="utf-8")
         self.assertIn("docker compose up -d", makefile_text)
+        self.assertIn("scaffold-service:", makefile_text)
+        self.assertIn("destroy-sandbox:", makefile_text)
 
         # 6. Agent Skills Compilation Verification
         skills_dir = target_path / ".agents" / "skills"
@@ -156,6 +166,51 @@ class TestScaffoldBrain(unittest.TestCase):
         for agent in key_agents:
             agent_skill_file = skills_dir / agent / "SKILL.md"
             self.assertTrue(agent_skill_file.exists(), f"Agent skill missing: {agent}/SKILL.md")
+
+    def test_sandbox_brain_isolation_and_teardown(self):
+        """Verifies --sandbox creates a self-contained standalone.yaml, isolated inventory, and safe teardown."""
+        import json
+        from src.lifecycle.scaffold_new_brain import destroy_sandbox_brain
+
+        target_name = "alpha-sandbox-brain"
+        target_path = self.test_dir / target_name
+
+        scaffold_brain(
+            target_name,
+            target_path,
+            self.vault_root,
+            dry_run=False,
+            sa_port=8195,
+            sa_grpc_port=8197,
+            sandbox=True
+        )
+
+        # 1. standalone.yaml must be a regular self-contained file (not a symlink to live native.yaml)
+        standalone_file = target_path / "standalone.yaml"
+        self.assertTrue(standalone_file.is_file(), "Sandbox standalone.yaml must exist")
+        self.assertFalse(standalone_file.is_symlink(), "Sandbox standalone.yaml must not be a symlink to live native.yaml")
+        inner_link = target_path / "08-Squad-Agent" / "standalone.yaml"
+        self.assertTrue(inner_link.is_symlink(), "08-Squad-Agent/standalone.yaml must symlink to ../standalone.yaml in sandbox mode")
+        self.assertEqual(os.readlink(inner_link), "../standalone.yaml")
+        yaml_text = standalone_file.read_text(encoding="utf-8")
+        self.assertIn(f"target_brain_id: ${{TARGET_BRAIN_ID:{target_name}}}", yaml_text)
+        self.assertIn('port: "${SA_PORT:8195}"', yaml_text)
+        self.assertIn('grpc_port: "${SA_GRPC_PORT:8197}"', yaml_text)
+
+        # 2. Isolated inventory.json must only contain the sandbox brain
+        inv_file = target_path / "05-Fleet-Operation" / "00-Repo-Control" / "inventory.json"
+        inv_data = json.loads(inv_file.read_text(encoding="utf-8"))
+        self.assertTrue(inv_data.get("isolated_sandbox"))
+        self.assertEqual(len(inv_data["repositories"]), 1)
+        self.assertEqual(inv_data["repositories"][0]["name"], target_name)
+
+        # 3. Safety guard must refuse to destroy 'obsidian-brain' or primary vault_root
+        self.assertFalse(destroy_sandbox_brain("obsidian-brain", self.vault_root, self.vault_root, dry_run=False))
+        self.assertTrue(self.vault_root.is_dir(), "Primary vault_root must remain untouched")
+
+        # 4. Teardown must cleanly remove the sandbox brain directory
+        self.assertTrue(destroy_sandbox_brain(target_name, target_path, self.vault_root, dry_run=False))
+        self.assertFalse(target_path.exists(), "Sandbox directory must be deleted after destroy_sandbox_brain")
 
     def test_dynamic_ecosystem_port_allocation(self):
         """Verifies that ports are resolved dynamically from active capabilities without hardcoding."""
