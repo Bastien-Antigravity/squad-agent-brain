@@ -3,36 +3,30 @@
 """
 ESSENTIAL PROCESS:
 Performs routine maintenance tasks across the ecosystem, specifically 
-purging stale AI-Session-State.md files to prevent context bloat.
+compacting stale AI-Session-State.md files in-place to prevent context bloat
+without deleting mandatory repository governance files.
 
 DATA FLOW:
 1. Scans all directories in the workspace root for AI-Session-State.md.
-2. Checks the last modification time of each file.
-3. Deletes files older than 30 days (excluding the central obsidian-brain state).
+2. Checks the last modification time and session section count of each file.
+3. Compacts files older than 30 days or with >10 sessions to keep the header and latest 5 sessions.
 
 KEY PARAMETERS:
 - WORKSPACE_DIR: The root directory containing all brain repositories.
-- state_file: Target file name for the purge operation.
+- max_sessions: Maximum number of recent session blocks retained during compaction.
 """
 import os
+import re
 import sys
 from pathlib import Path
-from lib.bootstrap import ensure_virtualenv, prepend_venv_bin, ensure_import_paths
+import src.bootstrap as bootstrap
 
-script_dir = Path(__file__).resolve().parent
-vault_root = ensure_virtualenv(str(script_dir))
-prepend_venv_bin(vault_root)
-
-ensure_import_paths(script_dir, vault_root)
-
-from os import remove as osRemove
 from time import time as timeTime
-from pathlib import Path
 from sys import argv as sysArgv
 
 # ### CONFIGURATIONS ###
 
-from lib.orchestration_lib import resolve_vault_and_workspace, get_logger
+from src.lib.orchestration_lib import resolve_vault_and_workspace, get_logger
 
 vault_root, workspace_root = resolve_vault_and_workspace(__file__)
 WORKSPACE_DIR = workspace_root
@@ -40,23 +34,55 @@ logger = get_logger("MaintenanceSkill")
 
 # -----------------------------------------------------------------------------------------------
 
-def purge_stale_state() -> None:
+def compact_session_state_file(state_file: Path, max_sessions: int = 5) -> bool:
     """
-    Identifies and removes AI-Session-State.md files that haven't been touched in 30 days.
+    Compacts an AI-Session-State.md file in-place by retaining its YAML frontmatter,
+    preamble, and the most recent `max_sessions` H2 session sections.
+    Never deletes the file itself so FleetCommander mandatory doc checks remain valid.
     """
-    logger.info("Checking for stale state files (older than 30 days)...")
+    try:
+        content = state_file.read_text(encoding="utf-8")
+    except OSError as exc:
+        logger.warning("Could not read state file {0}: {1}".format(state_file, exc))
+        return False
+
+    parts = re.split(r"(?m)^##\s+", content)
+    if len(parts) <= max_sessions + 1:
+        return False
+
+    preamble = parts[0]
+    recent_sections = parts[1 : max_sessions + 1]
+    compacted = preamble + "".join(f"## {sec}" for sec in recent_sections)
+    try:
+        state_file.write_text(compacted, encoding="utf-8")
+        return True
+    except OSError as exc:
+        logger.warning("Could not write compacted state file {0}: {1}".format(state_file, exc))
+        return False
+
+# -----------------------------------------------------------------------------------------------
+
+def purge_stale_state(max_sessions: int = 5) -> None:
+    """
+    Identifies and compacts AI-Session-State.md files that are older than 30 days
+    or have accumulated excessive session history, preserving the file for FleetCommander compliance.
+    """
+    logger.info("Checking for bloated or stale AI-Session-State.md files to compact...")
     now = timeTime()
     count = 0
     for state_file in WORKSPACE_DIR.rglob("AI-Session-State.md"):
-        # Don't delete the central one in obsidian-brain
-        if "obsidian-brain" in str(state_file): 
+        if ".git" in state_file.parts or ".venv" in state_file.parts:
             continue
-        if state_file.stat().st_mtime < now - 30 * 86400:
-            osRemove(state_file)
-            logger.info("Deleted stale state: {0}".format(state_file))
-            count += 1
+        try:
+            is_old = state_file.stat().st_mtime < now - 30 * 86400
+        except OSError:
+            continue
+        if is_old or state_file.stat().st_size > 8192:
+            if compact_session_state_file(state_file, max_sessions=max_sessions):
+                logger.info("Compacted session state in-place: {0}".format(state_file))
+                count += 1
     if count == 0:
-        logger.info("No stale state files found.")
+        logger.info("No bloated or stale state files required compaction.")
 
 # -----------------------------------------------------------------------------------------------
 

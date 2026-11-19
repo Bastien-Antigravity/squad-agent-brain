@@ -85,7 +85,8 @@ def strip_frontmatter(content: str) -> str:
 # -----------------------------------------------------------------------------------------------
 
 def strip_sandbox_headers(content: str) -> str:
-    """Removes attention restoration and state management rules added to skills."""
+    """Removes attention restoration, complexity gate, and state management rules added to skills."""
+    content = reSub(r'#\s*🧭\s*COMPLEXITY\s*GATE.*', '', content, flags=reDOTALL | reIGNORECASE)
     content = reSub(r'#\s*🚨\s*ATTENTION\s*RESTORATION.*', '', content, flags=reDOTALL | reIGNORECASE)
     content = reSub(r'#\s*💾\s*STATE\s*MANAGEMENT.*', '', content, flags=reDOTALL | reIGNORECASE)
     return content.strip()
@@ -93,32 +94,16 @@ def strip_sandbox_headers(content: str) -> str:
 # -----------------------------------------------------------------------------------------------
 
 def fix_mismatch(skill_name: str, prompt_file: Path, skill_file: Path) -> bool:
-    """Auto-resolves prompt-skill mismatches by copying/formatting source prompt."""
+    """Auto-resolves prompt-skill mismatches using the canonical builder from convert_agents."""
     try:
+        from src.fleet.convert_agents import build_skill_markdown
         with open(prompt_file, 'r', encoding='utf-8') as f:
             content = f.read()
-        
-        # Strip existing frontmatter
-        content = reSub(r'^---.*?---\s*', '', content, flags=reDOTALL)
-        
-        yaml_frontmatter = f"""---
-name: {skill_name}
-description: The {skill_name} persona from the Bastien-Antigravity squad.
----
-"""
-        scan_block = f"""
-# 💾 STATE MANAGEMENT RULE (CRITICAL)
-Before finishing any major task or concluding a session, you MUST use your available file management tools to append a summary of your actions to the local `AI-Session-State.md` file in the target repository. This acts as our Hard-Stop Context Block to prevent memory loss across sessions.
 
-# 🚨 ATTENTION RESTORATION (SCAN METHOD)
-To prevent context degradation, you MUST begin EVERY single response with the following SCAN block:
-
-**[SCAN]** Role: {skill_name} | Source: [Source Verification] | State: [Session Progress]
-"""
         skill_file.parent.mkdir(parents=True, exist_ok=True)
         with open(skill_file, 'w', encoding='utf-8') as f:
-            f.write(yaml_frontmatter + content + "\n" + scan_block)
-            
+            f.write(build_skill_markdown(skill_name, content))
+
         logger.info(f"🔧 AUTO-FIXED: Rebuilt [skills/{skill_name}/SKILL.md] from source.")
         return True
     except Exception as e:

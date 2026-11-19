@@ -20,14 +20,8 @@ KEY PARAMETERS:
 
 import os
 from pathlib import Path
-from lib.bootstrap import ensure_virtualenv, prepend_venv_bin, ensure_import_paths
-from lib.orchestration_lib import resolve_vault_and_workspace, get_logger
-
-script_dir = Path(__file__).resolve().parent
-vault_root = ensure_virtualenv(str(script_dir))
-prepend_venv_bin(vault_root)
-
-ensure_import_paths(script_dir, vault_root)
+import src.bootstrap as bootstrap
+from src.lib.orchestration_lib import resolve_vault_and_workspace, get_logger
 
 vault_root, workspace_root = resolve_vault_and_workspace(__file__)
 
@@ -38,6 +32,42 @@ from os.path import dirname as osPathDirname, abspath as osPathAbspath, join as 
 from glob import glob as globGlob
 
 # No registry import needed. We output directly to target agent directories.
+
+# -----------------------------------------------------------------------------------------------
+
+def build_skill_markdown(role_name: str, raw_prompt_content: str) -> str:
+    """
+    Canonical builder for Antigravity IDE SKILL.md files from source Role-Prompts.
+    Shared by convert_agents.py and check_coherence.py to guarantee zero template drift.
+    """
+    from re import sub as reSub, DOTALL as reDotAll
+    clean_body = reSub(r'^---.*?---\s*', '', raw_prompt_content, flags=reDotAll)
+    yaml_frontmatter = f"""---
+name: {role_name}
+description: The {role_name} persona from the Bastien-Antigravity squad.
+---
+"""
+    scan_block = f"""
+# 🧭 COMPLEXITY GATE & CANONICAL TOOLBOX CONTRACT (IDE <-> SQUAD LINK)
+1. **Complexity Gate (Max 2 Files / Step)**: Before writing code, evaluate whether the request touches >2 files, >2 architectural layers, or multiple languages. If so, decompose it via `TaskDecomposer` (`08-Squad-Agent/src/lib/task_decomposer.py`) into sequential atomic micro-steps.
+2. **Canonical `microservice-toolbox` APIs ONLY**:
+   - Version: `config.get_version()` / `appConfig.GetVersion()` (never scan directories for `VERSION.txt`).
+   - Networking: `config.get_listen_addr(cap)`, `config.get_grpc_listen_addr(cap)`, `config.get_rest_addr(cap)` (never hardcode `127.0.0.1` or ports).
+   - Config: Read from `config.get_capability('<service>')` (never chain `os.getenv()` fallbacks in service code; `standalone.yaml` expands `${{VAR:default}}` at boot).
+3. **Zero Over-Defensive Bloat (`15-Safe-By-Design-Invariants.md`)**:
+   - Never write `hasattr(self.config, ...)` or `isinstance(self.config.data, dict)` on pre-validated `AppConfig`.
+   - Never use `asyncio.Lock` without an inner `await`, never wrap Go `atomic.*` in `sync.Mutex`, and never check `os.path.exists()` before `open()` (TOCTOU).
+   - Always verify modified files with: `python3 08-Squad-Agent/main.py validate-compliance <path> --strict-imports --strict-lean`.
+
+# 💾 STATE MANAGEMENT RULE (CRITICAL)
+Before finishing any major task or concluding a session, you MUST use your available file management tools to append a summary of your actions to the local `AI-Session-State.md` file in the target repository. This acts as our Hard-Stop Context Block to prevent memory loss across sessions.
+
+# 🚨 ATTENTION RESTORATION (SCAN METHOD)
+To prevent context degradation, you MUST begin EVERY single response with the following SCAN block:
+
+**[SCAN]** Role: {role_name} | Source: [Source Verification] | State: [Session Progress]
+"""
+    return yaml_frontmatter + clean_body + "\n" + scan_block
 
 # -----------------------------------------------------------------------------------------------
 
@@ -124,25 +154,7 @@ def main() -> None:
                     with open(md_file, 'r', encoding='utf-8') as f:
                         content = f.read()
                     
-                    # Strip existing frontmatter from source content if present
-                    from re import sub as reSub, DOTALL as reDotAll
-                    content = reSub(r'^---.*?---\s*', '', content, flags=reDotAll)
-                    
-                    yaml_frontmatter = f"""---
-name: {agent_name}
-description: The {agent_name} persona from the Bastien-Antigravity squad.
----
-"""
-                    
-                    scan_block = f"""
-# 💾 STATE MANAGEMENT RULE (CRITICAL)
-Before finishing any major task or concluding a session, you MUST use your available file management tools to append a summary of your actions to the local `AI-Session-State.md` file in the target repository. This acts as our Hard-Stop Context Block to prevent memory loss across sessions.
-
-# 🚨 ATTENTION RESTORATION (SCAN METHOD)
-To prevent context degradation, you MUST begin EVERY single response with the following SCAN block:
-
-**[SCAN]** Role: {agent_name} | Source: [Source Verification] | State: [Session Progress]
-"""
+                    compiled_skill = build_skill_markdown(agent_name, content)
                     
                     # Sync to all active targets
                     for name, target in active_targets:
@@ -154,7 +166,7 @@ To prevent context degradation, you MUST begin EVERY single response with the fo
                             target_file = osPathJoin(target, f"{agent_name}.md")
                         try:
                             with open(target_file, 'w', encoding='utf-8') as f:
-                                f.write(yaml_frontmatter + content + "\n" + scan_block)
+                                f.write(compiled_skill)
                             logger.info(f"   [{name}] Created agent: {agent_name}")
                         except OSError as e:
                             logger.error(f"   ⚠️ Could not write agent {agent_name} to {name}: {e}")
@@ -181,23 +193,8 @@ To prevent context degradation, you MUST begin EVERY single response with the fo
                     with open(spec_file, 'r', encoding='utf-8') as f:
                         content = f.read()
 
-                    from re import sub as reSub, DOTALL as reDotAll
-                    content = reSub(r'^---.*?---\s*', '', content, flags=reDotAll)
+                    compiled_spec = build_skill_markdown(spec_name, content)
 
-                    yaml_frontmatter = f"""---
-name: {spec_name}
-description: The {spec_name} persona from the Bastien-Antigravity squad.
----
-"""
-                    scan_block = f"""
-# 💾 STATE MANAGEMENT RULE (CRITICAL)
-Before finishing any major task or concluding a session, you MUST use your available file management tools to append a summary of your actions to the local `AI-Session-State.md` file in the target repository. This acts as our Hard-Stop Context Block to prevent memory loss across sessions.
-
-# 🚨 ATTENTION RESTORATION (SCAN METHOD)
-To prevent context degradation, you MUST begin EVERY single response with the following SCAN block:
-
-**[SCAN]** Role: {spec_name} | Source: [Source Verification] | State: [Session Progress]
-"""
                     for name, target in active_targets:
                         if "skills" in target or name == "Antigravity":
                             skill_dir = osPathJoin(target, spec_name)
@@ -207,7 +204,7 @@ To prevent context degradation, you MUST begin EVERY single response with the fo
                             target_file = osPathJoin(target, f"{spec_name}.md")
                         try:
                             with open(target_file, 'w', encoding='utf-8') as f:
-                                f.write(yaml_frontmatter + content + "\n" + scan_block)
+                                f.write(compiled_spec)
                             logger.info(f"   [{name}] Created specialist agent: {spec_name}")
                         except OSError as e:
                             logger.error(f"   ⚠️ Could not write specialist agent {spec_name} to {name}: {e}")

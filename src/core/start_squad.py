@@ -37,7 +37,8 @@ from os import makedirs as osMakedirs, listdir as osListdir, name as osName, get
 from json import dump as jsonDump, load as jsonLoad
 from subprocess import run as subprocessRun
 from os.path import abspath as osPathAbspath, join as osPathJoin, dirname as osPathDirname, exists as osPathExists, \
-                    expanduser as osPathExpanduser, isdir as osPathIsdir, basename as osPathBasename, getmtime as osPathGetmtime
+                    expanduser as osPathExpanduser, isdir as osPathIsdir, basename as osPathBasename, getmtime as osPathGetmtime, \
+                    realpath as osPathRealpath
 from sys import exit as sysExit, executable as sysExecutable, path as sysPath, stdout as sysStdout
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
@@ -283,15 +284,19 @@ def setup_mcp(mode_choice: str) -> None:
         }
         
         current_excludes = mode_excludes_map.get(mode_choice, set())
-        allowed_dirs = [workspace_root, vault_root]
+        allowed_dirs = []
+        vault_real_root = osPathRealpath(vault_root)
         
         try:
-            for item in osListdir(vault_root):
-                if item in global_excludes or item in current_excludes:
+            for item in sorted(osListdir(vault_root)):
+                if item in global_excludes or item in current_excludes or item.startswith("."):
                     continue
                 item_path = osPathJoin(vault_root, item)
                 if osPathIsdir(item_path):
-                    allowed_dirs.append(item_path)
+                    resolved_item = osPathRealpath(item_path)
+                    # Prevent symlink escape outside vault_root
+                    if resolved_item.startswith(vault_real_root + "/") or resolved_item == vault_real_root:
+                        allowed_dirs.append(resolved_item)
         except Exception as e:
             print(f"⚠️ Warning: Could not scan vault_root for exclusions: {e}")
                 
@@ -620,7 +625,9 @@ def generate_active_rituals(mode_choice: str) -> None:
 
 def unlock_core_kms() -> None:
     """
-    Restores write permissions to 07-Core-KMS to allow audits and updates.
+    Restores write permissions to 07-Core-KMS to allow governance audits and updates.
+    Note: This reverses the accidental-modification guardrail (chmod 0444/0555)
+    and is not intended as an OS privilege-escalation boundary.
     Excludes quick-overview (dynamic AST telemetry) and Git files.
     """
     vault_root = str(vault_root_path)
@@ -650,15 +657,16 @@ def unlock_core_kms() -> None:
 
 def protect_core_kms() -> None:
     """
-    Sets the 07-Core-KMS directory and files to read-only
-    at the OS level to protect them against modifications.
+    Sets the 07-Core-KMS directory and files to read-only (0555/0444)
+    as an accidental-modification governance guardrail during normal agent sessions
+    (not a privilege boundary against same-user processes).
     Excludes quick-overview (dynamic AST telemetry) and Git files.
     """
     vault_root = str(vault_root_path)
     kms_dir = osPathJoin(vault_root, "07-Core-KMS")
     if not osPathExists(kms_dir):
         return
-    print("🔒 Enforcing read-only permissions on 07-Core-KMS directory...")
+    print("🔒 Enforcing accidental-modification read-only guardrail on 07-Core-KMS directory...")
     for root, dirs, files in osWalk(kms_dir):
         # Exclude quick-overview and git metadata from permission changes
         for exclude_dir in [".git", "quick-overview"]:
@@ -883,8 +891,13 @@ def start_engine() -> None:
     # Store event_bus reference on controller for REST usage
     controller.event_bus = event_bus
 
-    # 3. Start gRPC Squad Control Server
-    loop.create_task(start_grpc_server(controller, host, grpc_port, logger))
+    # 3. Start gRPC Squad Control Server with supervised readiness check
+    try:
+        grpc_srv = loop.run_until_complete(start_grpc_server(controller, host, grpc_port, logger))
+        controller.grpc_ready = grpc_srv is not None
+    except Exception as grpc_err:
+        controller.grpc_ready = False
+        logger.error(f"Failed to start gRPC Squad Control server: {grpc_err}")
 
     # 4. Start Telegram dynamic menu client
     SetupTelegram(config, controller, logger)
@@ -901,7 +914,8 @@ def start_engine() -> None:
     )
     controller.incident_healer = incident_healer
     controller.refresh_telegram_menu()
-    loop.create_task(incident_healer.start())
+    healer_task = loop.create_task(incident_healer.start())
+    controller.register_background_task(healer_task, name="autorepair_coordinator")
 
     # 4.1. Start Discord Multi-Agent Squad Chat Client (if configured)
     try:
@@ -909,13 +923,14 @@ def start_engine() -> None:
         discord_client = DiscordClient(config=config, logger=logger, controller=controller)
         if HAS_DISCORD and discord_client.token:
             logger.info("🎮 Discord token detected: Launching Discord Client for multi-agent squad chat...")
-            loop.create_task(discord_client.start_async())
+            discord_task = loop.create_task(discord_client.start_async())
+            controller.register_background_task(discord_task, name="discord_client")
         elif not HAS_DISCORD and discord_client.token:
             logger.warning("Discord token provided but 'discord.py' is not installed.")
     except Exception as e:
         logger.warning(f"Failed to initialize Discord client: {e}")
 
-    # 4.5. Start Collaborative Agent Daemons
+    # 4.5. Start Collaborative Agent Daemons with explicit readiness verification
     try:
         from src.agents.orchestrator import OrchestratorAgent
         from src.agents.developer import DeveloperAgent
@@ -951,10 +966,10 @@ def start_engine() -> None:
             DebloatSentinelAgent(config=config, logger=logger, pg_pool=controller.pool, event_bus=event_bus),
         ]
         
-        for agent in agents:
-            loop.create_task(agent.start())
-            
-        logger.info(f"Collaborative AI squad: {len(agents)} agents successfully launched in background.")
+        ready_count = loop.run_until_complete(controller.start_and_supervise_agents(agents))
+        logger.info(
+            f"Collaborative AI squad: {ready_count}/{len(agents)} agents verified ready and listening."
+        )
     except Exception as e:
         logger.warning(f"Failed to start collaborative agents: {e}")
 

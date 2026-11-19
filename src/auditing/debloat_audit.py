@@ -193,6 +193,67 @@ class PythonAnalyzer(ast.NodeVisitor):
                 ))
         self.generic_visit(node)
 
+    def visit_Call(self, node: ast.Call) -> None:
+        # Detect over-defensive config paranoia: hasattr(self.config, ...) or isinstance(self.config.data, dict)
+        func_name = getattr(node.func, "id", "")
+        if func_name == "hasattr" and len(node.args) >= 2:
+            arg0_dump = ast.dump(node.args[0])
+            if "attr='config'" in arg0_dump or "id='config'" in arg0_dump:
+                self.findings.append(Finding(
+                    category="Over-Defensive Config Paranoia",
+                    severity="Medium",
+                    file_path=self.filename,
+                    line=node.lineno,
+                    title="Redundant hasattr(self.config, ...) check on pre-validated AppConfig",
+                    explanation="`AppConfig` is guaranteed at boot by `bootstrap_microservice`. Checking `hasattr(self.config, ...)` adds defensive clutter.",
+                    recommendation="Call canonical `self.config.get_capability(...)` / `self.config.get_listen_addr(...)` / `self.config.get_version()` directly."
+                ))
+        elif func_name == "isinstance" and len(node.args) >= 2:
+            arg0_dump = ast.dump(node.args[0])
+            if "attr='data'" in arg0_dump and "attr='config'" in arg0_dump:
+                self.findings.append(Finding(
+                    category="Over-Defensive Config Paranoia",
+                    severity="Medium",
+                    file_path=self.filename,
+                    line=node.lineno,
+                    title="Redundant isinstance(self.config.data, dict) check",
+                    explanation="`AppConfig.data` is guaranteed to be a `dict` at initialization. Re-checking its type on hot paths violates the Safe-by-Design invariant.",
+                    recommendation="Trust `self.config.get_capability(...)` or `self.config.data` directly without `isinstance` guards."
+                ))
+        self.generic_visit(node)
+
+    def visit_BoolOp(self, node: ast.BoolOp) -> None:
+        # Detect Multi-Fallback Config/Env Chains: a.get(...) or os.getenv(...) or os.environ.get(...)
+        if isinstance(node.op, ast.Or) and len(node.values) >= 3:
+            dump_str = ast.dump(node)
+            has_env_lookup = any(k in dump_str for k in ("getenv", "environ"))
+            has_dict_get = "attr='get'" in dump_str
+            if has_env_lookup and has_dict_get:
+                self.findings.append(Finding(
+                    category="Multi-Fallback Config Chain",
+                    severity="High",
+                    file_path=self.filename,
+                    line=node.lineno,
+                    title="Multi-fallback config/env chain (`a.get() or os.getenv() or ...`)",
+                    explanation="Chaining 3+ config and environment fallbacks creates naming drift and masks missing configuration (`ZERO_SILENT_FALLBACK`). `AppConfig` already expands `${VAR:default}` in YAML.",
+                    recommendation="Resolve the setting from a single canonical `AppConfig` capability key and let `standalone.yaml` handle `${ENV:default}` expansion."
+                ))
+        self.generic_visit(node)
+
+    def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
+        # Detect silent exception swallowing: `except Exception: pass` or `except: pass`
+        if len(node.body) == 1 and isinstance(node.body[0], ast.Pass):
+            self.findings.append(Finding(
+                category="Silent Exception Swallowing",
+                severity="Medium",
+                file_path=self.filename,
+                line=node.lineno,
+                title="Silent `except ...: pass` block hides runtime failures",
+                explanation="Swallowing exceptions with a bare `pass` masks unexpected failures and violates the Fail-Fast / Observability invariants.",
+                recommendation="Log the error with `self.logger.warning/error` or catch only the specific expected exception (e.g. `FileNotFoundError`)."
+            ))
+        self.generic_visit(node)
+
 
 # =============================================================================
 # Go Parser & Static Analyzer
@@ -400,6 +461,40 @@ def resolve_target_path(target_path: str) -> Path:
         if cand_vault.exists():
             return cand_vault.resolve()
     return p.resolve()
+
+
+def audit_single_file_bloat(file_path: Path) -> List[Dict[str, Any]]:
+    """Audits a single source file for mechanical and cognitive over-engineering."""
+    if not file_path.is_file():
+        return []
+    suffix = file_path.suffix.lower()
+    findings: List[Finding] = []
+    if suffix == ".py":
+        py_analyzer = PythonAnalyzer(str(file_path))
+        try:
+            content = file_path.read_text(encoding="utf-8", errors="ignore")
+            lines = content.splitlines()
+            tree = ast.parse(content, filename=str(file_path))
+            py_analyzer.visit(tree)
+            for f in py_analyzer.findings:
+                # Respect explicit `# safe:ignore` marker on the flagged line
+                if 1 <= f.line <= len(lines) and "safe:ignore" in lines[f.line - 1]:
+                    continue
+                findings.append(f)
+        except Exception:
+            pass
+        findings.extend(audit_architectural_patterns(file_path))
+    elif suffix == ".go":
+        go_finds, _ = audit_go_file(file_path)
+        findings.extend(go_finds)
+        findings.extend(audit_architectural_patterns(file_path))
+    elif suffix == ".rs":
+        rs_finds, _ = audit_rust_file(file_path)
+        findings.extend(rs_finds)
+        findings.extend(audit_architectural_patterns(file_path))
+    elif suffix in (".cpp", ".hpp", ".c", ".h"):
+        findings.extend(audit_architectural_patterns(file_path))
+    return [f.to_dict() for f in findings]
 
 
 def run_debloat_audit(target_path: str) -> Dict[str, Any]:

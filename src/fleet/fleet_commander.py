@@ -26,7 +26,7 @@ import shlex
 import argparse
 import subprocess
 from pathlib import Path
-from typing import List, Dict, Optional, Tuple, Any
+from typing import List, Dict, Optional, Tuple, Any, Union
 from json import load as jsonLoad
 
 from lib.orchestration_lib import setup_terminal, get_logger, resolve_vault_and_workspace, resolve_active_workspaces
@@ -148,16 +148,77 @@ class FleetCommander:
     def _step(self, repo: str, action: str) -> None:
         print(f"    {repo.ljust(35)} | {action}...")
 
-    def _run_command(self, cmd: str, cwd: str) -> Tuple[str, Optional[str]]:
+    def _run_command(self, cmd: Union[str, List[str]], cwd: str) -> Tuple[str, Optional[str]]:
+        """
+        Executes a command without shell interpolation and returns (stdout, error).
+        Any non-zero exit code guarantees a non-empty error string (never None).
+        """
         try:
-            cmd_list = shlex.split(cmd) if isinstance(cmd, str) else cmd
+            cmd_list = shlex.split(cmd) if isinstance(cmd, str) else list(cmd)
             result = subprocess.run(
                 cmd_list, cwd=cwd, shell=False,
                 capture_output=True, text=True, check=True
             )
             return result.stdout.strip(), None
         except subprocess.CalledProcessError as e:
-            return e.stdout.strip() or "No stdout", e.stderr.strip() or "No stderr"
+            stdout_str = (e.stdout or "").strip()
+            stderr_str = (e.stderr or "").strip()
+            err_msg = stderr_str or stdout_str or f"Command failed with exit code {e.returncode}"
+            return stdout_str, err_msg
+        except OSError as e:
+            return "", str(e)
+
+    # -----------------------------------------------------------------------------------------------
+
+    def _audit_worktree_safety(self, repo_path: Path, repo_name: str, status_out: str) -> bool:
+        """
+        Audits modified and untracked files in git status --porcelain before staging
+        to prevent accidental commits of .env files, private keys, or credentials.
+        """
+        if not status_out or not status_out.strip():
+            return True
+
+        prohibited_suffixes = (".pem", ".key", ".p12", ".pfx", ".sqlite", ".db")
+        prohibited_exact = {".env", ".env.local", ".env.production", "id_rsa", "id_ed25519", "credentials.json"}
+
+        for raw_line in status_out.splitlines():
+            if len(raw_line) < 4:
+                continue
+            status_code = raw_line[:2]
+            if "D" in status_code:
+                continue
+            rel_path = raw_line[3:].strip()
+            if " -> " in rel_path:
+                rel_path = rel_path.split(" -> ", 1)[1].strip()
+            rel_path = rel_path.strip('"')
+            path_obj = Path(rel_path)
+            fname_lower = path_obj.name.lower()
+
+            if (
+                fname_lower in prohibited_exact
+                or fname_lower.startswith(".env.")
+                or fname_lower.endswith(prohibited_suffixes)
+            ):
+                self._log(
+                    f"[{repo_name}] Security block: prohibited sensitive file in working tree '{rel_path}'",
+                    "error"
+                )
+                return False
+
+            full_file = repo_path / path_obj
+            if full_file.is_file():
+                try:
+                    sample = full_file.read_text(encoding="utf-8", errors="ignore")[:8192]
+                    if "-----BEGIN" in sample and "PRIVATE KEY-----" in sample:
+                        self._log(
+                            f"[{repo_name}] Security block: plaintext private key detected in '{rel_path}'",
+                            "error"
+                        )
+                        return False
+                except OSError:
+                    pass
+
+        return True
 
     # -----------------------------------------------------------------------------------------------
     # COMPLIANCE AUDITS
@@ -284,23 +345,37 @@ class FleetCommander:
                 results.append(f"{name}: [DIRTY] Skipped (work preserved)")
                 continue
 
+            if self.dry_run:
+                ahead_out, _ = self._run_command(
+                    ["git", "rev-list", "--left-right", "--count", "origin/develop...HEAD"],
+                    repo_path_str
+                )
+                parts = ahead_out.split()
+                ahead = int(parts[1]) if len(parts) == 2 and parts[1].isdigit() else 0
+                self._step(name, f"[DRY RUN] Would pull --rebase origin develop (ahead={ahead})")
+                results.append(f"{name}: [DRY-RUN] Would sync (ahead={ahead})")
+                continue
+
             # Pull latest develop
             self._step(name, "Pulling origin develop")
-            out, err = self._run_command("git pull --rebase origin develop", repo_path_str)
-            if err and "error" in err.lower():
+            out, err = self._run_command(["git", "pull", "--rebase", "origin", "develop"], repo_path_str)
+            if err:
                 self._log(f"[{name}] Pull failed: {err}", "error")
                 results.append(f"{name}: [ERROR] Pull failed")
                 continue
 
             # Check if ahead of remote
-            ahead_out, _ = self._run_command("git rev-list --left-right --count origin/develop...HEAD", repo_path_str)
+            ahead_out, _ = self._run_command(
+                ["git", "rev-list", "--left-right", "--count", "origin/develop...HEAD"],
+                repo_path_str
+            )
             parts = ahead_out.split()
-            ahead = int(parts[1]) if len(parts) == 2 else 0
+            ahead = int(parts[1]) if len(parts) == 2 and parts[1].isdigit() else 0
 
-            if ahead > 0 and not self.dry_run:
+            if ahead > 0:
                 self._step(name, f"Pushing {ahead} commit(s)")
-                out, push_err = self._run_command("git push origin develop", repo_path_str)
-                if push_err and "error" in push_err.lower():
+                out, push_err = self._run_command(["git", "push", "origin", "develop"], repo_path_str)
+                if push_err:
                     results.append(f"{name}: [ERROR] Push failed")
                 else:
                     results.append(f"{name}: [SYNCED] Pushed {ahead} commit(s)")
@@ -334,24 +409,37 @@ class FleetCommander:
             name = sub.name
             sub_path = str(sub)
 
-            status_out, _ = self._run_command("git status --porcelain", sub_path)
-            if status_out.strip() and not self.dry_run:
+            status_out, _ = self._run_command(["git", "status", "--porcelain"], sub_path)
+            if self.dry_run:
+                self._log(f"[{name}] [DRY RUN] Would sync submodule (dirty={bool(status_out.strip())})", "info")
+                continue
+
+            if status_out.strip():
+                if not self._audit_worktree_safety(sub, name, status_out):
+                    self._log(f"[{name}] Skipping submodule commit due to unsafe working tree files.", "error")
+                    continue
                 self._log(f"[{name}] Committing local submodule changes...", "info")
-                self._run_command("git add .", sub_path)
-                self._run_command(f'git commit -m "{msg}"', sub_path)
+                self._run_command(["git", "add", "."], sub_path)
+                self._run_command(["git", "commit", "-m", msg], sub_path)
 
             self._log(f"[{name}] Pulling latest develop...", "info")
-            self._run_command("git pull --rebase origin develop", sub_path)
+            _, pull_err = self._run_command(["git", "pull", "--rebase", "origin", "develop"], sub_path)
+            if pull_err:
+                self._log(f"[{name}] PULL FAILED: {pull_err}", "error")
+                continue
 
             # Check if ahead
-            ab_out, _ = self._run_command("git rev-list --left-right --count origin/develop...HEAD", sub_path)
+            ab_out, _ = self._run_command(
+                ["git", "rev-list", "--left-right", "--count", "origin/develop...HEAD"],
+                sub_path
+            )
             parts = ab_out.split()
-            ahead = int(parts[1]) if len(parts) == 2 else 0
+            ahead = int(parts[1]) if len(parts) == 2 and parts[1].isdigit() else 0
 
-            if ahead > 0 and not self.dry_run:
+            if ahead > 0:
                 self._log(f"[{name}] Pushing {ahead} commit(s) to origin develop...", "info")
-                _, err = self._run_command("git push origin develop", sub_path)
-                if err and "error" in err.lower():
+                _, err = self._run_command(["git", "push", "origin", "develop"], sub_path)
+                if err:
                     self._log(f"[{name}] PUSH FAILED: {err}", "error")
                 else:
                     self._log(f"[{name}] SYNCED.", "info")
@@ -361,25 +449,34 @@ class FleetCommander:
         # Update parent pointer
         obsidian_path = str(obsidian_dir)
         self._log("[ obsidian-brain ] Updating submodule pointers...", "info")
-        if not self.dry_run:
-            self._run_command("git add .", obsidian_path)
-            status, _ = self._run_command("git status --porcelain", obsidian_path)
-            if status.strip():
-                self._run_command('git commit -m "chore(fleet): update submodule pointers"', obsidian_path)
+        if self.dry_run:
+            self._log("[ obsidian-brain ] [DRY RUN] Would stage and push submodule pointers.", "info")
+            return
 
-            ab_out, _ = self._run_command("git rev-list --left-right --count origin/develop...HEAD", obsidian_path)
-            parts = ab_out.split()
-            ahead = int(parts[1]) if len(parts) == 2 else 0
+        status, _ = self._run_command(["git", "status", "--porcelain"], obsidian_path)
+        if status.strip():
+            if not self._audit_worktree_safety(obsidian_dir, "obsidian-brain", status):
+                self._log("❌ Vault pointer update aborted due to unsafe working tree files.", "error")
+                return
+            self._run_command(["git", "add", "."], obsidian_path)
+            self._run_command(["git", "commit", "-m", "chore(fleet): update submodule pointers"], obsidian_path)
 
-            if ahead > 0:
-                self._log(f"[ obsidian-brain ] Pushing {ahead} commit(s) to origin...", "info")
-                _, err = self._run_command("git push origin develop", obsidian_path)
-                if err and "error" in err.lower():
-                    self._log(f"❌ Vault push failed: {err}", "error")
-                else:
-                    self._log("✨ Atomic Vault Sync Complete!", "info")
+        ab_out, _ = self._run_command(
+            ["git", "rev-list", "--left-right", "--count", "origin/develop...HEAD"],
+            obsidian_path
+        )
+        parts = ab_out.split()
+        ahead = int(parts[1]) if len(parts) == 2 and parts[1].isdigit() else 0
+
+        if ahead > 0:
+            self._log(f"[ obsidian-brain ] Pushing {ahead} commit(s) to origin...", "info")
+            _, err = self._run_command(["git", "push", "origin", "develop"], obsidian_path)
+            if err:
+                self._log(f"❌ Vault push failed: {err}", "error")
             else:
-                self._log("✨ Vault is already up-to-date.", "info")
+                self._log("✨ Atomic Vault Sync Complete!", "info")
+        else:
+            self._log("✨ Vault is already up-to-date.", "info")
 
     # -----------------------------------------------------------------------------------------------
     # COMMAND 4: PUSH (With Full Compliance Audits)
@@ -391,19 +488,22 @@ class FleetCommander:
         scope_str = "Single Repo" if self.single_mode else "Mass Push"
         self._log(f"Starting {scope_str} Operation{mode_str} ---", "info")
 
-        # Automatically trigger housekeeping
-        try:
-            log_archiver = self.vault_root / "05-Fleet-Operation" / "02-Deployment-Logs" / "archive.py"
-            if log_archiver.exists():
-                self._run_command(f"python3 {log_archiver}", self.base_path)
+        # Automatically trigger housekeeping only when NOT in dry-run mode
+        if not self.dry_run:
+            try:
+                log_archiver = self.vault_root / "05-Fleet-Operation" / "02-Deployment-Logs" / "archive.py"
+                if log_archiver.exists():
+                    self._run_command([sys.executable, str(log_archiver)], self.base_path)
 
-            plan_archiver = self.vault_root / "05-Fleet-Operation" / "01-Fleet-Action-Plans" / "archive.py"
-            if plan_archiver.exists():
-                self._run_command(f"python3 {plan_archiver}", self.base_path)
-        except Exception:
-            pass
+                plan_archiver = self.vault_root / "05-Fleet-Operation" / "01-Fleet-Action-Plans" / "archive.py"
+                if plan_archiver.exists():
+                    self._run_command([sys.executable, str(plan_archiver)], self.base_path)
+            except Exception:
+                pass
+        else:
+            self._log("[DRY RUN] Skipping housekeeping archive script execution.", "info")
 
-        git_ver, err = self._run_command("git --version", self.base_path)
+        git_ver, err = self._run_command(["git", "--version"], self.base_path)
         if err:
             self._log(f"Git not found! {err}", "error")
             return
@@ -426,9 +526,9 @@ class FleetCommander:
 
             # Branch check
             self._step(name, "Detecting branch")
-            branch, err = self._run_command("git rev-parse --abbrev-ref HEAD", repo_path_str)
+            branch, err = self._run_command(["git", "rev-parse", "--abbrev-ref", "HEAD"], repo_path_str)
             if err or branch == "HEAD":
-                branch, err = self._run_command("git branch --show-current", repo_path_str)
+                branch, err = self._run_command(["git", "branch", "--show-current"], repo_path_str)
                 if not branch or branch == "HEAD":
                     self._log(f"[{name}] Detached HEAD. Push blocked.", "error")
                     results.append(f"{name}: [ERROR] Detached HEAD")
@@ -454,39 +554,58 @@ class FleetCommander:
                     results.append(f"{name}: [ERROR] Compliance failed (QUARANTINED)")
                     continue
 
-            # Stage changes
-            self._step(name, "Staging changes")
-            self._run_command("git add .", repo_path_str)
-
-            # Check status
-            status, _ = self._run_command("git status --porcelain", repo_path_str)
+            # Inspect working tree status BEFORE mutating Git index
+            status, _ = self._run_command(["git", "status", "--porcelain"], repo_path_str)
             has_changes = bool(status.strip())
 
+            if has_changes and not self._audit_worktree_safety(repo_path, name, status):
+                results.append(f"{name}: [ERROR] Unsafe working tree files (QUARANTINED)")
+                continue
+
+            if self.dry_run:
+                if has_changes:
+                    self._step(name, "[DRY RUN] Would stage, commit, and push changes")
+                    results.append(f"{name}: [DRY-RUN] Would push to {branch}")
+                else:
+                    results.append(f"{name}: [OK] No changes")
+                continue
+
             commit_ok = True
-            if has_changes and not self.dry_run:
+            if has_changes:
+                self._step(name, "Staging changes")
+                _, add_err = self._run_command(["git", "add", "."], repo_path_str)
+                if add_err:
+                    self._log(f"[{name}] Git add failed: {add_err}", "error")
+                    results.append(f"{name}: [ERROR] Stage failed")
+                    continue
+
                 self._step(name, f"Committing changes: {self.commit_msg[:30]}...")
-                _, commit_err = self._run_command(f'git commit -m "{self.commit_msg}"', repo_path_str)
-                if commit_err and "error" in commit_err.lower():
+                _, commit_err = self._run_command(["git", "commit", "-m", self.commit_msg], repo_path_str)
+                if commit_err:
                     self._log(f"[{name}] Commit failed: {commit_err}", "error")
                     results.append(f"{name}: [ERROR] Commit failed")
                     commit_ok = False
 
                 if commit_ok:
                     self._step(name, f"Pushing to origin {branch}")
-                    _, push_err = self._run_command(f"git push origin {branch}", repo_path_str)
-                    if push_err and "error" in push_err.lower():
+                    _, push_err = self._run_command(["git", "push", "origin", branch], repo_path_str)
+                    if push_err:
                         self._log(f"[{name}] Push failed: {push_err}", "error")
                         results.append(f"{name}: [ERROR] Push failed")
                         commit_ok = False
-            elif has_changes and self.dry_run:
-                self._step(name, "[DRY RUN] Would commit and push changes")
 
             if commit_ok:
-                if self.tag and not self.dry_run:
+                if self.tag:
                     self._step(name, f"Tagging with {self.tag}")
-                    self._run_command(f'git tag -a {self.tag} -m "Release version {self.tag}"', repo_path_str)
-                    self._run_command(f"git push origin {self.tag}", repo_path_str)
-                    results.append(f"{name}: [SUCCESS] Pushed changes & tag {self.tag}")
+                    _, tag_err = self._run_command(
+                        ["git", "tag", "-a", self.tag, "-m", f"Release version {self.tag}"],
+                        repo_path_str
+                    )
+                    _, tag_push_err = self._run_command(["git", "push", "origin", self.tag], repo_path_str)
+                    if tag_err or tag_push_err:
+                        results.append(f"{name}: [ERROR] Tag push failed")
+                    else:
+                        results.append(f"{name}: [SUCCESS] Pushed changes & tag {self.tag}")
                 else:
                     if has_changes:
                         results.append(f"{name}: [SUCCESS] Pushed to {branch}")

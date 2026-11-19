@@ -252,7 +252,20 @@ def process_vault_tasks() -> None:
                 
                 with open(task_file, 'w', encoding='utf-8') as f:
                     f.write(new_content)
-                logger.info("Handover complete. Transitioned to #state/active.")
+                try:
+                    from src.interfaces import LocalEventBus
+                    rel_task = Path(task_file).relative_to(OBSIDIAN_DIR)
+                    dispatch_payload = {
+                        "sender": "user",
+                        "session_id": f"vault_task_{Path(task_file).stem}",
+                        "content": f"@{assigned_role} Execute pending vault task `{rel_task}`:\n\n{full_content[:2000]}",
+                        "source_brain_id": "obsidian-brain",
+                        "reply_topic": "bastien-antigravity.squad.chat",
+                    }
+                    LocalEventBus.publish("bastien-antigravity.squad.chat", dispatch_payload)
+                except Exception as pub_err:
+                    logger.warning(f"Event bus dispatch warning for {task_file}: {pub_err}")
+                logger.info("Handover complete. Transitioned to #state/active and dispatched to SquadEventBus.")
             except Exception as e:
                 logger.error(f"Error updating task: {e}")
 

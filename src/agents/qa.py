@@ -48,7 +48,7 @@ class QAAgent(BaseAgent):
             pg_pool=pg_pool,
             event_bus=event_bus
         )
-        self.tools = [run_squad_tests]
+        self.tools = self.tools + [run_squad_tests]
 
     async def execute_tool(self, name: str, args: Dict[str, Any]) -> str:
         """Executes a function call requested by the model."""

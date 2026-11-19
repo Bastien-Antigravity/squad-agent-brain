@@ -232,6 +232,17 @@ class BaseAgent:
                 except Exception as e:
                     self.logger.debug(f"Agent {self.role_name}: Could not read extra prompt {extra_rel}: {e}")
 
+        try:
+            from src.lib.task_decomposer import CANONICAL_TOOLBOX_REMINDERS
+            guardrails_block = (
+                "# 🛡️ CANONICAL ECOSYSTEM & ANTI-BLOAT GUARDRAILS (MANDATORY)\n"
+                "1. **Complexity Gate**: Never modify more than 2 files in a single turn. If a request spans >2 files or >2 architectural layers, split it into sequential atomic steps.\n"
+                + "\n".join(f"- {r}" for r in CANONICAL_TOOLBOX_REMINDERS)
+            )
+            sections.append(guardrails_block)
+        except Exception:
+            pass
+
         return "\n\n---\n\n".join(sections)
 
     def _refresh_llm_config(self) -> None:
@@ -561,11 +572,11 @@ class BaseAgent:
                     try:
                         from src.auditing.validate_compliance import ComplianceAuditor
                         auditor = ComplianceAuditor(workspace_root=workspace_root)
-                        violations = auditor.audit_file(file_path, strict_imports=True)
+                        violations = auditor.audit_file(file_path, strict_imports=True, strict_lean=True)
                         if violations:
                             v_lines = [f"  - [{v['rule']}] Line {v['line']}: {v['message']}" for v in violations[:8]]
                             return (
-                                f"Success writing to file {path_arg}, BUT {len(violations)} ecosystem compliance violation(s) "
+                                f"Success writing to file {path_arg}, BUT {len(violations)} ecosystem compliance / lean-code violation(s) "
                                 f"were detected and MUST be fixed immediately:\n" + "\n".join(v_lines)
                             )
                     except Exception:

@@ -71,9 +71,12 @@ def test_rag_memory_store_rest_retrieve(mock_config, mock_logger):
     with patch("urllib.request.urlopen", return_value=mock_resp) as mock_urlopen:
         turns = store.retrieve("architecture guidelines", limit=3)
         assert len(turns) == 1
-        assert turns[0]["role"] == "system"
+        assert turns[0]["role"] == "context"
         assert "Core architecture guidelines" in turns[0]["content"]
         assert "[Semantic Context from 01-Architecture/specs.md]" in turns[0]["content"]
+        assert "UNTRUSTED_RAG_DATA" in turns[0]["content"]
+        assert turns[0]["metadata"]["trust_level"] == "untrusted_rag_data"
+        assert turns[0]["metadata"]["brain_id"] == "test-brain"
         mock_urlopen.assert_called_once()
         req = mock_urlopen.call_args[0][0]
         assert req.full_url == "http://127.0.0.1:8093/api/v1/query"
@@ -81,6 +84,72 @@ def test_rag_memory_store_rest_retrieve(mock_config, mock_logger):
         assert body["query"] == "architecture guidelines"
         assert body["brain_id"] == "test-brain"
         assert body["limit"] == 3
+
+
+def test_rag_memory_store_https_and_response_size_guard(mock_config, mock_logger):
+    """Verifies RAGMemoryStore honors TLS configuration and rejects oversized responses."""
+    mock_config.data["capabilities"]["rag_engine"]["tls_enabled"] = True
+    store = RAGMemoryStore(config=mock_config, logger=mock_logger, tenant="test-brain")
+    assert store._build_rag_query_url("127.0.0.1:8093") == "https://127.0.0.1:8093/api/v1/query"
+
+    oversized_resp = MagicMock()
+    oversized_resp.status = 200
+    oversized_resp.read.return_value = b"x" * (RAGMemoryStore.MAX_RAG_RESPONSE_BYTES + 1)
+    oversized_resp.__enter__.return_value = oversized_resp
+
+    with patch("urllib.request.urlopen", return_value=oversized_resp):
+        assert store.retrieve("oversized query", limit=2) == []
+
+
+def test_short_term_memory_strict_session_isolation(mock_config, mock_logger):
+    """Verifies ShortTermMemory isolates sessions on add, retrieve, and clear."""
+    from src.lib.memory import ShortTermMemory
+    mem = ShortTermMemory(config=mock_config, logger=mock_logger, max_size=5)
+    mem.add({"role": "user", "content": "Telegram secret"}, session_id="telegram_1")
+    mem.add({"role": "user", "content": "Discord message"}, session_id="discord_2")
+
+    tg_turns = mem.retrieve("", session_id="telegram_1")
+    dc_turns = mem.retrieve("", session_id="discord_2")
+    assert len(tg_turns) == 1 and tg_turns[0]["content"] == "Telegram secret"
+    assert len(dc_turns) == 1 and dc_turns[0]["content"] == "Discord message"
+
+    # Clearing telegram_1 must not affect discord_2
+    mem.clear(session_id="telegram_1")
+    assert mem.retrieve("", session_id="telegram_1") == []
+    assert len(mem.retrieve("", session_id="discord_2")) == 1
+
+
+def test_postgres_memory_store_strict_tenant_isolation(mock_config, mock_logger):
+    """Verifies PostgresMemoryStore enforces strict brain_id filtering on retrieve and clear."""
+    from src.lib.memory import PostgresMemoryStore
+    mock_pool = MagicMock()
+    mock_conn = MagicMock()
+    mock_cursor = MagicMock()
+    mock_pool.getconn.return_value = mock_conn
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
+    mock_cursor.fetchall.return_value = []
+
+    store = PostgresMemoryStore(
+        config=mock_config,
+        logger=mock_logger,
+        pg_pool=mock_pool,
+        schema="08-Squad-Agent",
+        brain_id="trading-brain"
+    )
+    mock_cursor.reset_mock()
+    store.retrieve("query", session_id="sess_1", limit=5)
+    select_calls = [c[0] for c in mock_cursor.execute.call_args_list if "SELECT" in c[0][0]]
+    assert len(select_calls) == 1
+    assert "brain_id IS NULL" not in select_calls[0][0]
+    assert "WHERE session_id = %s AND brain_id = %s" in select_calls[0][0]
+    assert select_calls[0][1] == ("sess_1", "trading-brain", 5)
+
+    mock_cursor.reset_mock()
+    store.clear(session_id="sess_1")
+    delete_calls = [c[0] for c in mock_cursor.execute.call_args_list if "DELETE" in c[0][0]]
+    assert len(delete_calls) == 1
+    assert "WHERE session_id = %s AND brain_id = %s" in delete_calls[0][0]
+    assert delete_calls[0][1] == ("sess_1", "trading-brain")
 
 
 def test_rag_memory_store_fallback_on_network_error(mock_config, mock_logger):
@@ -207,4 +276,52 @@ def test_zero_silent_fallback_when_rag_unresolvable(mock_logger):
     agent = DocIndexerAgent(config=broken_cfg, logger=mock_logger, pg_pool=MagicMock(), event_bus=mock_bus)
     with pytest.raises(ValueError):
         agent._resolve_rag_rest_url()
+
+
+def test_qa_docmaintainer_and_codeindexer_tool_integrations(mock_config, mock_logger):
+    """Verifies QAAgent retains base tools and DocMaintainer/CodeIndexer dispatch specialized RAG REST tools."""
+    import asyncio
+    from src.agents.qa import QAAgent
+    from src.agents.docmaintainer import DocMaintainerAgent
+    from src.agents.codeindexer import CodeIndexerAgent
+
+    mock_bus = MagicMock()
+
+    # 1. QAAgent retains BaseAgent file/RAG tools alongside run_squad_tests
+    qa_agent = QAAgent(config=mock_config, logger=mock_logger, pg_pool=MagicMock(), event_bus=mock_bus)
+    qa_tools = [t.__name__ for t in qa_agent.tools]
+    assert "query_rag_engine" in qa_tools
+    assert "read_workspace_file" in qa_tools
+    assert "write_workspace_file" in qa_tools
+    assert "run_squad_tests" in qa_tools
+
+    # 2. DocMaintainerAgent drift & doc-sync tools
+    doc_maint = DocMaintainerAgent(config=mock_config, logger=mock_logger, pg_pool=MagicMock(), event_bus=mock_bus)
+    dm_tools = [t.__name__ for t in doc_maint.tools]
+    assert "check_documentation_drift" in dm_tools
+    assert "sync_code_documentation" in dm_tools
+
+    mock_drift_resp = MagicMock()
+    mock_drift_resp.read.return_value = json.dumps({"success": True, "drifted": [{"code_id": "a.go", "doc_id": "b.md"}]}).encode("utf-8")
+    mock_drift_resp.__enter__.return_value = mock_drift_resp
+
+    with patch("src.agents.docmaintainer.urllibUrlopen", return_value=mock_drift_resp):
+        drift_out = asyncio.run(doc_maint.execute_tool("check_documentation_drift", {"workspace": "config-server"}))
+        assert "Detected 1 drifted documentation link(s)" in drift_out
+
+    # 3. CodeIndexerAgent symbol search & dependency graph tools
+    code_idx = CodeIndexerAgent(config=mock_config, logger=mock_logger, pg_pool=MagicMock(), event_bus=mock_bus)
+    ci_tools = [t.__name__ for t in code_idx.tools]
+    assert "search_code_symbols" in ci_tools
+    assert "get_file_dependency_graph" in ci_tools
+
+    mock_sym_resp = MagicMock()
+    mock_sym_resp.read.return_value = json.dumps({"success": True, "symbols": [{"label": "BootstrapService"}]}).encode("utf-8")
+    mock_sym_resp.__enter__.return_value = mock_sym_resp
+
+    with patch("src.agents.codeindexer.urllibUrlopen", return_value=mock_sym_resp):
+        sym_out = asyncio.run(code_idx.execute_tool("search_code_symbols", {"symbol_query": "Bootstrap"}))
+        assert "Found 1 AST symbol(s)" in sym_out
+        assert "BootstrapService" in sym_out
+
 

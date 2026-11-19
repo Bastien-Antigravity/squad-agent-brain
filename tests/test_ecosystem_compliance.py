@@ -311,6 +311,136 @@ def serialize(payload: typeDict[str, typeAny]) -> str:
         clean_violations = self.auditor.audit_file(compliant_py, strict_imports=True)
         self.assertEqual(clean_violations, [])
 
+    def test_catches_strict_lean_anti_defensive_violations(self):
+        """Verifies that strict_lean flags config paranoia, multi-fallback chains, silent except: pass, and TOCTOU."""
+        bloated_py = self.test_dir / "bloated_service.py"
+        bloated_py.write_text("""#!/usr/bin/env python
+# coding:utf-8
+
+\"\"\"
+ESSENTIAL PROCESS:
+Bloated worker with over-defensive anti-patterns.
+
+DATA FLOW:
+1. Checks config redundantly.
+
+KEY PARAMETERS:
+- config: AppConfig.
+\"\"\"
+
+import os
+
+# -----------------------------------------------------------------------------------------------
+
+class BloatedWorker:
+    def run(self):
+        if hasattr(self.config, "data") and isinstance(self.config.data, dict):
+            pass
+        brain = self.config.get("target_brain_id") or os.getenv("TARGET_BRAIN_ID") or os.getenv("BRAIN_ID")
+        if os.path.exists("data.txt"):
+            with open("data.txt", "r") as f:
+                _ = f.read()
+        try:
+            _ = int(brain or "1")
+        except Exception:
+            pass
+""")
+        violations = self.auditor.audit_file(bloated_py, strict_lean=True)
+        rules = [v["rule"] for v in violations]
+        self.assertIn("DEBLOAT_CONFIG_PARANOIA", rules)
+        self.assertIn("DEBLOAT_MULTI_FALLBACK_CHAIN", rules)
+        self.assertIn("DEBLOAT_DEFENSIVE_TOCTOU", rules)
+        self.assertIn("DEBLOAT_SILENT_EXCEPT_PASS", rules)
+
+    def test_task_decomposer_complexity_gate_and_splitting(self):
+        """Verifies TaskDecomposer classifies atomic vs multi-step requests and injects toolbox guardrails."""
+        from src.lib.task_decomposer import TaskDecomposer
+        decomposer = TaskDecomposer(max_files_per_turn=2, split_threshold=4)
+
+        # 1. Simple atomic request (1 file, 1 layer)
+        simple = decomposer.decompose_request("Fix typo in controller.py")
+        self.assertFalse(simple["requires_split"])
+        self.assertEqual(simple["classification"], "ATOMIC")
+        self.assertEqual(len(simple["subtasks"]), 1)
+
+        # 2. Complex multi-file, multi-layer, polyglot request
+        complex_req = (
+            "Refactor standalone.yaml, controller.py, memory.py, rest_handler.py, and service.go "
+            "to add PostgreSQL schema migration, gRPC endpoint, FastAPI route, and pytest unit tests."
+        )
+        split_res = decomposer.decompose_request(complex_req)
+        self.assertTrue(split_res["requires_split"])
+        self.assertEqual(split_res["classification"], "MULTI_STEP_REQUIRED")
+        self.assertGreaterEqual(len(split_res["subtasks"]), 3)
+        for st in split_res["subtasks"]:
+            self.assertLessEqual(len(st["target_files"]), 2)
+
+        formatted = decomposer.format_execution_plan(complex_req)
+        self.assertIn("MULTI_STEP_REQUIRED", formatted)
+        self.assertIn("config.get_version()", formatted)
+
+    def test_maintenance_skill_compacts_without_deleting_mandatory_file(self):
+        """Scenario: compact_session_state_file trims old sessions in-place without deleting AI-Session-State.md."""
+        from src.maintenance.maintenance_skill import compact_session_state_file
+        state_path = self.test_dir / "AI-Session-State.md"
+        sections = [f"## Session {i}\n- Action {i}\n\n" for i in range(1, 8)]
+        state_path.write_text(
+            "---\nmicroservice: test-svc\ntype: state\nstatus: active\n---\n# Session State\n\n"
+            + "".join(sections),
+            encoding="utf-8",
+        )
+        compacted = compact_session_state_file(state_path, max_sessions=3)
+        self.assertTrue(compacted)
+        self.assertTrue(state_path.exists(), "AI-Session-State.md must NEVER be deleted")
+        new_text = state_path.read_text(encoding="utf-8")
+        self.assertIn("microservice: test-svc", new_text)
+        self.assertEqual(new_text.count("## Session "), 3)
+        self.assertIn("## Session 1", new_text)
+        self.assertNotIn("## Session 7", new_text)
+
+    def test_hardening_yaml_valid_frontmatter_and_11_code_doc_protection(self):
+        """Scenario: apply_hardening injects canonical YAML frontmatter and refuses to mutate 11-Code-Doc mirrors."""
+        import unittest.mock
+        import src.auditing.hardening_yaml as hy
+
+        fake_vault = self.test_dir / "obsidian-brain"
+        arch_dir = fake_vault / "03-Tech-Stack"
+        codedoc_dir = fake_vault / "11-Code-Doc" / "config-server"
+        arch_dir.mkdir(parents=True, exist_ok=True)
+        codedoc_dir.mkdir(parents=True, exist_ok=True)
+
+        arch_note = arch_dir / "Sample-Blueprint.md"
+        arch_note.write_text("# Sample Blueprint\nContent here.\n", encoding="utf-8")
+
+        mirror_note = codedoc_dir / "main.go.md"
+        orig_mirror = "---\nsource: main.go\nworkspace: config-server\ntype: code-mirror\nstatus: auto-generated\n---\n# Mirror\n"
+        mirror_note.write_text(orig_mirror, encoding="utf-8")
+
+        with unittest.mock.patch.object(hy, "VAULT_ROOT", fake_vault):
+            self.assertTrue(hy.apply_hardening(arch_note))
+            updated_arch = arch_note.read_text(encoding="utf-8")
+            self.assertTrue(updated_arch.startswith("---\n"))
+            self.assertNotIn("--- \n", updated_arch)
+            self.assertIn("type: architecture", updated_arch)
+            self.assertIn("#zone/3-fleet", updated_arch)
+
+            # 11-Code-Doc mirror must be untouched
+            self.assertFalse(hy.apply_hardening(mirror_note))
+            self.assertEqual(mirror_note.read_text(encoding="utf-8"), orig_mirror)
+
+    def test_skill_template_coherence_round_trip(self):
+        """Scenario: build_skill_markdown output is 100% coherent with check_coherence stripping rules."""
+        from src.fleet.convert_agents import build_skill_markdown
+        from src.auditing.check_coherence import strip_frontmatter, strip_sandbox_headers
+
+        raw_prompt = "---\nmicroservice: core-kms\ntype: governance\n---\n# Role: Developer\nFollow clean code rules."
+        compiled = build_skill_markdown("developer", raw_prompt)
+        self.assertIn("COMPLEXITY GATE & CANONICAL TOOLBOX CONTRACT", compiled)
+
+        skill_clean = strip_sandbox_headers(strip_frontmatter(compiled)).strip()
+        prompt_clean = strip_sandbox_headers(strip_frontmatter(raw_prompt)).strip()
+        self.assertEqual(skill_clean, prompt_clean)
+
 
 if __name__ == "__main__":
     unittest.main()

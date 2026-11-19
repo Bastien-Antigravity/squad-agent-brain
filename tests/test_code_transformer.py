@@ -110,5 +110,25 @@ class TestCodeTransformer(unittest.TestCase):
         self.assertIn("osPathJoin(", transformed)
         self.assertIn("jsonDumps(", transformed)
 
+    def test_transform_is_idempotent(self):
+        raw_code = (
+            "import json\n"
+            "import os\n\n"
+            "class IdempotentSample:\n"
+            "    def first(self):\n"
+            "        return os.path.join('x', 'y')\n"
+            "    def second(self):\n"
+            "        return json.dumps({'ok': True})\n"
+        )
+        first_pass = self.transformer.transform(code=raw_code, class_name="IdempotentSample")
+        second_pass = self.transformer.transform(code=first_pass, class_name="IdempotentSample")
+        self.assertEqual(first_pass, second_pass)
+        self.assertEqual(first_pass.count("ESSENTIAL PROCESS:"), 1)
+
+    def test_transform_skips_syntactically_invalid_python(self):
+        broken_code = "def broken_func(:\n    import os\n    return os.path.join('a', 'b')\n"
+        result = self.transformer.transform(code=broken_code, class_name="Broken")
+        self.assertEqual(result, broken_code)
+
 if __name__ == "__main__":
     unittest.main()

@@ -193,7 +193,7 @@ class ComplianceAuditor:
 
     # -----------------------------------------------------------------------------
 
-    def audit_file(self, file_path: Path, strict_imports: bool = False) -> List[Dict[str, Any]]:
+    def audit_file(self, file_path: Path, strict_imports: bool = False, strict_lean: bool = False) -> List[Dict[str, Any]]:
         """Audits a single source file and returns a list of detected violations."""
         violations = []
         if not file_path.is_file():
@@ -440,21 +440,47 @@ class ComplianceAuditor:
         if ext == ".py" and not is_test_file and (strict_imports or "# strict:imports" in content[:500]):
             violations.extend(self.audit_python_imports(file_path, content=content))
 
+        # 10. Anti-Defensive & Safe-By-Design Lean Code Check (Debloat Sentinel Integration)
+        if not is_test_file and (strict_lean or "# strict:lean" in content[:500] or "// strict:lean" in content[:500]):
+            try:
+                from src.auditing.debloat_audit import audit_single_file_bloat
+                bloat_findings = audit_single_file_bloat(file_path)
+                category_to_rule = {
+                    "Over-Defensive Config Paranoia": "DEBLOAT_CONFIG_PARANOIA",
+                    "Multi-Fallback Config Chain": "DEBLOAT_MULTI_FALLBACK_CHAIN",
+                    "Silent Exception Swallowing": "DEBLOAT_SILENT_EXCEPT_PASS",
+                    "Defensive TOCTOU": "DEBLOAT_DEFENSIVE_TOCTOU",
+                    "Concurrency Bloat": "DEBLOAT_CONCURRENCY_BLOAT",
+                    "Architectural Duplication": "DEBLOAT_ARCHITECTURAL_DUPLICATION",
+                    "Redundant Retry Loop": "DEBLOAT_REDUNDANT_RETRY_LOOP",
+                    "Fail-Fast Violation": "DEBLOAT_FAIL_FAST_VIOLATION",
+                }
+                for bf in bloat_findings:
+                    rule_code = category_to_rule.get(bf.get("category", ""), "DEBLOAT_VIOLATION")
+                    violations.append({
+                        "file": str(file_path),
+                        "line": bf.get("line", 1),
+                        "rule": rule_code,
+                        "message": f"{bf.get('title', '')} — {bf.get('recommendation', '')}",
+                    })
+            except Exception:
+                pass
+
         return violations
 
     # -----------------------------------------------------------------------------
 
-    def audit_path(self, target_path: Path, strict_imports: bool = False) -> List[Dict[str, Any]]:
+    def audit_path(self, target_path: Path, strict_imports: bool = False, strict_lean: bool = False) -> List[Dict[str, Any]]:
         """Audits a path (file or recursive directory)."""
         all_violations = []
         if target_path.is_file():
-            return self.audit_file(target_path, strict_imports=strict_imports)
+            return self.audit_file(target_path, strict_imports=strict_imports, strict_lean=strict_lean)
 
         for root, dirs, files in os.walk(target_path):
             dirs[:] = [d for d in dirs if d not in EXCLUDED_DIRS and not d.startswith(".")]
             for f in sorted(files):
                 file_path = Path(root) / f
-                all_violations.extend(self.audit_file(file_path, strict_imports=strict_imports))
+                all_violations.extend(self.audit_file(file_path, strict_imports=strict_imports, strict_lean=strict_lean))
 
         return all_violations
 
@@ -530,6 +556,7 @@ def main():
     parser.add_argument("path", nargs="?", default=".", help="Target file or directory path to audit (defaults to current dir)")
     parser.add_argument("--staged", action="store_true", help="Audit only Git staged files (pre-commit mode)")
     parser.add_argument("--strict-imports", action="store_true", help="Enforce strict Python granular imports and camelCase aliasing")
+    parser.add_argument("--strict-lean", action="store_true", help="Enforce anti-defensive & Safe-by-Design lean code rules")
     parser.add_argument("--json", action="store_true", help="Output raw JSON format")
     parser.add_argument("--fix", action="store_true", help="Auto-repair detected formatting & header violations in Python files")
     args = parser.parse_args()
@@ -547,7 +574,7 @@ def main():
         violations = auditor.audit_staged()
     else:
         target = Path(args.path).resolve()
-        violations = auditor.audit_path(target, strict_imports=args.strict_imports)
+        violations = auditor.audit_path(target, strict_imports=args.strict_imports, strict_lean=args.strict_lean)
 
     if args.json:
         print(json.dumps(violations, indent=2))

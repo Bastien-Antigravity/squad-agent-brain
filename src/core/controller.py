@@ -60,17 +60,64 @@ class CommandController(Command):
             ensure_fleet_error_schema(self.pool, self.logger)
         self.incident_healer: Optional[Any] = None
         self._telegram_menu: Optional[Any] = None
+        self._background_tasks: set = set()
+        self.agents: List[Any] = []
+        self.agent_states: Dict[str, str] = {}
+        self.grpc_ready: bool = True
         from pathlib import Path
-        import os
         self.repo_root = Path(__file__).resolve().parent.parent.parent
-        data = self.config.data or {}
-        caps = data.get("capabilities") or {}
-        squad_cap = {**(caps.get("squad_agent") or {}), **(data.get("squad_agent") or {})}
-        raw_brain = os.getenv("TARGET_BRAIN_ID") or squad_cap.get("target_brain_id")
-        self.brain_id = (raw_brain if isinstance(raw_brain, str) and raw_brain.strip() else None) or "obsidian-brain"
+        caps = (self.config.data or {}).get("capabilities") or {}
+        squad_cap = caps.get("squad_agent") or {}
+        self.brain_id = squad_cap.get("target_brain_id") or "obsidian-brain"
         self.version = self._load_version()
         self.memory = self._setup_memory()
         self.notif_client = self._setup_notification_client()
+
+    # -----------------------------------------------------------------------------------------------
+
+    def register_background_task(self, task: asyncio.Task, name: str = "background_task") -> None:
+        """
+        Retains a strong reference to a background asyncio Task per ecosystem concurrency standards
+        and logs any unhandled exception upon completion.
+        """
+        self._background_tasks.add(task)
+
+        def _on_done(done_task: asyncio.Task) -> None:
+            self._background_tasks.discard(done_task)
+            if done_task.cancelled():
+                return
+            exc = done_task.exception()
+            if exc is not None:
+                self.logger.error(f"{self.Name} : Background task '{name}' failed with exception: {exc}")
+                if name in self.agent_states:
+                    self.agent_states[name] = "failed"
+
+        task.add_done_callback(_on_done)
+
+    # -----------------------------------------------------------------------------------------------
+
+    async def start_and_supervise_agents(self, agents: List[Any]) -> int:
+        """
+        Starts collaborative agent daemons with explicit lifecycle state tracking
+        ('starting' -> 'ready' | 'failed') and readiness verification.
+        """
+        self.agents = list(agents)
+        ready_count = 0
+        for agent in self.agents:
+            role = getattr(agent, "role_name", agent.__class__.__name__)
+            self.agent_states[role] = "starting"
+            try:
+                await agent.start()
+                if getattr(agent, "running", False):
+                    self.agent_states[role] = "ready"
+                    ready_count += 1
+                else:
+                    self.agent_states[role] = "failed"
+                    self.logger.error(f"{self.Name} : Agent '{role}' completed start() without entering running state.")
+            except Exception as exc:
+                self.agent_states[role] = "failed"
+                self.logger.error(f"{self.Name} : Agent '{role}' failed during startup: {exc}")
+        return ready_count
 
     # -----------------------------------------------------------------------------------------------
 
@@ -128,7 +175,8 @@ class CommandController(Command):
                 config=self.config,
                 logger=self.logger,
                 pg_pool=self.pool,
-                schema=self.schema
+                schema=self.schema,
+                brain_id=self.brain_id
             )
         else:
             short_term = ShortTermMemory(
@@ -157,42 +205,82 @@ class CommandController(Command):
 
     def process_message(self, *, channel: str, session_id: str, user_msg: str) -> Dict[str, Any]:
         """
-        Receives user input from any client facade, processes memory context,
-        and routes execution.
+        Receives user input from a synchronous client/CLI facade, persists the user turn,
+        hydrates short-term and semantic RAG context, and dispatches onto the Squad Event Bus.
         """
         self.logger.info("{0} : Incoming message on channel '{1}' (session: {2})".format(self.Name, channel, session_id))
 
-        # Persist user turn
-        user_turn = {"role": "user", "content": user_msg}
+        # 1. Persist user turn
+        user_turn = {"role": "user", "sender": "user", "content": user_msg}
         self.memory.add(user_turn, session_id)
 
-        # Retrieve integrated short-term & long-term history context
+        # 2. Retrieve integrated short-term & long-term history context
         context_turns = self.memory.retrieve(user_msg, session_id, limit=10)
 
-        # Process / Mock Agent execution flow (this will invoke the squad agent runtime in production)
-        response_text = "Received message. Context window hydrated with {0} history turn(s). Ready to process.".format(len(context_turns))
+        # 3. Dispatch to active Squad Event Bus / LocalEventBus for autonomous agent execution
+        target_topic = (
+            f"bastien-antigravity.{self.brain_id}.squad.chat"
+            if self.brain_id and self.brain_id not in ("obsidian-brain", "root", "main")
+            else "bastien-antigravity.squad.chat"
+        )
+        payload_data = {
+            "sender": "user",
+            "channel": channel,
+            "session_id": session_id,
+            "content": user_msg,
+            "source_brain_id": self.brain_id,
+            "reply_topic": target_topic
+        }
+        dispatched = False
+        try:
+            if hasattr(self, "event_bus") and self.event_bus:
+                try:
+                    loop = asyncio.get_running_loop()
+                    pub_task = loop.create_task(self.event_bus.publish(target_topic, payload_data))
+                    self.register_background_task(pub_task, name=f"publish:{session_id}")
+                except RuntimeError:
+                    asyncio.run(self.event_bus.publish(target_topic, payload_data))
+                dispatched = True
+            else:
+                from src.interfaces import LocalEventBus
+                LocalEventBus.publish(target_topic, payload_data)
+                dispatched = True
+        except Exception as e:
+            self.logger.warning(f"{self.Name} : Event bus dispatch warning in process_message: {e}")
+
+        response_text = (
+            "Received message. Context window hydrated with {0} history turn(s). "
+            "Dispatched to squad topic '{1}'."
+        ).format(len(context_turns), target_topic)
         
-        # Persist assistant turn
-        assistant_turn = {"role": "assistant", "content": response_text}
+        # 4. Persist assistant acknowledgement turn
+        assistant_turn = {"role": "assistant", "sender": "orchestrator", "content": response_text}
         self.memory.add(assistant_turn, session_id)
 
         return {
             "status": "success",
             "answer": response_text,
             "context_size": len(context_turns),
-            "session_id": session_id
+            "session_id": session_id,
+            "brain_id": self.brain_id,
+            "dispatched": dispatched
         }
 
     # -----------------------------------------------------------------------------------------------
 
     async def get_status(self) -> Dict[str, Any]:
-        """Checks Squad daemon layer health."""
+        """Checks Squad daemon layer health including gRPC and agent readiness states."""
+        failed_agents = [r for r, state in self.agent_states.items() if state == "failed"]
+        is_healthy = bool(self.grpc_ready) and len(failed_agents) == 0
+        status_label = "Healthy" if is_healthy else "Degraded"
         return {
-            "healthy": True,
-            "status": "Healthy",
+            "healthy": is_healthy,
+            "status": status_label,
             "version": self.version,
             "timestamp": int(time.time()),
-            "brain_id": self.brain_id
+            "brain_id": self.brain_id,
+            "grpc_ready": self.grpc_ready,
+            "agent_states": dict(self.agent_states)
         }
 
     async def get_active_mode(self) -> str:
@@ -301,7 +389,8 @@ class CommandController(Command):
                 self.logger.error(f"Failed to run subcommand {cmd_name}: {e}")
                 await self.dispatch_alert("CRITICAL", f"Subcommand '{cmd_name}' execution exception: {e}", "squad", "cli")
 
-        asyncio.create_task(_task())
+        sub_task = asyncio.create_task(_task())
+        self.register_background_task(sub_task, name=f"subcommand:{cmd_name}")
         return True, f"Subcommand {cmd_name} triggered successfully in the background."
 
     # -----------------------------------------------------------------------------------------------
@@ -346,8 +435,8 @@ class CommandController(Command):
                     with conn.cursor() as cursor:
                         cursor.execute('SET search_path TO "08-Squad-Agent", public')
                         cursor.execute(
-                            "SELECT sender, content, tool_calls, created_at FROM squad_chat_logs WHERE session_id = %s ORDER BY created_at ASC",
-                            (session_id,)
+                            "SELECT sender, content, tool_calls, created_at FROM squad_chat_logs WHERE session_id = %s AND brain_id = %s ORDER BY created_at ASC",
+                            (session_id, self.brain_id)
                         )
                         rows = cursor.fetchall()
                         return [
@@ -373,7 +462,7 @@ class CommandController(Command):
             turns = self.memory.retrieve("", session_id=session_id, limit=50)
             history = []
             for t in turns:
-                if t.get("role") in ["system"]:
+                if t.get("role") in ("system", "context"):
                     continue
                 history.append({
                     "sender": t.get("sender", t.get("role", "user")),

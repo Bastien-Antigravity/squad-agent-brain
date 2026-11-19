@@ -52,30 +52,46 @@ class CodeTransformer:
     def transform(self, *, code: str, class_name: str = "GeneratedModule") -> str:
         """
         Transforms non-compliant Python code to respect the coding standards.
+        Validates syntax before and after transformation to guarantee semantic safety
+        and idempotency.
         """
         self._log("info", "beginning transformation")
+        original_code = code
+
+        # 0. Pre-flight AST validation: refuse to mangle syntactically invalid Python
+        try:
+            ast.parse(code)
+        except SyntaxError as syn_err:
+            self._log("warning", f"Skipping transformation of syntactically invalid Python source: {syn_err}")
+            return original_code
         
         # 1. Clean header and force shebang and utf-8 encoding
         code = self._clean_shebang_and_encoding(code)
         
         # 2. Ensure presence of module docstring in Triple-Block format
         code = self._ensure_triple_block_docstring(code)
+
+        # 3. Ensure presence of docstrings for class and methods before AST unparse
+        code = self._ensure_class_and_method_docstrings(code)
         
-        # 3. Align imports (remove globals, merge partials, and apply aliasing)
-        # IMPROVEMENT: Use AST for more robust parsing and transformation
+        # 4. Align imports (remove globals, merge partials, and apply aliasing via AST)
         code = self._ensure_granular_imports(code)
         
-        # 4. Adjust spacing after docstring (exactly 1 empty line)
+        # 5. Adjust spacing after docstring (exactly 1 empty line)
         code = self._ensure_docstring_empty_line(code)
         
-        # 5. Replace/insert method dividers (exactly 95 dashes)
+        # 6. Replace/insert method dividers (exactly 95 dashes)
         code = self._ensure_method_dividers(code)
         
-        # 6. Format logger calls with .format(self.Name)
+        # 7. Format logger calls with .format(self.Name)
         code = self._ensure_logger_formatting(code, class_name)
-        
-        # 7. Ensure presence of docstrings for class and methods
-        code = self._ensure_class_and_method_docstrings(code)
+
+        # 8. Post-transform AST verification: rollback if transformation broke syntax
+        try:
+            ast.parse(code)
+        except SyntaxError as post_err:
+            self._log("error", f"Post-transform AST validation failed ({post_err}); rolling back to original source.")
+            return original_code
         
         self._log("info", "transformation completed successfully")
         return code
@@ -247,7 +263,7 @@ class CodeTransformer:
         try:
             tree = ast.parse(code)
         except SyntaxError:
-            return self._ensure_granular_imports_regex(code)
+            return code
 
         # 1. Identify all top-level imports and classify them
         imports_to_replace = {}  # local_bound_name -> module_name (for whole-module `import X`)
@@ -323,8 +339,16 @@ class CodeTransformer:
                     self.unresolved_whole_modules.add(imports_to_replace[node.id])
                 return node
 
-        # Remove top-level imports before visiting body so we only track body usages
-        tree.body = [n for n in tree.body if not isinstance(n, (ast.Import, ast.ImportFrom))]
+        # Strip leading module docstring (already preserved in header) and top-level imports
+        filtered_body = list(tree.body)
+        if (
+            filtered_body
+            and isinstance(filtered_body[0], ast.Expr)
+            and isinstance(getattr(filtered_body[0], "value", None), ast.Constant)
+            and isinstance(filtered_body[0].value.value, str)
+        ):
+            filtered_body = filtered_body[1:]
+        tree.body = [n for n in filtered_body if not isinstance(n, (ast.Import, ast.ImportFrom))]
         transformer = UsageTransformer()
         new_tree = transformer.visit(tree)
 

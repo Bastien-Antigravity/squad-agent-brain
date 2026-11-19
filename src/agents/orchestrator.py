@@ -23,6 +23,20 @@ from typing import Any, Dict
 from src.interfaces import SquadEventBus
 from src.agents.base_agent import BaseAgent
 from src.agents.oracle import record_strategic_milestone
+from src.lib.task_decomposer import TaskDecomposer
+
+# -----------------------------------------------------------------------------
+
+def evaluate_and_split_task(request_text: str) -> str:
+    """
+    Evaluates the complexity of a user coding or architecture request across file count,
+    architectural layers, and polyglot scope, returning an atomic micro-step execution plan
+    and mandatory ecosystem guardrails when the request exceeds single-turn complexity.
+
+    Args:
+        request_text: Raw user request or mission description.
+    """
+    return ""
 
 # -----------------------------------------------------------------------------
 
@@ -43,12 +57,16 @@ class OrchestratorAgent(BaseAgent):
             pg_pool=pg_pool,
             event_bus=event_bus
         )
-        self.tools = self.tools + [record_strategic_milestone]
+        self.decomposer = TaskDecomposer(max_files_per_turn=2, split_threshold=4)
+        self.tools = self.tools + [record_strategic_milestone, evaluate_and_split_task]
 
     # -----------------------------------------------------------------------------
 
     async def execute_tool(self, name: str, args: Dict[str, Any]) -> str:
         """Dynamic tool execution handler for Orchestrator."""
+        if name == "evaluate_and_split_task":
+            req = str(args.get("request_text", ""))
+            return self.decomposer.format_execution_plan(req)
         if name == "record_strategic_milestone":
             session_id = args.get("session_id", "default_session")
             milestone = args.get("milestone", "general")

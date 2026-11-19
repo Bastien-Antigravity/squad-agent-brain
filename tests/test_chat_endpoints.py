@@ -142,6 +142,79 @@ class TestCommandControllerChatFallback(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(history[-1]["content"], "Test fallback message")
         self.assertEqual(history[-1]["sender"], "user")
 
+    async def test_agent_supervision_and_readiness_tracking(self):
+        mock_config = MagicMock()
+        mock_config.data = {}
+        mock_logger = MagicMock()
+        controller = CommandController(config=mock_config, logger=mock_logger)
+        controller.pool = None
+
+        ok_agent = MagicMock()
+        ok_agent.role_name = "orchestrator"
+        ok_agent.running = False
+        async def _ok_start():
+            ok_agent.running = True
+        ok_agent.start = _ok_start
+
+        bad_agent = MagicMock()
+        bad_agent.role_name = "developer"
+        async def _bad_start():
+            raise RuntimeError("NATS subscription failure")
+        bad_agent.start = _bad_start
+
+        ready_count = await controller.start_and_supervise_agents([ok_agent, bad_agent])
+        self.assertEqual(ready_count, 1)
+        self.assertEqual(controller.agent_states["orchestrator"], "ready")
+        self.assertEqual(controller.agent_states["developer"], "failed")
+        status = await controller.get_status()
+        self.assertFalse(status["healthy"])
+        self.assertEqual(status["status"], "Degraded")
+
+
+class TestFleetCommanderAndMCPSafety(unittest.TestCase):
+    def test_fleet_commander_dry_run_does_not_mutate_git(self):
+        from src.fleet.fleet_commander import FleetCommander
+        with unittest.mock.patch.object(FleetCommander, "_load_inventory", return_value=["repo-a"]):
+            cmdr = FleetCommander("/tmp/fake_workspace", dry_run=True, target_repo="repo-a")
+            recorded_cmds = []
+
+            def fake_run(cmd, cwd):
+                cmd_list = cmd if isinstance(cmd, list) else cmd.split()
+                recorded_cmds.append(cmd_list)
+                if "rev-parse" in cmd_list or "--show-current" in cmd_list:
+                    return "develop", None
+                if "status" in cmd_list:
+                    return " M README.md", None
+                if "rev-list" in cmd_list:
+                    return "0 2", None
+                return "git version 2.40.0", None
+
+            cmdr._run_command = fake_run
+            cmdr.audit_docs = lambda p, n: True
+            cmdr.validate_architecture = lambda p, n: True
+            cmdr.audit_isolation_zone = lambda p, n: True
+
+            with unittest.mock.patch("pathlib.Path.exists", return_value=True):
+                cmdr.execute_fleet_push()
+                cmdr.execute_fleet_sync()
+
+            flat_verbs = [c[1] for c in recorded_cmds if len(c) > 1 and c[0] == "git"]
+            self.assertNotIn("add", flat_verbs)
+            self.assertNotIn("commit", flat_verbs)
+            self.assertNotIn("push", flat_verbs)
+            self.assertNotIn("pull", flat_verbs)
+
+    def test_fleet_commander_worktree_safety_blocks_secrets(self):
+        import tempfile
+        from src.fleet.fleet_commander import FleetCommander
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            with unittest.mock.patch.object(FleetCommander, "_load_inventory", return_value=[]):
+                cmdr = FleetCommander(tmp, dry_run=True)
+                self.assertFalse(cmdr._audit_worktree_safety(tmp_path, "repo-a", "?? .env\n"))
+                self.assertFalse(cmdr._audit_worktree_safety(tmp_path, "repo-a", " M server.key\n"))
+                self.assertTrue(cmdr._audit_worktree_safety(tmp_path, "repo-a", " M README.md\n"))
+
 
 if __name__ == "__main__":
     unittest.main()

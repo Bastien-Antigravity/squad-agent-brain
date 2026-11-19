@@ -90,15 +90,4 @@ if config is None:
 if logger is None:
     raise RuntimeError("08-Squad-Agent bootstrap failed to initialize UniLog logger")
 
-# 3. Lazy Database Schema and Tables Initialization
-try:
-    from lib.pg_pool import get_pg_pool, resolve_schema_name
-    _pg_pool = get_pg_pool(config=config, logger=logger)
-    if _pg_pool:
-        _schema_name = resolve_schema_name(__file__)
-        from lib.memory import PostgresMemoryStore
-        # Instantiation automatically invokes _init_db() to build schema and tables on-demand
-        PostgresMemoryStore(config=config, logger=logger, pg_pool=_pg_pool, schema=_schema_name)
-except Exception as _db_err:
-    logger.warning("Database lazy-initialisation skipped: {0}".format(_db_err))
 

@@ -18,17 +18,9 @@ KEY PARAMETERS:
 import os
 import sys
 from pathlib import Path
-from lib.bootstrap import ensure_virtualenv, prepend_venv_bin, ensure_import_paths
-
-script_dir = Path(__file__).resolve().parent
-vault_root = ensure_virtualenv(str(script_dir))
-prepend_venv_bin(vault_root)
-
-ensure_import_paths(script_dir, vault_root)
-
+import src.bootstrap as bootstrap
 from os import walk as osWalk
 from re import search as reSearch
-from pathlib import Path
 
 # ### CONFIGURATIONS ###
 
@@ -49,81 +41,118 @@ VAULT_ROOT = WORKSPACE_ROOT / "obsidian-brain"
 
 # Mapping of folder prefixes to metadata
 ZONE_MAP = {
-    "00-AI-Orchestration": {"type": "governance", "status": "active"},
-    "01-Strategic-Nexus": {"type": "strategy", "status": "active"},
-    "02-Business-BDD": {"type": "spec", "status": "frozen"},
-    "03-Tech-Stack": {"type": "architecture", "status": "active"},
-    "04-Rapid-Prototyping": {"type": "experiment", "status": "fluid"},
-    "05-Fleet-Operation": {"type": "fleet-op", "status": "active"},
-    "06-Microservices": {"type": "hub", "status": "active"},
-    "07-Core-KMS": {"type": "kms", "status": "active"},
-    "08-Squad-Agent": {"type": "automation", "status": "active"},
+    "00-AI-Orchestration": {"type": "governance", "status": "active", "zone": "#zone/0-orchestration"},
+    "01-Strategic-Nexus": {"type": "strategy", "status": "active", "zone": "#zone/1-nexus"},
+    "02-Business-BDD": {"type": "spec", "status": "frozen", "zone": "#zone/2-bdd"},
+    "03-Tech-Stack": {"type": "architecture", "status": "active", "zone": "#zone/3-fleet"},
+    "04-Rapid-Prototyping": {"type": "experiment", "status": "fluid", "zone": "#zone/4-lab"},
+    "05-Fleet-Operation": {"type": "fleet-op", "status": "active", "zone": "#zone/3-fleet"},
+    "06-Microservices": {"type": "hub", "status": "active", "zone": "#zone/3-fleet"},
+    "07-Core-KMS": {"type": "kms", "status": "active", "zone": "#zone/0-core"},
+    "08-Squad-Agent": {"type": "automation", "status": "active", "zone": "#zone/0-core"},
+    "09-RAG-Engine": {"type": "automation", "status": "active", "zone": "#zone/0-core"},
+}
+
+EXCLUDED_DIRS = {
+    ".git", ".obsidian", ".venv", "venv", "node_modules", "__pycache__",
+    ".agents", ".gemini", "11-Code-Doc", "99-Humans", "Templates", "04-Templates",
 }
 
 # -----------------------------------------------------------------------------------------------
 
-def apply_hardening(file_path: Path) -> None:
+def apply_hardening(file_path: Path) -> bool:
     """
-    Reads a file and ensures it has the correct YAML frontmatter for its zone.
+    Reads a markdown file and ensures it has valid, canonical YAML frontmatter
+    (microservice, type, status, tags) for its zone without corrupting 11-Code-Doc mirrors.
     """
-    with open(file_path, 'r', encoding='utf-8') as f:
-        content = f.read()
+    import yaml
 
     try:
         relative_path = file_path.relative_to(VAULT_ROOT)
     except ValueError:
-        # File is not within VAULT_ROOT
-        return
-        
+        return False
+
     parts = relative_path.parts
-    
-    # Determine zone-based defaults
-    zone = parts[0] if parts else ""
-    defaults = ZONE_MAP.get(zone, {"type": "note", "status": "active"})
-    
-    # Determine microservice
+    if any(p in EXCLUDED_DIRS for p in parts):
+        return False
+
+    try:
+        content = file_path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+
+    zone = parts[0] if len(parts) > 1 else ""
+    defaults = ZONE_MAP.get(zone, {"type": "note", "status": "active", "zone": "#zone/0-core"})
+
     microservice = "obsidian-brain"
     if zone == "06-Microservices" and len(parts) > 1:
-        # Try to extract microservice name from Hub file
         hub_match = reSearch(r"([\w-]+)-Hub", parts[-1])
         if hub_match:
             microservice = hub_match.group(1).lower()
 
-    new_frontmatter = {
-        "microservice": microservice,
-        "type": defaults["type"],
-        "status": defaults["status"]
-    }
+    yaml_block = {}
+    body = content
+    modified = False
 
     if content.startswith("---"):
-        # Update existing frontmatter
         fm_parts = content.split("---", 2)
         if len(fm_parts) >= 3:
-            fm_content = fm_parts[1]
-            body = fm_parts[2]
-            
-            for key, val in new_frontmatter.items():
-                if "{0}:".format(key) not in fm_content:
-                    fm_content = "{0}: {1}\n".format(key, val) + fm_content
-            
-            new_content = "--- \n{0}\n---{1}".format(fm_content.strip(), body)
+            try:
+                loaded = yaml.safe_load(fm_parts[1])
+                if isinstance(loaded, dict):
+                    yaml_block = loaded
+                    body = fm_parts[2]
+                else:
+                    return False
+            except Exception:
+                return False
         else:
-            # Malformed, treat as no frontmatter for safety
-            fm_header = "\n".join(["{0}: {1}".format(k, v) for k, v in new_frontmatter.items()])
-            new_content = "---\n{0}\n---\n\n{1}".format(fm_header, content)
+            return False
     else:
-        # Create new frontmatter
-        fm_header = "\n".join(["{0}: {1}".format(k, v) for k, v in new_frontmatter.items()])
-        new_content = "---\n{0}\n---\n\n{1}".format(fm_header, content)
+        modified = True
+        body = "\n" + content.lstrip("\n")
 
-    with open(file_path, 'w', encoding='utf-8') as f:
-        f.write(new_content)
+    if not yaml_block.get("microservice"):
+        yaml_block["microservice"] = microservice
+        modified = True
+    if not yaml_block.get("type"):
+        yaml_block["type"] = defaults["type"]
+        modified = True
+    if not yaml_block.get("status"):
+        yaml_block["status"] = defaults["status"]
+        modified = True
+
+    tags = yaml_block.get("tags")
+    if not isinstance(tags, list):
+        tags = [tags] if tags else []
+        modified = True
+
+    required_tags = [
+        f"#service/{yaml_block['microservice']}",
+        f"#type/{yaml_block['type']}",
+        f"#state/{yaml_block['status']}",
+        defaults["zone"],
+    ]
+    existing_lower = {str(t).strip().lower() for t in tags if t}
+    for req in required_tags:
+        if req.lower() not in existing_lower:
+            tags.append(req)
+            existing_lower.add(req.lower())
+            modified = True
+    yaml_block["tags"] = tags
+
+    if modified:
+        new_yaml_str = yaml.safe_dump(yaml_block, default_flow_style=False, sort_keys=False).strip()
+        new_content = f"---\n{new_yaml_str}\n---{body}"
+        file_path.write_text(new_content, encoding="utf-8")
+        return True
+    return False
 
 # -----------------------------------------------------------------------------------------------
 
 def main() -> None:
     """
-    Orchestrates the batch hardening process across the entire vault.
+    Orchestrates the batch YAML hardening process across the vault (excluding 11-Code-Doc).
     """
     if not VAULT_ROOT.exists():
         print("HardeningYAML: Vault root not found at {0}".format(VAULT_ROOT))
@@ -132,13 +161,12 @@ def main() -> None:
     print("[*] Starting batch YAML hardening...")
     count = 0
     for root, dirs, files in osWalk(VAULT_ROOT):
-        if ".git" in root or ".obsidian" in root:
-            continue
+        dirs[:] = [d for d in dirs if d not in EXCLUDED_DIRS and not d.startswith(".")]
         for file in files:
             if file.endswith(".md"):
                 path = Path(root) / file
-                apply_hardening(path)
-                count += 1
+                if apply_hardening(path):
+                    count += 1
     print("[*] Hardened {0} files.".format(count))
 
 # -----------------------------------------------------------------------------------------------
