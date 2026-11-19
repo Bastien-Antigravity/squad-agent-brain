@@ -605,6 +605,10 @@ class AutoRepairCoordinator:
             cand = self.vault_root / "09-RAG-Engine"
             if cand.is_dir():
                 return cand
+        for candidate_name in (service_name, service_name.replace("_", "-")):
+            sat_cand = (self.vault_root / "06-Microservices" / candidate_name).resolve()
+            if sat_cand.is_dir():
+                return sat_cand
         return None
 
     def _read_source_context(self, service_name: str, filename: str, line_number: str) -> Tuple[str, str]:

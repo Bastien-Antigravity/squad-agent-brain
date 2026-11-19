@@ -20,7 +20,6 @@ KEY PARAMETERS:
 
 import sys
 from os import environ as osEnviron
-from os.path import exists as osPathExists
 from pathlib import Path as pathPath
 
 # -----------------------------------------------------------------------------------------------
@@ -67,7 +66,7 @@ for i in range(1, len(sys.argv) - 1):
         break
 
 if not _profile:
-    _is_docker = osEnviron.get("DOCKER_ENV") == "true" or osPathExists("/.dockerenv")
+    _is_docker = osEnviron.get("DOCKER_ENV") == "true"
     _service_root = _self_dir.parent.parent.parent
     if _is_docker and (_service_root / "production.yaml").exists():
         _profile = "production"
@@ -81,6 +80,7 @@ config_data = config.data
 # Setup UniLog exactly once
 _lvl = "debug" if ("-v" in sys.argv or "--verbose" in sys.argv) else "info"
 _config_handle = getattr(config, "_handle", 0) or 0
+_logger_profile = osEnviron.get("APP_LOGGER_PROFILE", osEnviron.get("LOGGER_PROFILE", "standard"))
 
 # Determine app_name matching the command name argument
 _app_name = "squad_agent"
@@ -93,7 +93,7 @@ if len(sys.argv) >= 2:
 logger = toolboxUniLog(
     app_name=_app_name,
     config_profile=_profile,
-    logger_profile="devel",
+    logger_profile=_logger_profile,
     log_level=_lvl,
     config_handle=_config_handle
 )

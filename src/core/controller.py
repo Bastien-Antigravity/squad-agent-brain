@@ -424,9 +424,10 @@ class CommandController(Command):
 
     # -----------------------------------------------------------------------------------------------
 
-    async def get_chat_history(self, session_id: str) -> List[Dict[str, Any]]:
+    async def get_chat_history(self, session_id: str, brain_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """Retrieves squad chat logs from Postgres or in-memory memory store as fallback."""
         import json
+        active_brain = brain_id or self.brain_id
         if self.pool:
             loop = asyncio.get_running_loop()
             def db_query():
@@ -436,7 +437,7 @@ class CommandController(Command):
                         cursor.execute('SET search_path TO "08-Squad-Agent", public')
                         cursor.execute(
                             "SELECT sender, content, tool_calls, created_at FROM squad_chat_logs WHERE session_id = %s AND brain_id = %s ORDER BY created_at ASC",
-                            (session_id, self.brain_id)
+                            (session_id, active_brain)
                         )
                         rows = cursor.fetchall()
                         return [

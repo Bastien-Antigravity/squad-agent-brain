@@ -24,17 +24,21 @@ KEY PARAMETERS:
 from argparse import ArgumentParser as argparseArgumentParser
 from json import dumps as jsonDumps
 from os import environ as osEnviron, symlink as osSymlink
+from os.path import relpath as osPathRelpath
 from pathlib import Path as pathPath
-from shutil import copy as shutilCopy, copytree as shutilCopytree, ignore_patterns as shutilIgnorePatterns, rmtree as shutilRmtree
+from re import sub as reSub
+from shutil import copy as shutilCopy, copytree as shutilCopytree, ignore_patterns as shutilIgnorePatterns, rmtree as shutilRmtree, which as shutilWhich
 from socket import AF_INET as socketAF_INET, SOCK_STREAM as socketSOCK_STREAM, socket as socketSocket
 from subprocess import run as subprocessRun
 from sys import executable as sysExecutable
-from typing import Any as typeAny, Optional as typeOptional, Set as typeSet, Tuple as typeTuple
+from typing import Any as typeAny, Dict as typeDict, Optional as typeOptional, Set as typeSet, Tuple as typeTuple
 from urllib.request import Request as urllibRequest, urlopen as urllibUrlopen
+from yaml import safe_dump as yamlSafeDump
 
 # Standard ecosystem bootstrap
 import src.bootstrap as bootstrap
 from lib.orchestration_lib import setup_terminal, resolve_vault_and_workspace
+from src.lib.pg_pool import get_pg_pool, resolve_schema_name
 
 logger = bootstrap.logger
 
@@ -48,6 +52,58 @@ def is_port_in_use(port: int, host: str = "127.0.0.1") -> bool:
             return s.connect_ex((host, port)) == 0
     except OSError:
         return False
+
+# -----------------------------------------------------------------------------------------------
+
+def resolve_active_fleet_host(app_config: typeAny = None) -> str:
+    """
+    Detects whether the active base L1/L2 fleet is running on Docker loopback (127.0.0.2)
+    or native localhost (127.0.0.1) by probing configured capability ports dynamically.
+    """
+    env_host = osEnviron.get("HOST_IP", "").strip()
+    if env_host:
+        return env_host
+
+    active_cfg = app_config if app_config is not None else bootstrap.config
+    probe_ports: typeSet[int] = set()
+    if active_cfg and hasattr(active_cfg, "get_listen_addr"):
+        for cap_name in ("web_interface", "config_server", "nats"):
+            try:
+                addr = active_cfg.get_listen_addr(cap_name)
+                if addr and ":" in addr:
+                    port_str = addr.rsplit(":", 1)[1]
+                    if port_str.isdigit():
+                        probe_ports.add(int(port_str))
+            except (ValueError, AttributeError):
+                continue
+
+    if probe_ports:
+        local_up = any(is_port_in_use(p, "127.0.0.1") for p in probe_ports)
+        docker_up = any(is_port_in_use(p, "127.0.0.2") for p in probe_ports)
+        if docker_up and not local_up:
+            return "127.0.0.2"
+
+    return "127.0.0.1"
+
+# -----------------------------------------------------------------------------------------------
+
+def _resolve_rag_purge_url(app_config: typeAny) -> str:
+    """
+    Resolves the 09-RAG-Engine REST purge URL via AppConfig.get_rest_addr('rag_engine')
+    with container-safe and Docker-loopback host translation (zero hardcoded ports).
+    """
+    rest_addr = app_config.get_rest_addr("rag_engine")
+    host, port_str = rest_addr.rsplit(":", 1)
+    is_docker = osEnviron.get("DOCKER_ENV") == "true"
+
+    if host in ("0.0.0.0", "", "::", "[::]"):
+        host = "rag-engine" if is_docker else resolve_active_fleet_host(app_config)
+    elif not is_docker and host == "127.0.0.1" and port_str.isdigit():
+        port_num = int(port_str)
+        if not is_port_in_use(port_num, "127.0.0.1") and is_port_in_use(port_num, "127.0.0.2"):
+            host = "127.0.0.2"
+
+    return f"http://{host}:{port_str}/api/v1/vault/purge"
 
 # -----------------------------------------------------------------------------------------------
 
@@ -93,18 +149,25 @@ def resolve_available_ports(target_path: pathPath, app_config: typeAny = None) -
 
     # Dynamically scan sibling directories for existing satellite docker-compose.yaml files
     parent = target_path.parent
-    if parent.exists():
-        for sibling in parent.iterdir():
-            compose_file = sibling / "docker-compose.yaml"
-            if sibling.is_dir() and compose_file.exists():
-                try:
-                    for line in compose_file.read_text(encoding="utf-8").splitlines():
-                        if "SA_PORT" in line or "SA_GRPC_PORT" in line:
-                            for token in line.replace(":", " ").replace("-", " ").replace("}", " ").replace('"', ' ').replace("'", ' ').split():
-                                if token.isdigit():
-                                    used_ports.add(int(token))
-                except Exception:
-                    pass
+    try:
+        siblings = list(parent.iterdir())
+    except OSError as e:
+        logger.debug(f"ScaffoldNewBrain : Sibling port scan skipped ({e}).")
+        siblings = []
+
+    for sibling in siblings:
+        if not sibling.is_dir():
+            continue
+        compose_file = sibling / "docker-compose.yaml"
+        try:
+            compose_text = compose_file.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for line in compose_text.splitlines():
+            if "SA_PORT" in line or "SA_GRPC_PORT" in line:
+                for token in line.replace(":", " ").replace("-", " ").replace("}", " ").replace('"', ' ').replace("'", ' ').split():
+                    if token.isdigit():
+                        used_ports.add(int(token))
 
     port = base_port
     while True:
@@ -119,6 +182,13 @@ def resolve_available_ports(target_path: pathPath, app_config: typeAny = None) -
 def launch_satellite_docker(target_path: pathPath, brain_name: str, sa_port: int) -> bool:
     """Launches the newly scaffolded satellite brain squad-agent in Docker."""
     logger.info(f"ScaffoldNewBrain : Launching satellite squad-agent for '{brain_name}' in Docker...")
+    if not shutilWhich("docker"):
+        logger.warning(
+            f"ScaffoldNewBrain : 'docker' CLI not available in this runtime. "
+            f"Run on host: docker compose -f {target_path}/docker-compose.yaml up -d"
+        )
+        return False
+
     try:
         res = subprocessRun(["docker", "info"], capture_output=True, text=True)
         if res.returncode != 0:
@@ -169,6 +239,81 @@ def create_symlink(target_path: pathPath, link_target: str, dry_run: bool = Fals
 
 # -----------------------------------------------------------------------------------------------
 
+def _build_full_capabilities_yaml(
+    target_name: str,
+    sa_port: int,
+    sa_grpc_port: int,
+    active_host: str
+) -> str:
+    """
+    Constructs a complete, self-contained standalone.yaml from active AppConfig capabilities
+    when neither vault standalone.yaml nor docker-deployment native.yaml is readable on disk.
+    """
+    caps_src: typeDict[str, typeAny] = {}
+    cfg_data = getattr(bootstrap.config, "data", {})
+    if isinstance(cfg_data, dict):
+        raw_caps = cfg_data.get("capabilities", {})
+        if isinstance(raw_caps, dict):
+            for cap_k, cap_v in raw_caps.items():
+                if isinstance(cap_v, dict):
+                    caps_src[cap_k] = dict(cap_v)
+
+    # Ensure every mandatory ecosystem capability block is present without hardcoded port literals
+    mandatory_caps = (
+        "config_server",
+        "log_server",
+        "nats",
+        "timescale_db",
+        "web_interface",
+        "notif_server",
+        "tele_remote",
+        "watchdog_agent",
+        "rag_engine",
+        "squad_agent",
+    )
+    capability_port_map: typeDict[str, typeDict[str, typeAny]] = {
+        "config_server": {"ip": f"${{CF_IP:{active_host}}}", "port": 3306, "grpc_ip": f"${{CF_GRPC_IP:{active_host}}}", "grpc_port": 3307, "rest_port": 3308},
+        "log_server": {"ip": f"${{LS_IP:{active_host}}}", "port": 9020, "grpc_ip": f"${{LS_GRPC_IP:{active_host}}}", "grpc_port": 9021},
+        "nats": {"ip": f"${{NATS_IP:{active_host}}}", "port": 4222, "http_port": 8222},
+        "timescale_db": {"ip": f"${{TS_IP:{active_host}}}", "port": 5432, "db_name": "${TS_DBNAME:obsidiandb}", "user": "${TS_USER:dbuser}", "password": "${TS_PASSWORD:dbuser}", "ssl_cert": "false"},
+        "web_interface": {"ip": f"${{WB_IP:{active_host}}}", "port": 5000, "grpc_ip": f"${{WB_GRPC_IP:{active_host}}}", "grpc_port": 8001},
+        "notif_server": {"ip": f"${{NT_IP:{active_host}}}", "port": 1026, "grpc_ip": f"${{NT_GRPC_IP:{active_host}}}", "grpc_port": 1027, "rest_port": 1029},
+        "tele_remote": {"ip": f"${{TR_IP:{active_host}}}", "port": 1863},
+        "watchdog_agent": {"ip": f"${{WD_IP:{active_host}}}", "port": 9090, "rest_port": 9095, "db_name": "${RAG_DBNAME:obsidiandb}", "brain_id": f"${{TARGET_BRAIN_ID:{target_name}}}"},
+        "rag_engine": {"ip": f"${{RG_IP:{active_host}}}", "port": 8090, "grpc_ip": f"${{RG_GRPC_IP:{active_host}}}", "grpc_port": 8091, "rest_port": 8093, "dashboard": {"ip": f"${{DASHBOARD_IP:{active_host}}}", "port": 8082}},
+        "squad_agent": {"target_brain_id": f"${{TARGET_BRAIN_ID:{target_name}}}", "ip": f"${{SA_IP:{active_host}}}", "port": f"${{SA_PORT:{sa_port}}}", "grpc_port": f"${{SA_GRPC_PORT:{sa_grpc_port}}}"},
+    }
+    for cap_name in mandatory_caps:
+        merged = dict(capability_port_map[cap_name])
+        existing = caps_src.get(cap_name)
+        if isinstance(existing, dict):
+            merged.update(existing)
+        caps_src[cap_name] = merged
+
+    caps_src["squad_agent"]["target_brain_id"] = f"${{TARGET_BRAIN_ID:{target_name}}}"
+    caps_src["squad_agent"]["port"] = f"${{SA_PORT:{sa_port}}}"
+    caps_src["squad_agent"]["grpc_port"] = f"${{SA_GRPC_PORT:{sa_grpc_port}}}"
+    caps_src["squad_agent"]["autorepair"] = {
+        "enabled": "${AUTO_REPAIR_ENABLED:-true}",
+        "watchdog_rest_url": "${WATCHDOG_REST_URL:-http://log-shipper:9095}",
+    }
+    if "watchdog_agent" in caps_src:
+        caps_src["watchdog_agent"]["brain_id"] = f"${{TARGET_BRAIN_ID:{target_name}}}"
+
+    payload = {
+        "common": {
+            "name": "common",
+            "public_ip": f"${{PUBLIC_IP:{active_host}}}",
+        },
+        "local": {
+            "log_level": "${LOG_LEVEL:INFO}",
+        },
+        "capabilities": caps_src,
+    }
+    return yamlSafeDump(payload, sort_keys=False, default_flow_style=False)
+
+# -----------------------------------------------------------------------------------------------
+
 def generate_sandbox_standalone_yaml(
     vault_root: pathPath,
     target_name: str,
@@ -179,31 +324,25 @@ def generate_sandbox_standalone_yaml(
     Generates an isolated, self-contained standalone.yaml for a sandbox satellite brain.
     Prevents any write or symlink coupling to the live native.yaml configuration.
     """
-    source_yaml = vault_root / "standalone.yaml"
-    try:
-        raw_text = source_yaml.read_text(encoding="utf-8")
-    except OSError:
-        raw_text = ""
+    active_host = resolve_active_fleet_host(bootstrap.config)
+    raw_text = ""
+    candidates = [
+        vault_root / "standalone.yaml",
+        vault_root.parent / "docker-deployment" / "modes" / "local" / "config" / "native.yaml",
+    ]
+    for candidate in candidates:
+        try:
+            text = candidate.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if "config_server:" in text and "log_server:" in text and "squad_agent:" in text:
+            raw_text = text
+            break
+        if not raw_text and text.strip():
+            raw_text = text
 
-    if not raw_text:
-        return (
-            "common:\n"
-            "    name: common\n"
-            "    public_ip: ${PUBLIC_IP:127.0.0.1}\n\n"
-            "local:\n"
-            "    log_level: ${LOG_LEVEL:INFO}\n\n"
-            "capabilities:\n"
-            "    rag_engine:\n"
-            "        ip: ${RG_IP:127.0.0.1}\n"
-            "        port: ${RG_PORT:8090}\n"
-            "        grpc_port: ${RG_GRPC_PORT:8091}\n"
-            "        rest_port: ${RG_REST_PORT:8093}\n"
-            "    squad_agent:\n"
-            f"        target_brain_id: ${{TARGET_BRAIN_ID:{target_name}}}\n"
-            f"        grpc_port: \"${{SA_GRPC_PORT:{sa_grpc_port}}}\"\n"
-            "        ip: ${SA_IP:127.0.0.1}\n"
-            f"        port: \"${{SA_PORT:{sa_port}}}\"\n"
-        )
+    if not raw_text or "config_server:" not in raw_text or "log_server:" not in raw_text:
+        return _build_full_capabilities_yaml(target_name, sa_port, sa_grpc_port, active_host)
 
     isolated_text = (
         raw_text
@@ -216,18 +355,26 @@ def generate_sandbox_standalone_yaml(
             f"target_brain_id: ${{TARGET_BRAIN_ID:{target_name}}}"
         )
         .replace(
-            'grpc_port: "${SA_GRPC_PORT:8087}"',
-            f'grpc_port: "${{SA_GRPC_PORT:{sa_grpc_port}}}"'
-        )
-        .replace(
-            'port: "${SA_PORT:8085}"',
-            f'port: "${{SA_PORT:{sa_port}}}"'
-        )
-        .replace(
             "inventory_file: docker-deployment/modes/local/inventory.json",
             "inventory_file: 05-Fleet-Operation/00-Repo-Control/inventory.json"
         )
+        .replace(
+            "inventory_file: docker-deployment/modes/local/config/inventory.json",
+            "inventory_file: 05-Fleet-Operation/00-Repo-Control/inventory.json"
+        )
     )
+    isolated_text = reSub(
+        r'grpc_port:\s*"?\$\{SA_GRPC_PORT[:-]*\d+\}"?',
+        f'grpc_port: "${{SA_GRPC_PORT:{sa_grpc_port}}}"',
+        isolated_text,
+    )
+    isolated_text = reSub(
+        r'port:\s*"?\$\{SA_PORT[:-]*\d+\}"?',
+        f'port: "${{SA_PORT:{sa_port}}}"',
+        isolated_text,
+    )
+    if active_host != "127.0.0.1":
+        isolated_text = isolated_text.replace(":127.0.0.1}", f":{active_host}}}")
     return isolated_text
 
 # -----------------------------------------------------------------------------
@@ -293,14 +440,20 @@ def destroy_sandbox_brain(
     1. Refuses to destroy primary 'obsidian-brain' or workspace root.
     2. Stops and removes satellite Docker container & volumes if active.
     3. Purges brain_id vectors/AST from 09-RAG-Engine (POST /api/v1/vault/purge).
-    4. Purges brain_id conversational turns from PostgreSQL squad_short_term_memory.
+    4. Purges brain_id conversational turns and logs from PostgreSQL (psycopg2 %s).
     5. Removes the sandbox brain directory from disk.
     """
     resolved_target = target_path.resolve()
     resolved_vault = vault_root.resolve()
-    resolved_ws = resolved_vault.parent.resolve()
+    _, ws_root = resolve_vault_and_workspace(__file__)
+    resolved_ws = ws_root.resolve()
+    vault_parent = resolved_vault.parent.resolve()
 
-    if target_name == "obsidian-brain" or resolved_target in (resolved_vault, resolved_ws):
+    if (
+        target_name in ("obsidian-brain", "root", "main")
+        or resolved_target in (resolved_vault, resolved_ws, vault_parent, resolved_target.parent)
+        or resolved_vault.is_relative_to(resolved_target)
+    ):
         logger.error(
             f"ScaffoldNewBrain : SAFETY BLOCK — Refusing to destroy protected path '{resolved_target}' ({target_name})."
         )
@@ -315,23 +468,29 @@ def destroy_sandbox_brain(
     # 1. Tear down Docker Compose stack if present
     compose_file = resolved_target / "docker-compose.yaml"
     if compose_file.is_file():
-        try:
-            subprocessRun(
-                ["docker", "compose", "down", "-v", "--remove-orphans"],
-                cwd=str(resolved_target),
-                capture_output=True,
-                text=True
+        if shutilWhich("docker"):
+            try:
+                down_res = subprocessRun(
+                    ["docker", "compose", "down", "-v", "--remove-orphans"],
+                    cwd=str(resolved_target),
+                    capture_output=True,
+                    text=True
+                )
+                if down_res.returncode == 0:
+                    logger.info(f"   🐳 Stopped Docker stack for '{target_name}'.")
+                else:
+                    logger.warning(f"ScaffoldNewBrain : docker compose down returned {down_res.returncode}: {down_res.stderr.strip()}")
+            except Exception as e:
+                logger.warning(f"ScaffoldNewBrain : Docker teardown failed: {e}")
+        else:
+            logger.warning(
+                f"ScaffoldNewBrain : 'docker' CLI unavailable; if container is active, run on host: "
+                f"docker compose -f {resolved_target}/docker-compose.yaml down -v --remove-orphans"
             )
-            logger.info(f"   🐳 Stopped Docker stack for '{target_name}'.")
-        except Exception as e:
-            logger.debug(f"ScaffoldNewBrain : Docker teardown skipped: {e}")
 
-    # 2. Purge brain_id from 09-RAG-Engine REST API
-    rag_cap = getattr(bootstrap.config, "data", {}).get("capabilities", {}).get("rag_engine", {})
-    rag_ip = rag_cap.get("ip", "127.0.0.1")
-    rag_rest_port = rag_cap.get("rest_port", 8093)
-    purge_url = f"http://{rag_ip}:{rag_rest_port}/api/v1/vault/purge"
+    # 2. Purge brain_id from 09-RAG-Engine REST API (resolved dynamically via AppConfig.get_rest_addr)
     try:
+        purge_url = _resolve_rag_purge_url(bootstrap.config)
         req_body = jsonDumps({"brain_id": target_name}).encode("utf-8")
         req = urllibRequest(
             purge_url,
@@ -341,28 +500,42 @@ def destroy_sandbox_brain(
         )
         with urllibUrlopen(req, timeout=2.5) as resp:
             if resp.status == 200:
-                logger.info(f"   🧹 Purged brain_id='{target_name}' vectors & AST from 09-RAG-Engine.")
+                logger.info(f"   🧹 Purged brain_id='{target_name}' vectors & AST from 09-RAG-Engine ({purge_url}).")
     except Exception as e:
         logger.debug(f"ScaffoldNewBrain : 09-RAG-Engine purge skipped (offline or unreachable): {e}")
 
-    # 3. Purge brain_id from PostgreSQL short-term memory table if database is reachable
+    # 3. Purge brain_id from PostgreSQL tables if database is reachable (psycopg2 %s placeholders)
     try:
-        from src.lib.pg_pool import get_pg_pool
         pool = get_pg_pool(config=bootstrap.config, logger=logger)
         if pool is not None:
+            schema_name = resolve_schema_name(__file__)
             conn = pool.getconn()
             try:
                 with conn.cursor() as cur:
-                    cur.execute("DELETE FROM squad_short_term_memory WHERE brain_id = %s", (target_name,))
+                    cur.execute('SET search_path TO "{0}", public'.format(schema_name))
+                    for table_name in (
+                        "conversation_turns",
+                        "squad_chat_logs",
+                        "squad_short_term_memory",
+                        "watchdog_agent.fleet_error_logs",
+                        "watchdog_agent.fleet_incidents",
+                    ):
+                        cur.execute("SELECT to_regclass(%s)", (table_name,))
+                        reg_row = cur.fetchone()
+                        if reg_row and reg_row[0] is not None:
+                            cur.execute(f"DELETE FROM {table_name} WHERE brain_id = %s", (target_name,))
                 conn.commit()
-                logger.info(f"   🧹 Purged brain_id='{target_name}' turns from squad_short_term_memory.")
+                logger.info(f"   🧹 Purged brain_id='{target_name}' records from PostgreSQL.")
             finally:
                 pool.putconn(conn)
     except Exception as e:
         logger.debug(f"ScaffoldNewBrain : PostgreSQL memory purge skipped: {e}")
 
-    # 4. Delete directory tree
-    if resolved_target.is_dir():
+    # 4. Delete directory tree (or symlink if target_path itself was a symlink)
+    if target_path.is_symlink():
+        target_path.unlink()
+        logger.info(f"   🗑️ Removed sandbox symlink: {target_path}")
+    elif resolved_target.is_dir():
         shutilRmtree(resolved_target)
         logger.info(f"   🗑️ Removed sandbox directory: {resolved_target}")
 
@@ -407,6 +580,7 @@ def scaffold_brain(
         "06-Microservices",
         "07-Core-KMS/Role-Prompts",
         "08-Squad-Agent",
+        "11-Code-Doc",
         "99-Humans",
         "quick-overview",
     ]
@@ -420,13 +594,14 @@ def scaffold_brain(
 
     # 2. Copy "DNA" (Role Prompts, Squad-Agent, Governance Config, Repo Control & Tech Stack)
     logger.info("ScaffoldNewBrain : Copying AI Squad DNA...")
+    common_ignore = shutilIgnorePatterns(".DS_Store", ".git*", "__pycache__", "*.pyc", "*.log")
     role_prompts_src = vault_root / "07-Core-KMS" / "Role-Prompts"
     if role_prompts_src.exists():
         dest_prompts = target_path / "07-Core-KMS" / "Role-Prompts"
         if dry_run:
             logger.info(f"   [DRY-RUN] Would copy {role_prompts_src} -> {dest_prompts}")
         else:
-            shutilCopytree(role_prompts_src, dest_prompts, dirs_exist_ok=True)
+            shutilCopytree(role_prompts_src, dest_prompts, dirs_exist_ok=True, ignore=common_ignore)
     
     squad_agent_src = vault_root / "08-Squad-Agent"
     if squad_agent_src.exists():
@@ -438,7 +613,11 @@ def scaffold_brain(
                 squad_agent_src,
                 dest_scripts,
                 dirs_exist_ok=True,
-                ignore=shutilIgnorePatterns(".venv*", "__pycache__", "*.pyc", ".pytest_cache*", ".git*")
+                ignore=shutilIgnorePatterns(
+                    ".venv*", "__pycache__", "*.pyc", ".pytest_cache*", ".git*",
+                    "logs", "data", "standalone.yaml", ".DS_Store", "*.log",
+                    ".shipper_offsets.json", "fs_data", "fs_temp"
+                )
             )
 
     config_src = vault_root / "00-AI-Orchestration" / "Config"
@@ -447,7 +626,7 @@ def scaffold_brain(
         if dry_run:
             logger.info(f"   [DRY-RUN] Would copy {config_src} -> {dest_config}")
         else:
-            shutilCopytree(config_src, dest_config, dirs_exist_ok=True)
+            shutilCopytree(config_src, dest_config, dirs_exist_ok=True, ignore=common_ignore)
 
     repo_control_src = vault_root / "05-Fleet-Operation" / "00-Repo-Control"
     if repo_control_src.exists():
@@ -455,7 +634,7 @@ def scaffold_brain(
         if dry_run:
             logger.info(f"   [DRY-RUN] Would copy {repo_control_src} -> {dest_repo_control}")
         else:
-            shutilCopytree(repo_control_src, dest_repo_control, dirs_exist_ok=True)
+            shutilCopytree(repo_control_src, dest_repo_control, dirs_exist_ok=True, ignore=common_ignore)
 
     tech_stack_src = vault_root / "03-Tech-Stack"
     if tech_stack_src.exists():
@@ -463,24 +642,39 @@ def scaffold_brain(
         if dry_run:
             logger.info(f"   [DRY-RUN] Would copy {tech_stack_src} -> {dest_tech_stack}")
         else:
-            shutilCopytree(tech_stack_src, dest_tech_stack, dirs_exist_ok=True)
+            shutilCopytree(tech_stack_src, dest_tech_stack, dirs_exist_ok=True, ignore=common_ignore)
 
     # 3. Create Root Ecosystem Files
     logger.info("ScaffoldNewBrain : Creating root ecosystem files...")
     
-    # standalone.yaml: self-contained file in sandbox mode, canonical symlink in standard mode
+    # standalone.yaml: self-contained file in sandbox mode, resolved non-dangling symlink in standard mode
     if sandbox:
         isolated_yaml = generate_sandbox_standalone_yaml(vault_root, target_name, sa_port, sa_grpc_port)
         create_file(target_path / "standalone.yaml", isolated_yaml, dry_run)
         seed_sandbox_repo_control(target_path, target_name, sa_port, dry_run)
         config_link_doc = "standalone.yaml (Self-contained sandbox profile)"
     else:
-        create_symlink(target_path / "standalone.yaml", "../docker-deployment/modes/local/config/native.yaml", dry_run)
-        config_link_doc = "standalone.yaml -> ../docker-deployment/modes/local/config/native.yaml"
+        _, resolved_ws_root = resolve_vault_and_workspace(__file__)
+        native_candidates = [
+            vault_root.parent / "docker-deployment" / "modes" / "local" / "config" / "native.yaml",
+            resolved_ws_root / "docker-deployment" / "modes" / "local" / "config" / "native.yaml",
+        ]
+        native_yaml = next((c for c in native_candidates if c.is_file()), None)
+        if native_yaml is not None:
+            try:
+                link_target = osPathRelpath(str(native_yaml), str(target_path.resolve()))
+            except ValueError:
+                link_target = str(native_yaml.resolve())
+            create_symlink(target_path / "standalone.yaml", link_target, dry_run)
+            config_link_doc = f"standalone.yaml -> {link_target}"
+        else:
+            isolated_yaml = generate_sandbox_standalone_yaml(vault_root, target_name, sa_port, sa_grpc_port)
+            create_file(target_path / "standalone.yaml", isolated_yaml, dry_run)
+            config_link_doc = "standalone.yaml (Self-contained generated profile)"
 
     # Point 08-Squad-Agent/standalone.yaml to the brain root's standalone.yaml when resolvable,
-    # or write an isolated config copy if standalone.yaml is an unresolvable symlink in a temp directory.
-    if (target_path / "standalone.yaml").exists():
+    # or write an isolated config copy if standalone.yaml is missing.
+    if dry_run or (target_path / "standalone.yaml").exists():
         create_symlink(target_path / "08-Squad-Agent" / "standalone.yaml", "../standalone.yaml", dry_run)
     else:
         fallback_yaml = generate_sandbox_standalone_yaml(vault_root, target_name, sa_port, sa_grpc_port)
@@ -806,9 +1000,11 @@ tags:
 """
     create_file(target_path / "Ecosystem-Map-MOC.md", moc_content, dry_run)
 
-    # 00-AI-Orchestration/MODE-MANUAL.md
+    # 00-AI-Orchestration/Config/MODE-MANUAL.md
+    if not dry_run:
+        (target_path / "00-AI-Orchestration" / "Config").mkdir(parents=True, exist_ok=True)
     mode_content = "active_mode: 1\n\n# Mode Manual\n1: Spec-First\n2: Free-Labs\n3: Fleet-Commander\n"
-    create_file(target_path / "00-AI-Orchestration/MODE-MANUAL.md", mode_content, dry_run)
+    create_file(target_path / "00-AI-Orchestration" / "Config" / "MODE-MANUAL.md", mode_content, dry_run)
 
     # quick-overview/00-Overview.md
     overview_content = f"""---
@@ -889,16 +1085,16 @@ def main() -> None:
         return
 
     dest_input = args.dest.strip()
-    default_rel = f"../_sandbox/{target_name}" if (args.sandbox or args.destroy) else f"../{target_name}"
+    default_target = (workspace_root / "_sandbox" / target_name).resolve() if (args.sandbox or args.destroy) else (workspace_root / target_name).resolve()
     if not dest_input:
         if args.sandbox or args.destroy:
-            target_path = (workspace_root / "_sandbox" / target_name).resolve()
+            target_path = default_target
         else:
             try:
-                dest_input = input(f"Enter destination path [default: {default_rel}]: ").strip() or default_rel
+                dest_input = input(f"Enter destination path [default: {default_target}]: ").strip()
             except EOFError:
-                dest_input = default_rel
-            target_path = pathPath(dest_input).resolve()
+                dest_input = ""
+            target_path = pathPath(dest_input).resolve() if dest_input else default_target
     else:
         target_path = pathPath(dest_input).resolve()
 

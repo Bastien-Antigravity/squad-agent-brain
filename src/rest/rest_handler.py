@@ -230,8 +230,11 @@ class SquadRESTHandler:
             return StreamingResponse(event_generator(), media_type="text/event-stream")
 
         @router.get("/api/v1/squad/chat/{session_id}")
-        async def get_chat_history(session_id: str):
-            history = await self.controller.get_chat_history(session_id)
+        async def get_chat_history(session_id: str, brain_id: str = ""):
+            if brain_id:
+                history = await self.controller.get_chat_history(session_id, brain_id=brain_id)
+            else:
+                history = await self.controller.get_chat_history(session_id)
             return {"success": True, "history": history}
 
         @router.post("/api/v1/squad/chat/{session_id}")

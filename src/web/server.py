@@ -20,7 +20,7 @@ KEY PARAMETERS:
 - port: Network bind port number.
 """
 
-from os import environ as osEnviron, getenv as osGetenv
+from os import environ as osEnviron
 from pathlib import Path as pathPath
 from threading import Thread as threadingThread
 from fastapi import FastAPI as fastapiFastAPI
@@ -60,21 +60,33 @@ def init_routes(controller, logger):
 def register_mfe_with_web_interface(config, logger, sa_ip, sa_port):
     """
     Auto-registration daemon that publishes our ServiceSpec to the central web-interface.
+    Assigns unique service name, MFE tag, and nav_title per brain_id so satellite
+    brains coexist side-by-side with the primary obsidian-brain in web-interface.
     """
-    brain_id = osGetenv("TARGET_BRAIN_ID") or osGetenv("BRAIN_ID")
+    brain_id = (osEnviron.get("BRAIN_ID") or osEnviron.get("TARGET_BRAIN_ID") or "").strip()
     if not brain_id:
-        brain_id = config.data.get("capabilities", {}).get("squad_agent", {}).get("target_brain_id")
-
-    is_satellite = brain_id and brain_id not in ("obsidian-brain", "root", "main")
-    service_name = f"squad-agent-{brain_id}" if is_satellite else "squad-agent"
-    service_tag = "squad-agent-mfe"
-    nav_title = f"🚀 Squad: {brain_id.replace('-', ' ').title()}" if is_satellite else "🚀 Squad Control"
+        brain_id = (
+            config.data.get("capabilities", {})
+            .get("squad_agent", {})
+            .get("target_brain_id", "obsidian-brain")
+        ) or "obsidian-brain"
 
     if sa_ip in ("0.0.0.0", "", "::"):
         client_ip = osEnviron.get("HOST_IP", "127.0.0.2") if osEnviron.get("DOCKER_ENV") == "true" else "127.0.0.1"
     else:
         client_ip = sa_ip
-    mfe_url = f"http://{client_ip}:{sa_port}/static/mfe.js"
+
+    if brain_id in ("obsidian-brain", "root", "main"):
+        service_name = "squad_agent"
+        service_tag = "squad-agent-mfe"
+        nav_title = "🤖 Squad Command"
+        mfe_url = f"http://{client_ip}:{sa_port}/static/mfe.js"
+    else:
+        safe_slug = brain_id.replace("_", "-").lower()
+        service_name = f"squad_agent_{brain_id.replace('-', '_')}"
+        service_tag = f"squad-agent-{safe_slug}-mfe"
+        nav_title = f"🤖 Squad ({brain_id})"
+        mfe_url = f"http://{client_ip}:{sa_port}/static/mfe.js?tag={service_tag}"
 
     from src.rest.contracts import build_squad_agent_contracts
     contracts_env = build_squad_agent_contracts(app=app, config=config)
@@ -105,6 +117,10 @@ def register_mfe_with_web_interface(config, logger, sa_ip, sa_port):
         "squad_agent",
         **pub_kwargs,
     )
+
+# -----------------------------------------------------------------------------------------------
+
+_register_mfe_with_web_interface = register_mfe_with_web_interface
 
 # -----------------------------------------------------------------------------------------------
 

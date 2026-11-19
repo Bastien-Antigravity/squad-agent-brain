@@ -267,7 +267,8 @@ def setup_mcp(mode_choice: str) -> None:
     if has_rag:
         mcp_url = f"http://{rag_host}:{rag_port}/sse"
         obsidian_rag_config = {
-            "url": mcp_url
+            "url": mcp_url,
+            "serverURL": mcp_url,
         }
     else:
         # Fallback to standard basic filesystem MCP server
@@ -306,6 +307,7 @@ def setup_mcp(mode_choice: str) -> None:
     configs_to_update = [
         # (filepath, label)
         (osPathJoin(osPathExpanduser("~/.gemini"), "settings.json"), "Gemini Settings"),
+        (osPathJoin(osPathExpanduser("~/.gemini/antigravity"), "mcp_config.json"), "Antigravity MCP Config"),
         (osPathJoin(osPathExpanduser("~/.gemini/antigravity-cli"), "mcp_config.json"), "Antigravity CLI MCP Config"),
         (osPathJoin(osPathExpanduser("~/.gemini/antigravity-cli"), "settings.json"), "Antigravity CLI Settings"),
         (osPathJoin(osPathExpanduser("~/.gemini/antigravity-ide"), "mcp_config.json"), "Antigravity IDE MCP Config"),

@@ -21,33 +21,45 @@ KEY PARAMETERS:
 - --dry-run: Preview file fabrication without writing to disk.
 """
 
-import argparse
-import json
-import os
-import sys
-from pathlib import Path
+from argparse import ArgumentParser as argparseArgumentParser
+from json import dumps as jsonDumps, loads as jsonLoads
+from os import symlink as osSymlink
+from os.path import relpath as osPathRelpath
+from pathlib import Path as pathPath
+from sys import exit as sysExit
 
 # -----------------------------------------------------------------------------
 
-def resolve_workspace_root() -> Path:
+def resolve_workspace_root() -> pathPath:
     """Resolves the Bastien-Antigravity workspace root dynamically."""
-    current = Path(__file__).resolve()
-    for parent in [current] + list(current.parents):
-        if (parent / "docker-deployment").exists() and (parent / "microservice-toolbox").exists():
+    current = pathPath(__file__).resolve()
+    ancestors = [current] + list(current.parents)
+
+    def _is_valid_workspace(candidate: pathPath) -> bool:
+        return (
+            (candidate / "docker-deployment" / "modes" / "local" / "config" / "native.yaml").is_file()
+            and (candidate / "microservice-toolbox" / "python").is_dir()
+        )
+
+    for parent in ancestors:
+        if _is_valid_workspace(parent):
             return parent
-        if (parent / "Bastien-Antigravity" / "docker-deployment").exists():
+        if _is_valid_workspace(parent / "Bastien-Antigravity"):
             return parent / "Bastien-Antigravity"
+
+    for parent in ancestors:
         try:
-            for s in parent.iterdir():
-                if s.is_dir() and (s / "docker-deployment").exists() and (s / "microservice-toolbox").exists():
-                    return s
-        except Exception:
-            pass
-    return Path.cwd()
+            subdirs = list(parent.iterdir())
+        except OSError:
+            continue
+        for s in subdirs:
+            if s.is_dir() and _is_valid_workspace(s):
+                return s
+    return pathPath.cwd()
 
 # -----------------------------------------------------------------------------
 
-def create_file(path: Path, content: str, dry_run: bool = False) -> None:
+def create_file(path: pathPath, content: str, dry_run: bool = False) -> None:
     """Creates a file with parent directory creation, respecting dry-run mode."""
     if dry_run:
         print(f"  [DRY-RUN] Would create file: {path}")
@@ -59,7 +71,7 @@ def create_file(path: Path, content: str, dry_run: bool = False) -> None:
 
 # -----------------------------------------------------------------------------
 
-def create_symlink(target_path: Path, link_target: str, dry_run: bool = False) -> None:
+def create_symlink(target_path: pathPath, link_target: str, dry_run: bool = False) -> None:
     """Creates a symbolic link, respecting dry-run mode."""
     if dry_run:
         print(f"  [DRY-RUN] Would symlink: {target_path} -> {link_target}")
@@ -67,7 +79,7 @@ def create_symlink(target_path: Path, link_target: str, dry_run: bool = False) -
     target_path.parent.mkdir(parents=True, exist_ok=True)
     if target_path.is_symlink() or target_path.exists():
         target_path.unlink()
-    os.symlink(link_target, target_path)
+    osSymlink(link_target, target_path)
     print(f"  🔗 Symlinked: {target_path} -> {link_target}")
 
 # -----------------------------------------------------------------------------
@@ -228,7 +240,7 @@ if (window.BastienMFEElement && typeof window.BastienMFEElement.register === 'fu
 
 # -----------------------------------------------------------------------------
 
-def generate_go_scaffold(target_dir: Path, name: str, port: int, desc: str, dry_run: bool) -> None:
+def generate_go_scaffold(target_dir: pathPath, name: str, port: int, desc: str, dry_run: bool, layer: str = "L3") -> None:
     """Generates the Go microservice skeleton and source files."""
     cap_name = name.replace("-", "_")
 
@@ -312,7 +324,7 @@ func main() {{
 		Tag:         "{name}-mfe",
 		URL:         fmt.Sprintf("http://%s/static/js/mfe-loader.js", addr),
 		NavTitle:    "{name}",
-		Layer:       "L2",
+		Layer:       "{layer}",
 		Category:    "Domain Services",
 		Priority:    100,
 		Icon:        "fa-cubes",
@@ -468,16 +480,15 @@ type StatusPayload struct {{
 
     # 5. go.mod
     replace_prefix = ".."
-    if "06-Microservices" in target_dir.parts:
-        if Path("/workspace/microservice-toolbox").exists() and str(target_dir).startswith("/app"):
-            replace_prefix = "/workspace"
-        else:
-            ws_root = resolve_workspace_root()
-            if (ws_root / "microservice-toolbox").exists():
-                try:
-                    replace_prefix = os.path.relpath(ws_root, target_dir)
-                except ValueError:
-                    replace_prefix = ".."
+    if pathPath("/workspace/microservice-toolbox").exists() and str(target_dir).startswith("/app"):
+        replace_prefix = "/workspace"
+    else:
+        ws_root = resolve_workspace_root()
+        if (ws_root / "microservice-toolbox").exists():
+            try:
+                replace_prefix = osPathRelpath(str(ws_root), str(target_dir.resolve()))
+            except ValueError:
+                replace_prefix = ".."
 
     go_mod = f"""module github.com/Bastien-Antigravity/{name}
 
@@ -782,7 +793,7 @@ func TestHandlerContractsAndMFE(t *testing.T) {{
 
 # -----------------------------------------------------------------------------
 
-def generate_rust_scaffold(target_dir: Path, name: str, port: int, desc: str, dry_run: bool) -> None:
+def generate_rust_scaffold(target_dir: pathPath, name: str, port: int, desc: str, dry_run: bool, layer: str = "L3") -> None:
     """Generates the Rust microservice skeleton and source files."""
     cap_name = name.replace("-", "_")
 
@@ -844,41 +855,42 @@ tokio-test = "0.4"
 mod contracts;
 mod core;
 
+use microservice_toolbox::config::load_config;
 use microservice_toolbox::spec::{{publish_with_lifecycle, ServiceSpec}};
-
-pub const VERSION: &str = env!("APP_VERSION");
 
 // -----------------------------------------------------------------------------
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {{
-    let listen_addr = "127.0.0.1:{port}";
-    println!("Starting {name} (version {{}})...", VERSION);
+    let ac = load_config("standalone")?;
+    let listen_addr = ac.get_listen_addr("{cap_name}")?;
+    let version = ac.get_version();
+    println!("Starting {name} (version {{}})...", version);
 
     // 1. Initialize Controller & Exchange Contracts
     let ctrl = core::Controller::new("{name}");
-    ctrl.start(listen_addr).await?;
-    let _contracts = contracts::build_exchange_contracts(listen_addr);
+    ctrl.start(&listen_addr).await?;
+    let _contracts = contracts::build_exchange_contracts(&listen_addr);
 
-    // 2. Register OpenMFE ServiceSpec (attach contracts when app_config is loaded)
-    let _spec_template = ServiceSpec {{
+    // 2. Register OpenMFE ServiceSpec via AppConfig
+    let spec_template = ServiceSpec {{
         name: "{name}".to_string(),
         tag: "{name}-mfe".to_string(),
         url: format!("http://{{}}/static/mfe.js", listen_addr),
         nav_title: "{name}".to_string(),
-        layer: "L2".to_string(),
+        layer: "{layer}".to_string(),
         category: "Domain Services".to_string(),
         priority: 100,
         icon: "fa-cubes".to_string(),
         capability: "{cap_name}".to_string(),
         description: "{desc}".to_string(),
         protocol: "SafeSocket TCP / gRPC".to_string(),
-        framing: format!("Port {port}"),
+        framing: format!("Port {{}}", listen_addr.rsplit(':').next().unwrap_or("")),
         doc_link: "obsidian-brain/06-Microservices/{name}.md".to_string(),
         contracts: _contracts,
         ..Default::default()
     }};
-    let _ = publish_with_lifecycle;
+    publish_with_lifecycle(&ac, Some(ac.logger.clone()), None, "{cap_name}", spec_template)?;
 
     // Await termination signal
     tokio::signal::ctrl_c().await?;
@@ -1005,7 +1017,7 @@ async fn test_scaffold_initialization() {{
 
 # -----------------------------------------------------------------------------
 
-def generate_python_scaffold(target_dir: Path, name: str, port: int, desc: str, dry_run: bool) -> None:
+def generate_python_scaffold(target_dir: pathPath, name: str, port: int, desc: str, dry_run: bool, layer: str = "L3") -> None:
     """Generates the Python microservice skeleton and architecture folders."""
     cap_name = name.replace("-", "_")
 
@@ -1078,7 +1090,7 @@ def main():
             tag="{name}-mfe",
             url=f"http://{{display_address(listen_addr)}}/static/mfe.js",
             nav_title="{name}",
-            layer="L2",
+            layer="{layer}",
             category="Domain Services",
             priority=100,
             icon="fa-cubes",
@@ -1402,7 +1414,7 @@ def test_scaffold_initialization():
 
 # -----------------------------------------------------------------------------
 
-def generate_cpp_scaffold(target_dir: Path, name: str, port: int, desc: str, dry_run: bool) -> None:
+def generate_cpp_scaffold(target_dir: pathPath, name: str, port: int, desc: str, dry_run: bool, layer: str = "L3") -> None:
     """Generates a C++17 microservice skeleton wired to microservice-toolbox/cpp spec & contracts."""
     cap_name = name.replace("-", "_")
 
@@ -1604,7 +1616,7 @@ int main(int argc, char** argv) {{
     spec.name = "{name}";
     spec.tag = "{name}-mfe";
     spec.navTitle = "{name}";
-    spec.layer = "L2";
+    spec.layer = "{layer}";
     spec.category = "Domain Services";
     spec.priority = 100;
     spec.icon = "fa-cubes";
@@ -1660,9 +1672,31 @@ int main() {{
 
 # -----------------------------------------------------------------------------
 
-def generate_common_files(target_dir: Path, name: str, lang: str, port: int, desc: str, dry_run: bool) -> None:
+def generate_common_files(target_dir: pathPath, name: str, lang: str, port: int, desc: str, dry_run: bool, layer: str = "L3") -> None:
     """Generates files mandatory across all languages: Dockerfile, compose, AGENTS.md, etc."""
     cap_name = name.replace("-", "_")
+    workspace_root = resolve_workspace_root()
+
+    # Resolve standalone.yaml symlink target dynamically so external L3/L4/L5 repos never get dangling links
+    brain_root_candidate = target_dir.parent.parent if target_dir.parent.name == "06-Microservices" else None
+    if brain_root_candidate and (
+        (brain_root_candidate / "standalone.yaml").exists()
+        or (brain_root_candidate / "standalone.yaml").is_symlink()
+    ):
+        standalone_link_target = "../../standalone.yaml"
+    else:
+        local_native_candidates = [
+            workspace_root / "docker-deployment" / "modes" / "local" / "config" / "native.yaml",
+            target_dir.parent / "docker-deployment" / "modes" / "local" / "config" / "native.yaml",
+        ]
+        local_native = next((c for c in local_native_candidates if c.is_file()), None)
+        if local_native is not None:
+            try:
+                standalone_link_target = osPathRelpath(str(local_native), str(target_dir.resolve()))
+            except ValueError:
+                standalone_link_target = str(local_native.resolve())
+        else:
+            standalone_link_target = "../docker-deployment/modes/local/config/native.yaml"
 
     # 1. Dockerfile (Multi-stage compliant with 12-Docker-Deployment-Standards.md)
     if lang == "go":
@@ -1853,8 +1887,9 @@ networks:
 `{name}` is responsible for: {desc}.
 
 - **Exposed Capability**: `{cap_name}` (Port: `{port}`)
+- **Architecture Layer**: `{layer}`
 - **Shared Libraries**: `microservice-toolbox`, `universal-logger`, `distributed-config`, `safe-socket`
-- **Configuration Link**: `standalone.yaml -> ../docker-deployment/modes/local/config/native.yaml`
+- **Configuration Link**: `standalone.yaml -> {standalone_link_target}`
 
 ## Key Build & Test Commands
 ```bash
@@ -1906,7 +1941,7 @@ status: active
     # 5. AI-Project-DNA.md
     dna_md = f"""# Metadata
 - Version: 0.0.1
-- Classification: Level 1 Microservice
+- Classification: {layer} Microservice
 
 ---
 microservice: {name}
@@ -1916,6 +1951,7 @@ tags:
 - '#service/{name}'
 - '#type/note'
 - '#state/active'
+- '#tier/{layer.lower()}'
 - '#zone/3-fleet'
 ---
 
@@ -2043,10 +2079,14 @@ clean:
 """
         create_file(target_dir / "Makefile", makefile, dry_run)
     elif lang == "cpp":
+        try:
+            cpp_ws_rel = osPathRelpath(str(workspace_root), str(target_dir.resolve())) if (workspace_root / "microservice-toolbox").exists() else ".."
+        except ValueError:
+            cpp_ws_rel = ".."
         makefile = f"""VERSION ?= $(shell cat VERSION.txt)
 CXX ?= g++
-DISTCONF_DIR ?= ../distributed-config/distconf/libdistconf
-TOOLBOX_CPP_INC ?= ../microservice-toolbox/cpp/include
+DISTCONF_DIR ?= {cpp_ws_rel}/distributed-config/distconf/libdistconf
+TOOLBOX_CPP_INC ?= {cpp_ws_rel}/microservice-toolbox/cpp/include
 CXXFLAGS ?= -std=c++17 -Wall -Wextra -Isrc -I$(TOOLBOX_CPP_INC) -I$(DISTCONF_DIR) -DAPP_VERSION=\\"$(VERSION)\\"
 LDFLAGS ?= -L$(DISTCONF_DIR) -ldistconf -Wl,-rpath,$(DISTCONF_DIR)
 
@@ -2088,28 +2128,15 @@ clean:
     create_file(qo_dir / ".aiignore", "*\n", dry_run)
 
     # 8. standalone.yaml symlink
-    workspace_root = resolve_workspace_root()
-    brain_root_candidate = target_dir.parent.parent if target_dir.parent.name == "06-Microservices" else None
-    if brain_root_candidate and (
-        (brain_root_candidate / "standalone.yaml").exists()
-        or (brain_root_candidate / "standalone.yaml").is_symlink()
-    ):
-        create_symlink(target_dir / "standalone.yaml", "../../standalone.yaml", dry_run)
-    else:
-        local_native = target_dir.parent / "docker-deployment" / "modes" / "local" / "config" / "native.yaml"
-        if local_native.exists():
-            rel_link = os.path.relpath(local_native, target_dir)
-            create_symlink(target_dir / "standalone.yaml", rel_link, dry_run)
-        else:
-            create_symlink(target_dir / "standalone.yaml", "../docker-deployment/modes/local/config/native.yaml", dry_run)
+    create_symlink(target_dir / "standalone.yaml", standalone_link_target, dry_run)
 
     # 9. .github CI/CD Workflows and Dependabot (from 05-Fleet-Operation/04-Templates)
     templates_dir = workspace_root / "obsidian-brain" / "05-Fleet-Operation" / "04-Templates"
 
     ci_template_path = templates_dir / "Microservice" / "ci.yml"
-    if ci_template_path.exists():
+    try:
         ci_content = ci_template_path.read_text(encoding="utf-8")
-    else:
+    except (FileNotFoundError, OSError):
         ci_content = """# [FLEET-ARCHITECT] Continuous Integration
 name: Fleet CI
 on:
@@ -2126,9 +2153,9 @@ jobs:
     create_file(target_dir / ".github" / "workflows" / "ci.yml", ci_content, dry_run)
 
     dep_template_path = templates_dir / "Microservice" / "dependabot.yml"
-    if dep_template_path.exists():
+    try:
         dep_content = dep_template_path.read_text(encoding="utf-8")
-    else:
+    except (FileNotFoundError, OSError):
         dep_content = """version: 2
 updates:
   - package-ecosystem: "github-actions"
@@ -2140,9 +2167,9 @@ updates:
 
     # 10. .gitignore
     gitignore_template = templates_dir / "gitignore-global"
-    if gitignore_template.exists():
+    try:
         gi_content = gitignore_template.read_text(encoding="utf-8")
-    else:
+    except (FileNotFoundError, OSError):
         gi_content = """# System Files
 .DS_Store
 *.log
@@ -2157,7 +2184,7 @@ dist/
 
 # -----------------------------------------------------------------------------
 
-def generate_bdd_spec(brain_dir: Path, name: str, desc: str, dry_run: bool) -> None:
+def generate_bdd_spec(brain_dir: pathPath, name: str, desc: str, dry_run: bool) -> None:
     """Generates the initial BDD behavior specification note in 02-Business-BDD and service spec in 06-Microservices."""
     bdd_dir = brain_dir / "02-Business-BDD" / "02-Behavior-Specs" / name
     feat_file = bdd_dir / "FEAT-001-Initialization.md"
@@ -2230,11 +2257,12 @@ tags:
 # -----------------------------------------------------------------------------
 
 def register_sandbox_service(
-    brain_dir: Path,
-    target_dir: Path,
+    brain_dir: pathPath,
+    target_dir: pathPath,
     name: str,
     port: int,
-    dry_run: bool = False
+    dry_run: bool = False,
+    layer: str = "L3"
 ) -> None:
     """
     When operating inside an isolated sandbox brain (where standalone.yaml is a regular
@@ -2242,7 +2270,11 @@ def register_sandbox_service(
     scaffolded microservice capability and repository entry in the sandbox brain.
     """
     standalone_path = brain_dir / "standalone.yaml"
-    if not standalone_path.is_file() or standalone_path.is_symlink():
+    if standalone_path.is_symlink():
+        return
+    try:
+        raw_yaml = standalone_path.read_text(encoding="utf-8")
+    except (FileNotFoundError, OSError):
         return
 
     cap_name = name.replace("-", "_")
@@ -2252,7 +2284,6 @@ def register_sandbox_service(
         print(f"  [DRY-RUN] Would register capability '{cap_name}' (port {port}) in {standalone_path}")
         return
 
-    raw_yaml = standalone_path.read_text(encoding="utf-8")
     if f"    {cap_name}:" not in raw_yaml:
         cap_snippet = (
             f"    {cap_name}:\n"
@@ -2268,14 +2299,20 @@ def register_sandbox_service(
 
     repo_ctrl = brain_dir / "05-Fleet-Operation" / "00-Repo-Control"
     inv_file = repo_ctrl / "inventory.json"
-    if inv_file.is_file():
+    try:
+        inv_raw = inv_file.read_text(encoding="utf-8")
+    except (FileNotFoundError, OSError) as exc:
+        print(f"  ℹ️ Sandbox inventory not updated ({exc})")
+        inv_raw = ""
+
+    if inv_raw:
         try:
-            inv_data = json.loads(inv_file.read_text(encoding="utf-8"))
+            inv_data = jsonLoads(inv_raw)
             if inv_data.get("isolated_sandbox"):
                 repos = inv_data.setdefault("repositories", [])
                 if not any(r.get("name") == name for r in repos):
                     try:
-                        rel_p = "./" + os.path.relpath(target_dir, brain_dir)
+                        rel_p = "./" + osPathRelpath(str(target_dir), str(brain_dir))
                     except ValueError:
                         rel_p = f"./06-Microservices/{name}"
                     repos.append({
@@ -2283,16 +2320,23 @@ def register_sandbox_service(
                         "path": rel_p,
                         "remote": f"https://github.com/Bastien-Antigravity/{name}.git",
                         "master_branch": "develop",
-                        "repo_type": "level1-microservice"
+                        "layer": layer,
+                        "repo_type": f"{layer.lower()}-microservice"
                     })
-                    inv_file.write_text(json.dumps(inv_data, indent=2) + "\n", encoding="utf-8")
+                    inv_file.write_text(jsonDumps(inv_data, indent=2) + "\n", encoding="utf-8")
         except Exception as e:
             print(f"  ⚠️ Sandbox inventory update skipped: {e}")
 
     reg_file = repo_ctrl / "service-registry.json"
-    if reg_file.is_file():
+    try:
+        reg_raw = reg_file.read_text(encoding="utf-8")
+    except (FileNotFoundError, OSError) as exc:
+        print(f"  ℹ️ Sandbox service-registry not updated ({exc})")
+        reg_raw = ""
+
+    if reg_raw:
         try:
-            reg_data = json.loads(reg_file.read_text(encoding="utf-8"))
+            reg_data = jsonLoads(reg_raw)
             services = reg_data.setdefault("services", [])
             if not any(s.get("name") == name for s in services):
                 services.append({
@@ -2300,20 +2344,22 @@ def register_sandbox_service(
                     "image": f"ghcr.io/bastien-antigravity/{name}",
                     "default_port": port,
                     "protocol": "REST",
+                    "layer": layer,
                     "archetype": "Microservice",
-                    "classification": "level1_microservice"
+                    "classification": f"{layer.lower()}_microservice"
                 })
-                reg_file.write_text(json.dumps(reg_data, indent=2) + "\n", encoding="utf-8")
+                reg_file.write_text(jsonDumps(reg_data, indent=2) + "\n", encoding="utf-8")
         except Exception as e:
             print(f"  ⚠️ Sandbox service-registry update skipped: {e}")
 
 # -----------------------------------------------------------------------------
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Fabricate a standard Bastien-Antigravity microservice skeleton.")
+    parser = argparseArgumentParser(description="Fabricate a standard Bastien-Antigravity microservice skeleton.")
     parser.add_argument("--name", "-n", help="Microservice name (e.g. market-observer)")
     parser.add_argument("--lang", "-l", choices=["go", "python", "rust", "cpp"], default="go", help="Language (go, python, rust, cpp)")
     parser.add_argument("--port", "-p", type=int, default=8090, help="Default capability listen port")
+    parser.add_argument("--layer", choices=["L1", "L2", "L3", "L4", "L5"], default="L3", help="Architecture layer (L1..L5, defaults to L3)")
     parser.add_argument("--desc", "-d", default="Ecosystem microservice component", help="Short mission description")
     parser.add_argument("--dest", help="Destination path (defaults to ../<name> or <brain>/06-Microservices/<name> in sandbox mode)")
     parser.add_argument("--brain", help="Target knowledge brain directory (defaults to domain brain or obsidian-brain)")
@@ -2327,18 +2373,19 @@ def main() -> None:
         name = input("Enter new microservice name (e.g. market-observer): ").strip()
         if not name:
             print("❌ Error: Service name is required.")
-            sys.exit(1)
+            sysExit(1)
 
     lang = args.lang
     port = args.port
+    layer = args.layer
     desc = args.desc
     dry_run = args.dry_run
 
     workspace_root = resolve_workspace_root()
     if args.brain:
-        brain_dir = Path(args.brain).resolve()
-    elif (Path.cwd() / "02-Business-BDD").exists() and (Path.cwd() / "06-Microservices").exists():
-        brain_dir = Path.cwd().resolve()
+        brain_dir = pathPath(args.brain).resolve()
+    elif (pathPath.cwd() / "02-Business-BDD").exists() and (pathPath.cwd() / "06-Microservices").exists():
+        brain_dir = pathPath.cwd().resolve()
     else:
         brain_dir = workspace_root / "obsidian-brain"
 
@@ -2352,7 +2399,7 @@ def main() -> None:
     )
 
     if args.dest:
-        target_dir = Path(args.dest).resolve()
+        target_dir = pathPath(args.dest).resolve()
     elif is_satellite_sandbox:
         target_dir = (brain_dir / "06-Microservices" / name).resolve()
     else:
@@ -2360,30 +2407,30 @@ def main() -> None:
         if not args.brain and (target_dir.parent / "obsidian-brain").exists():
             brain_dir = target_dir.parent / "obsidian-brain"
 
-    print(f"\n🚀 Fabricating microservice '{name}' ({lang}) at {target_dir}...")
+    print(f"\n🚀 Fabricating microservice '{name}' ({lang}, {layer}) at {target_dir}...")
 
     if target_dir.exists() and not dry_run:
         print(f"⚠️ Warning: Target directory {target_dir} already exists. Proceeding with caution.")
 
     # 1. Generate language specific scaffold
     if lang == "go":
-        generate_go_scaffold(target_dir, name, port, desc, dry_run)
+        generate_go_scaffold(target_dir, name, port, desc, dry_run, layer=layer)
     elif lang == "python":
-        generate_python_scaffold(target_dir, name, port, desc, dry_run)
+        generate_python_scaffold(target_dir, name, port, desc, dry_run, layer=layer)
     elif lang == "rust":
-        generate_rust_scaffold(target_dir, name, port, desc, dry_run)
+        generate_rust_scaffold(target_dir, name, port, desc, dry_run, layer=layer)
     elif lang == "cpp":
-        generate_cpp_scaffold(target_dir, name, port, desc, dry_run)
+        generate_cpp_scaffold(target_dir, name, port, desc, dry_run, layer=layer)
 
     # 2. Generate common ecosystem files
-    generate_common_files(target_dir, name, lang, port, desc, dry_run)
+    generate_common_files(target_dir, name, lang, port, desc, dry_run, layer=layer)
 
     # 3. Generate BDD specification stub & 06-Microservices/<name>.md
     generate_bdd_spec(brain_dir, name, desc, dry_run)
 
     # 4. Auto-register in sandbox standalone.yaml and inventory if operating in isolated sandbox brain
     if is_satellite_sandbox:
-        register_sandbox_service(brain_dir, target_dir, name, port, dry_run)
+        register_sandbox_service(brain_dir, target_dir, name, port, dry_run, layer=layer)
 
     cap_name = name.replace("-", "_")
 

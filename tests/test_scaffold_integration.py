@@ -85,10 +85,14 @@ class TestScaffoldIntegration(unittest.TestCase):
         for f in expected_files:
             self.assertTrue(f.exists(), f"Mandatory file missing: {f}")
 
-        # 2. Symlink verification
+        # 2. Symlink verification (must resolve cleanly to native.yaml)
         symlink = svc_dir / "standalone.yaml"
         self.assertTrue(symlink.is_symlink(), "standalone.yaml must be a symlink")
-        self.assertEqual(os.readlink(symlink), "../docker-deployment/modes/local/config/native.yaml")
+        self.assertTrue(symlink.exists(), "standalone.yaml symlink must not be dangling")
+        self.assertTrue(
+            os.readlink(symlink).endswith("docker-deployment/modes/local/config/native.yaml"),
+            f"Unexpected standalone.yaml symlink target: {os.readlink(symlink)}"
+        )
 
         # 3. YAML Validation (docker-compose.yml, .golangci.yml)
         compose_content = (svc_dir / "docker-compose.yml").read_text(encoding="utf-8")
@@ -228,6 +232,35 @@ class TestScaffoldIntegration(unittest.TestCase):
 
         reg_data = json.loads((repo_ctrl / "service-registry.json").read_text(encoding="utf-8"))
         self.assertTrue(any(s.get("name") == svc_name and s.get("default_port") == port for s in reg_data["services"]))
+
+    def test_external_l3_l4_l5_repo_scaffolding(self):
+        """Verifies scaffolding L3/L4/L5 services into custom nested external directories."""
+        go_dir = self.workspace_tmp / "custom-layers" / "L4" / "alpha-risk-engine"
+        generate_go_scaffold(go_dir, "alpha-risk-engine", 8210, "L4 risk engine", dry_run=False, layer="L4")
+        generate_common_files(go_dir, "alpha-risk-engine", "go", 8210, "L4 risk engine", dry_run=False, layer="L4")
+
+        go_main = (go_dir / "cmd" / "alpha-risk-engine" / "main.go").read_text(encoding="utf-8")
+        self.assertIn('Layer:       "L4"', go_main)
+        go_dna = (go_dir / "AI-Project-DNA.md").read_text(encoding="utf-8")
+        self.assertIn("Classification: L4 Microservice", go_dna)
+        self.assertIn("#tier/l4", go_dna)
+        go_mod = (go_dir / "go.mod").read_text(encoding="utf-8")
+        self.assertNotIn("=> ../microservice-toolbox", go_mod)
+
+        go_symlink = go_dir / "standalone.yaml"
+        self.assertTrue(go_symlink.is_symlink())
+        self.assertTrue(go_symlink.exists(), "External L4 standalone.yaml symlink must resolve cleanly")
+        self.assertTrue(os.readlink(go_symlink).endswith("docker-deployment/modes/local/config/native.yaml"))
+
+        py_dir = self.workspace_tmp / "custom-layers" / "L5" / "alpha-ml-worker"
+        generate_python_scaffold(py_dir, "alpha-ml-worker", 8220, "L5 ML worker", dry_run=False, layer="L5")
+        generate_common_files(py_dir, "alpha-ml-worker", "python", 8220, "L5 ML worker", dry_run=False, layer="L5")
+
+        py_main = (py_dir / "main.py").read_text(encoding="utf-8")
+        self.assertIn('layer="L5"', py_main)
+        py_symlink = py_dir / "standalone.yaml"
+        self.assertTrue(py_symlink.is_symlink())
+        self.assertTrue(py_symlink.exists(), "External L5 standalone.yaml symlink must resolve cleanly")
 
 
 if __name__ == "__main__":

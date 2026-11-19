@@ -184,6 +184,8 @@ class BaseAgent:
             os.environ.get("BRAIN_ID")
         )
         self.target_brain_id = raw_target if isinstance(raw_target, str) and raw_target.strip() else "obsidian-brain"
+        self.brain_id = self.target_brain_id
+        self.current_source_brain: Optional[str] = None
         self.squad_chat_topic = (
             f"bastien-antigravity.{self.target_brain_id}.squad.chat"
             if self.target_brain_id != "obsidian-brain"
@@ -632,6 +634,7 @@ class BaseAgent:
 
     async def _run_mock_think_and_respond(self, session_id: str, reply_topic: Optional[str] = None, source_brain: Optional[str] = None):
         """Generates a simulated role-specific mock response for testing offline."""
+        self.current_source_brain = source_brain
         history = await self._fetch_history(session_id)
         last_msg = ""
         if history:
@@ -678,6 +681,7 @@ class BaseAgent:
         if not self.pool:
             return []
         
+        active_brain = self.current_source_brain or self.brain_id
         loop = asyncio.get_event_loop()
         def db_query():
             conn = self.pool.getconn()
@@ -686,8 +690,8 @@ class BaseAgent:
                     cursor.execute('SET search_path TO "08-Squad-Agent", public')
                     # Apply chronological sliding window: fetch last 15 messages and reverse order
                     cursor.execute(
-                        "SELECT sender, content, tool_calls FROM squad_chat_logs WHERE session_id = %s ORDER BY created_at DESC LIMIT 15",
-                        (session_id,)
+                        "SELECT sender, content, tool_calls FROM squad_chat_logs WHERE session_id = %s AND brain_id = %s ORDER BY created_at DESC LIMIT 15",
+                        (session_id, active_brain)
                     )
                     rows = cursor.fetchall()
                     return [
@@ -695,7 +699,7 @@ class BaseAgent:
                         for r in reversed(rows)
                     ]
             except Exception as e:
-                self.logger.error(f"Failed to query squad_chat_logs: {e}")
+                self.logger.error("{0} : Failed to query squad_chat_logs: {1}".format(self.Name, e))
                 return []
             finally:
                 self.pool.putconn(conn)

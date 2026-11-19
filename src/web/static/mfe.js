@@ -1592,8 +1592,22 @@ class SquadAgentMFE extends HTMLElement {
     }
 }
 
+const _currentScript = typeof document !== 'undefined' ? document.currentScript : null;
+let _requestedTag = '';
+if (_currentScript && _currentScript.src) {
+    try {
+        _requestedTag = new URL(_currentScript.src, window.location.href).searchParams.get('tag') || '';
+    } catch (e) {
+        _requestedTag = '';
+    }
+}
+
 if (!customElements.get('squad-agent-mfe')) {
     customElements.define('squad-agent-mfe', SquadAgentMFE);
+}
+if (_requestedTag && _requestedTag !== 'squad-agent-mfe' && !customElements.get(_requestedTag)) {
+    class SatelliteSquadAgentMFE extends SquadAgentMFE {}
+    customElements.define(_requestedTag, SatelliteSquadAgentMFE);
 }
 
 })();

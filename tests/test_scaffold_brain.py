@@ -83,6 +83,7 @@ class TestScaffoldBrain(unittest.TestCase):
             "07-Core-KMS",
             "07-Core-KMS/Role-Prompts",
             "08-Squad-Agent",
+            "11-Code-Doc",
             "99-Humans",
             "quick-overview",
         ]
@@ -102,7 +103,7 @@ class TestScaffoldBrain(unittest.TestCase):
             target_path / "00-AI-Orchestration/AI-Project-DNA.md",
             target_path / "00-AI-Orchestration/AI-Session-State.md",
             target_path / "00-AI-Orchestration/AI-Init.md",
-            target_path / "00-AI-Orchestration/MODE-MANUAL.md",
+            target_path / "00-AI-Orchestration/Config/MODE-MANUAL.md",
             target_path / "quick-overview/00-Overview.md",
         ]
         for f in expected_files:
@@ -111,10 +112,32 @@ class TestScaffoldBrain(unittest.TestCase):
         # Ensure no non-compliant .env files were generated
         self.assertFalse((target_path / ".env").exists(), "Ecosystem rules prohibit .env files; configuration must source from standalone.yaml")
 
-        # 3. Symlink Verification
+        # 3. Symlink Verification (non-dangling resolved relative path to native.yaml)
         symlink = target_path / "standalone.yaml"
         self.assertTrue(symlink.is_symlink(), "standalone.yaml must be a symlink")
-        self.assertEqual(os.readlink(symlink), "../docker-deployment/modes/local/config/native.yaml")
+        self.assertTrue(symlink.exists(), "standalone.yaml symlink must resolve cleanly (never dangling)")
+        self.assertTrue(
+            os.readlink(symlink).endswith("docker-deployment/modes/local/config/native.yaml"),
+            f"Unexpected standalone.yaml symlink target: {os.readlink(symlink)}"
+        )
+
+        # Ensure stale runtime artifacts were NOT copied into 08-Squad-Agent
+        copied_squad = target_path / "08-Squad-Agent"
+        for excluded_name in ("data", ".DS_Store", ".shipper_offsets.json"):
+            self.assertFalse((copied_squad / excluded_name).exists(), f"Excluded artifact leaked into copy: {excluded_name}")
+
+        # Verify stale non-convert-agents logs from source vault are never copied into a new brain
+        src_logs = self.vault_root / "08-Squad-Agent" / "logs"
+        if src_logs.is_dir():
+            src_log_names = {
+                p.name for p in src_logs.iterdir()
+                if p.is_file() and p.name != "squad_agent_convert_agents.log"
+            }
+            dst_logs = copied_squad / "logs"
+            if dst_logs.is_dir():
+                dst_log_names = {p.name for p in dst_logs.iterdir() if p.is_file()}
+                leaked = src_log_names & dst_log_names
+                self.assertFalse(leaked, f"Stale log files leaked from template vault: {leaked}")
 
         # 4. Frontmatter Integrity across generated Markdown files
         md_files_to_check = [
@@ -231,6 +254,163 @@ class TestScaffoldBrain(unittest.TestCase):
         self.assertNotIn(http_port, allocated, f"Allocated port {http_port} should not collide with ecosystem capabilities")
         self.assertNotIn(grpc_port, allocated, f"Allocated gRPC port {grpc_port} should not collide with ecosystem capabilities")
         self.assertGreaterEqual(http_port, 8185, "Should start from or above satellite base port")
+
+    def test_generate_sandbox_standalone_yaml_complete_capabilities(self):
+        """Verifies fallback standalone.yaml synthesis includes all mandatory ecosystem capabilities."""
+        from src.lifecycle.scaffold_new_brain import generate_sandbox_standalone_yaml
+
+        empty_vault = self.test_dir / "empty-vault"
+        empty_vault.mkdir(parents=True, exist_ok=True)
+        generated = generate_sandbox_standalone_yaml(empty_vault, "quant-brain", 8195, 8197)
+        parsed = yaml.safe_load(generated)
+        caps = parsed.get("capabilities", {})
+
+        for mandatory_cap in (
+            "config_server",
+            "log_server",
+            "nats",
+            "timescale_db",
+            "web_interface",
+            "notif_server",
+            "tele_remote",
+            "watchdog_agent",
+            "rag_engine",
+            "squad_agent",
+        ):
+            self.assertIn(mandatory_cap, caps, f"Missing mandatory capability: {mandatory_cap}")
+
+        self.assertIn("rest_port", caps["rag_engine"])
+        self.assertIn("dashboard", caps["rag_engine"])
+        self.assertEqual(caps["squad_agent"]["target_brain_id"], "${TARGET_BRAIN_ID:quant-brain}")
+        self.assertIn("8195", str(caps["squad_agent"]["port"]))
+        self.assertIn("8197", str(caps["squad_agent"]["grpc_port"]))
+        self.assertIn("autorepair", caps["squad_agent"])
+        self.assertEqual(caps["squad_agent"]["autorepair"]["enabled"], "${AUTO_REPAIR_ENABLED:-true}")
+
+    def test_launch_satellite_docker_missing_cli_safe(self):
+        """Verifies launch_satellite_docker returns False cleanly if docker CLI is missing."""
+        from unittest.mock import patch
+        from src.lifecycle.scaffold_new_brain import launch_satellite_docker
+
+        with patch("src.lifecycle.scaffold_new_brain.shutilWhich", return_value=None):
+            result = launch_satellite_docker(self.test_dir, "no-docker-brain", 8195)
+        self.assertFalse(result)
+
+    def test_destroy_sandbox_brain_uses_rest_port_and_psycopg2_placeholders(self):
+        """Verifies destroy_sandbox_brain hits RAG rest_port (8093) and uses %s SQL placeholders."""
+        from unittest.mock import MagicMock, patch
+        from src.lifecycle.scaffold_new_brain import destroy_sandbox_brain
+
+        target_name = "purge-check-brain"
+        target_path = self.test_dir / target_name
+        target_path.mkdir(parents=True, exist_ok=True)
+        (target_path / "docker-compose.yaml").write_text("services: {}\n", encoding="utf-8")
+
+        captured_urls = []
+        captured_sql = []
+
+        class _FakeResp:
+            status = 200
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                return False
+
+        def _fake_urlopen(req, timeout=2.5):
+            captured_urls.append((req.full_url, req.get_method()))
+            return _FakeResp()
+
+        fake_cursor = MagicMock()
+        fake_cursor.fetchone.return_value = ("conversation_turns",)
+        fake_cursor.__enter__ = lambda s: fake_cursor
+        fake_cursor.__exit__ = lambda s, *a: False
+
+        def _record_execute(sql, params=None):
+            captured_sql.append((sql, params))
+
+        fake_cursor.execute.side_effect = _record_execute
+
+        fake_conn = MagicMock()
+        fake_conn.cursor.return_value = fake_cursor
+        fake_pool = MagicMock()
+        fake_pool.getconn.return_value = fake_conn
+
+        with patch("src.lifecycle.scaffold_new_brain.shutilWhich", return_value=None), \
+             patch("src.lifecycle.scaffold_new_brain.urllibUrlopen", side_effect=_fake_urlopen), \
+             patch("src.lifecycle.scaffold_new_brain.get_pg_pool", return_value=fake_pool):
+            ok = destroy_sandbox_brain(target_name, target_path, self.vault_root, dry_run=False)
+
+        self.assertTrue(ok)
+        self.assertFalse(target_path.exists())
+        self.assertEqual(len(captured_urls), 1)
+        self.assertTrue(captured_urls[0][0].endswith(":8093/api/v1/vault/purge"))
+        self.assertEqual(captured_urls[0][1], "POST")
+
+        delete_stmts = [sql for sql, _ in captured_sql if "DELETE FROM" in sql]
+        self.assertGreaterEqual(len(delete_stmts), 1)
+        for sql in delete_stmts:
+            self.assertIn("%s", sql)
+            self.assertNotIn("$1", sql)
+
+    def test_multi_brain_mfe_registration_unique_tags(self):
+        """Verifies primary and satellite brains register distinct MFE tags and names."""
+        from unittest.mock import MagicMock, patch
+        from src.web.server import register_mfe_with_web_interface
+
+        cfg = MagicMock()
+        cfg.data = {"capabilities": {"squad_agent": {"target_brain_id": "obsidian-brain"}}}
+        logger = MagicMock()
+
+        published = []
+
+        def _capture_publish(config, log, capability, **kwargs):
+            published.append((capability, kwargs))
+
+        with patch("src.web.server.toolboxPublishServiceSpec", side_effect=_capture_publish):
+            with patch.dict(os.environ, {"BRAIN_ID": "obsidian-brain", "TARGET_BRAIN_ID": "obsidian-brain"}, clear=False):
+                register_mfe_with_web_interface(cfg, logger, "127.0.0.1", 8085)
+            with patch.dict(os.environ, {"BRAIN_ID": "trading-brain", "TARGET_BRAIN_ID": "trading-brain"}, clear=False):
+                register_mfe_with_web_interface(cfg, logger, "0.0.0.0", 8195)
+
+        self.assertEqual(len(published), 2)
+        _, root_kwargs = published[0]
+        _, sat_kwargs = published[1]
+
+        self.assertEqual(root_kwargs["name"], "squad_agent")
+        self.assertEqual(root_kwargs["tag"], "squad-agent-mfe")
+        self.assertEqual(root_kwargs["nav_title"], "🤖 Squad Command")
+
+        self.assertEqual(sat_kwargs["name"], "squad_agent_trading_brain")
+        self.assertEqual(sat_kwargs["tag"], "squad-agent-trading-brain-mfe")
+        self.assertEqual(sat_kwargs["nav_title"], "🤖 Squad (trading-brain)")
+        self.assertIn("?tag=squad-agent-trading-brain-mfe", sat_kwargs["url"])
+
+    def test_clean_copy_excludes_stale_runtime_artifacts(self):
+        """Verifies scaffold_brain excludes logs, data, standalone.yaml, .DS_Store, *.log, and .shipper_offsets.json."""
+        mock_vault = self.test_dir / "mock-vault"
+        mock_squad = mock_vault / "08-Squad-Agent"
+        (mock_squad / "logs").mkdir(parents=True, exist_ok=True)
+        (mock_squad / "data").mkdir(parents=True, exist_ok=True)
+        (mock_squad / "logs" / "stale.log").write_text("old log\n", encoding="utf-8")
+        (mock_squad / "data" / "state.json").write_text("{}\n", encoding="utf-8")
+        (mock_squad / ".DS_Store").write_text("junk\n", encoding="utf-8")
+        (mock_squad / ".shipper_offsets.json").write_text("{}\n", encoding="utf-8")
+        (mock_squad / "extra.log").write_text("old\n", encoding="utf-8")
+        (mock_squad / "standalone.yaml").write_text("stale: true\n", encoding="utf-8")
+        (mock_squad / "src").mkdir(parents=True, exist_ok=True)
+        (mock_squad / "src" / "keep.py").write_text("# keep\n", encoding="utf-8")
+
+        target_path = self.test_dir / "clean-dest-brain"
+        scaffold_brain("clean-dest-brain", target_path, mock_vault, dry_run=False, sa_port=8195, sa_grpc_port=8197, sandbox=True)
+
+        copied_squad = target_path / "08-Squad-Agent"
+        self.assertTrue((copied_squad / "src" / "keep.py").is_file())
+        self.assertFalse((copied_squad / "logs" / "stale.log").exists())
+        self.assertFalse((copied_squad / "data").exists())
+        self.assertFalse((copied_squad / ".DS_Store").exists())
+        self.assertFalse((copied_squad / ".shipper_offsets.json").exists())
+        self.assertFalse((copied_squad / "extra.log").exists())
+        self.assertTrue((copied_squad / "standalone.yaml").is_symlink())
 
 
 if __name__ == "__main__":
