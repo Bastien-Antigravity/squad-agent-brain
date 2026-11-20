@@ -61,7 +61,10 @@ from microservice_toolbox.logger import UniLog as toolboxUniLog
 # Scan argv to determine the profile without running a full CLI parser
 _profile = None
 for i in range(1, len(sys.argv) - 1):
-    if sys.argv[i] in ["--profile", "-p"]:
+    if sys.argv[i] == "--profile":
+        _profile = sys.argv[i + 1]
+        break
+    elif sys.argv[i] == "-p" and sys.argv[i + 1] in ("standalone", "production", "docker", "local", "staging"):
         _profile = sys.argv[i + 1]
         break
 
