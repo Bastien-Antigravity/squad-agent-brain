@@ -422,6 +422,92 @@ class TestScaffoldUnits(unittest.TestCase):
         self.assertIn("-std=c++17", ext_makefile)
         self.assertEqual((ext_cpp_dir / "VERSION.txt").read_text(encoding="utf-8").strip(), "0.0.1")
 
+    def test_external_domain_workspace_sibling_placement_symlink_and_doclink(self):
+        """Verify scaffolding against an external domain workspace uses sibling layout, ../standalone.yaml, and concrete DocLink."""
+        import json
+        from src.lifecycle.scaffold_microservice import main as scaffold_ms_main
+
+        ext_ws = self.test_dir / "My-Trading-Workspace"
+        brain_name = "trading-brain"
+        ext_brain = ext_ws / brain_name
+        (ext_brain / "02-Business-BDD" / "02-Behavior-Specs").mkdir(parents=True, exist_ok=True)
+        (ext_brain / "06-Microservices").mkdir(parents=True, exist_ok=True)
+        repo_ctrl = ext_brain / "05-Fleet-Operation" / "00-Repo-Control"
+        repo_ctrl.mkdir(parents=True, exist_ok=True)
+
+        (ext_ws / "standalone.yaml").write_text(
+            "common:\n    name: common\n\ncapabilities:\n    squad_agent:\n        target_brain_id: trading-brain\n",
+            encoding="utf-8",
+        )
+        (repo_ctrl / "inventory.json").write_text(
+            json.dumps({"domain_workspace": True, "brain_id": brain_name, "repositories": []}, indent=2),
+            encoding="utf-8",
+        )
+        (repo_ctrl / "service-registry.json").write_text(
+            json.dumps({"brain_id": brain_name, "services": []}, indent=2),
+            encoding="utf-8",
+        )
+
+        # Scaffold L3 Go service via CLI main() targeting ext_brain (no --dest)
+        svc_name = "order-router"
+        with patch.object(
+            sys,
+            "argv",
+            [
+                "scaffold_microservice.py",
+                "--name",
+                svc_name,
+                "--lang",
+                "go",
+                "--port",
+                "8350",
+                "--layer",
+                "L3",
+                "--brain",
+                str(ext_brain),
+            ],
+        ):
+            scaffold_ms_main()
+
+        # 1. Sibling placement: <ext_ws>/<svc_name> (NOT nested inside <ext_brain>/06-Microservices/)
+        sibling_dir = ext_ws / svc_name
+        self.assertTrue(sibling_dir.is_dir(), "Service must be placed as sibling of domain brain")
+        self.assertFalse((ext_brain / "06-Microservices" / svc_name).exists(), "Service code must NOT nest in 06-Microservices/")
+
+        # 2. Internal symlink: standalone.yaml -> ../standalone.yaml
+        symlink = sibling_dir / "standalone.yaml"
+        self.assertTrue(symlink.is_symlink())
+        self.assertEqual(os.readlink(symlink), "../standalone.yaml")
+        self.assertTrue(symlink.exists())
+
+        # 3. Concrete DocLink in Go template
+        main_go = (sibling_dir / "cmd" / svc_name / "main.go").read_text(encoding="utf-8")
+        self.assertIn(f'DocLink:     "{brain_name}/06-Microservices/{svc_name}.md"', main_go)
+
+        # 4. Registered into <ext_ws>/standalone.yaml AND <ext_brain>/05-Fleet-Operation/00-Repo-Control/{inventory,service-registry}.json
+        ws_yaml = (ext_ws / "standalone.yaml").read_text(encoding="utf-8")
+        self.assertIn("order_router:", ws_yaml)
+        self.assertIn("ORDER_ROUTER_PORT:8350", ws_yaml)
+
+        inv_data = json.loads((repo_ctrl / "inventory.json").read_text(encoding="utf-8"))
+        self.assertTrue(any(r.get("name") == svc_name and r.get("path") == f"../{svc_name}" for r in inv_data["repositories"]))
+
+        reg_data = json.loads((repo_ctrl / "service-registry.json").read_text(encoding="utf-8"))
+        self.assertTrue(any(s.get("name") == svc_name and s.get("default_port") == 8350 for s in reg_data["services"]))
+
+        # 5. Concrete DocLink across Python, Rust, and C++ templates too
+        py_dir = ext_ws / "alpha-py-svc"
+        generate_python_scaffold(py_dir, "alpha-py-svc", 8351, "Py svc", dry_run=False, brain_name=brain_name)
+        self.assertIn(f'doc_link="{brain_name}/06-Microservices/alpha-py-svc.md"', (py_dir / "main.py").read_text(encoding="utf-8"))
+
+        rs_dir = ext_ws / "alpha-rs-svc"
+        generate_rust_scaffold(rs_dir, "alpha-rs-svc", 8352, "Rust svc", dry_run=False, brain_name=brain_name)
+        self.assertIn(f'doc_link: "{brain_name}/06-Microservices/alpha-rs-svc.md".to_string()', (rs_dir / "src/main.rs").read_text(encoding="utf-8"))
+
+        cpp_dir = ext_ws / "alpha-cpp-svc"
+        generate_cpp_scaffold(cpp_dir, "alpha-cpp-svc", 8353, "C++ svc", dry_run=False, brain_name=brain_name)
+        self.assertIn(f'spec.docLink = "{brain_name}/06-Microservices/alpha-cpp-svc.md";', (cpp_dir / "src/main.cpp").read_text(encoding="utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main()

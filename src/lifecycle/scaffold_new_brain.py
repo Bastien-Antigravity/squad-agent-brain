@@ -39,6 +39,7 @@ from yaml import safe_dump as yamlSafeDump
 # Standard ecosystem bootstrap
 import src.bootstrap as bootstrap
 from lib.orchestration_lib import setup_terminal, resolve_vault_and_workspace
+from src.fleet.convert_agents import compile_skills
 from src.lib.pg_pool import get_pg_pool, resolve_schema_name
 
 logger = bootstrap.logger
@@ -360,11 +361,12 @@ def generate_sandbox_standalone_yaml(
     target_name: str,
     sa_port: int,
     sa_grpc_port: int,
-    fleet_mode: str = "auto"
+    fleet_mode: str = "auto",
+    inventory_rel: str = "05-Fleet-Operation/00-Repo-Control/inventory.json"
 ) -> str:
     """
-    Generates an isolated, self-contained standalone.yaml for a sandbox satellite brain.
-    Prevents any write or symlink coupling to the live native.yaml configuration.
+    Generates an isolated, self-contained standalone.yaml for a sandbox satellite brain
+    or external domain workspace. Prevents any write or symlink coupling to live native.yaml.
     """
     if fleet_mode == "docker":
         active_host = "127.0.0.2"
@@ -382,8 +384,8 @@ def generate_sandbox_standalone_yaml(
         ]
     else:
         candidates = [
-            vault_root / "standalone.yaml",
             vault_root.parent / "docker-deployment" / "modes" / "local" / "config" / "native.yaml",
+            vault_root / "standalone.yaml",
         ]
     for candidate in candidates:
         try:
@@ -411,11 +413,11 @@ def generate_sandbox_standalone_yaml(
         )
         .replace(
             "inventory_file: docker-deployment/modes/local/inventory.json",
-            "inventory_file: 05-Fleet-Operation/00-Repo-Control/inventory.json"
+            f"inventory_file: {inventory_rel}"
         )
         .replace(
             "inventory_file: docker-deployment/modes/local/config/inventory.json",
-            "inventory_file: 05-Fleet-Operation/00-Repo-Control/inventory.json"
+            f"inventory_file: {inventory_rel}"
         )
     )
     isolated_text = reSub(
@@ -504,11 +506,14 @@ def destroy_sandbox_brain(
     _, ws_root = resolve_vault_and_workspace(__file__)
     resolved_ws = ws_root.resolve()
     vault_parent = resolved_vault.parent.resolve()
+    home_dir = pathPath.home().resolve()
 
     if (
-        target_name in ("obsidian-brain", "root", "main")
-        or resolved_target in (resolved_vault, resolved_ws, vault_parent, resolved_target.parent)
+        target_name in ("obsidian-brain", "root", "main", "Bastien-Antigravity")
+        or len(resolved_target.parts) <= 2
+        or resolved_target in (resolved_vault, resolved_ws, vault_parent, resolved_target.parent, home_dir)
         or resolved_vault.is_relative_to(resolved_target)
+        or resolved_ws.is_relative_to(resolved_target)
     ):
         logger.error(
             f"ScaffoldNewBrain : SAFETY BLOCK — Refusing to destroy protected path '{resolved_target}' ({target_name})."
@@ -609,6 +614,425 @@ def destroy_sandbox_brain(
 
 # -----------------------------------------------------------------------------------------------
 
+def seed_domain_repo_control(
+    vault_dest: pathPath,
+    target_name: str,
+    dry_run: bool = False
+) -> None:
+    """
+    Seeds fresh empty domain inventory.json and service-registry.json inside a clean
+    external domain vault so Bastien-Antigravity repositories are never mixed in.
+    """
+    repo_ctrl_dir = vault_dest / "05-Fleet-Operation" / "00-Repo-Control"
+    inventory_payload = {
+        "ecosystem": f"Domain-Workspace ({target_name})",
+        "domain_workspace": True,
+        "brain_id": target_name,
+        "repositories": [],
+    }
+    registry_payload = {
+        "brain_id": target_name,
+        "services": [],
+    }
+    create_file(
+        repo_ctrl_dir / "inventory.json",
+        jsonDumps(inventory_payload, indent=2) + "\n",
+        dry_run,
+    )
+    create_file(
+        repo_ctrl_dir / "service-registry.json",
+        jsonDumps(registry_payload, indent=2) + "\n",
+        dry_run,
+    )
+
+# -----------------------------------------------------------------------------------------------
+
+def scaffold_workspace(
+    target_name: str,
+    workspace_dest: pathPath,
+    vault_root: pathPath,
+    *,
+    dry_run: bool = False,
+    sa_port: typeOptional[int] = None,
+    sa_grpc_port: typeOptional[int] = None,
+    fleet_mode: str = "auto"
+) -> None:
+    """
+    Scaffolds a clean, zero-mixing external domain workspace container at workspace_dest
+    with a pure domain vault at workspace_dest / target_name. Never copies 08-Squad-Agent,
+    central 07-Core-KMS/Role-Prompts, or central 03-Tech-Stack; instead compiles merged
+    Antigravity IDE skills (core engineering + domain personas) into .agents/skills/.
+    """
+    vault_dest = workspace_dest / target_name
+    logger.info(
+        f"ScaffoldNewBrain : Fabricating external domain workspace '{target_name}' "
+        f"at {workspace_dest} (vault: {vault_dest})..."
+    )
+
+    if sa_port is None or sa_grpc_port is None:
+        auto_port, auto_grpc = resolve_available_ports(workspace_dest)
+        sa_port = sa_port or auto_port
+        sa_grpc_port = sa_grpc_port or auto_grpc
+
+    # 1. Create ONLY pure domain vault folders (ZERO 08-Squad-Agent, ZERO central KMS/Tech-Stack copy)
+    domain_folders = [
+        "00-AI-Orchestration/Config",
+        "01-Strategic-Nexus",
+        "02-Business-BDD/02-Behavior-Specs",
+        "03-Tech-Stack",
+        "04-Rapid-Prototyping/Inbox",
+        "05-Fleet-Operation/00-Repo-Control",
+        "06-Microservices",
+        "07-Core-KMS/Role-Prompts/20-DomainSpecialist",
+        "11-Code-Doc",
+    ]
+    for folder in domain_folders:
+        d = vault_dest / folder
+        if dry_run:
+            logger.info(f"   [DRY-RUN] Would create directory: {d}")
+        else:
+            d.mkdir(parents=True, exist_ok=True)
+
+    # 2. Root workspace files at workspace_dest
+    active_version = bootstrap.config.get_version()
+    create_file(workspace_dest / "VERSION.txt", f"{active_version}\n", dry_run)
+
+    workspace_gitignore = """# Environments
+.venv/
+env/
+venv/
+ENV/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# IDE & OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Runtime Data
+fs_data/
+fs_temp/
+*.log
+"""
+    create_file(workspace_dest / ".gitignore", workspace_gitignore, dry_run)
+
+    # Concrete self-contained standalone.yaml (NO cross-workspace symlink!)
+    standalone_yaml_text = generate_sandbox_standalone_yaml(
+        vault_root,
+        target_name,
+        sa_port,
+        sa_grpc_port,
+        fleet_mode=fleet_mode,
+        inventory_rel=f"{target_name}/05-Fleet-Operation/00-Repo-Control/inventory.json",
+    )
+    create_file(workspace_dest / "standalone.yaml", standalone_yaml_text, dry_run)
+
+    # Root AGENTS.md preserving 100% of Bastien-Antigravity engineering invariants + zero-mixing rules
+    workspace_agents_md = f"""---
+microservice: {target_name}
+type: rules
+status: active
+tags:
+- '#service/{target_name}'
+- '#domain/workspace'
+- '#type/rules'
+- '#state/active'
+- '#zone/0-core'
+---
+
+# AGENTS.md: {target_name} Domain Workspace
+
+## Zero-Mixing Domain Workspace Boundary
+- This external workspace is dedicated strictly to the `{target_name}` domain and its L3/L4/L5 microservices.
+- **ZERO Mixing**: Never copy `Bastien-Antigravity` core source code (`08-Squad-Agent`, `microservice-toolbox`, `universal-logger`, or base L1/L2 containers) into this workspace.
+- **Sibling Layout**: Domain microservices live as direct siblings of `./{target_name}/` (e.g. `./<service-name>/`), NEVER nested inside `./{target_name}/06-Microservices/`.
+- **Internal Config Link**: Every domain microservice symlinks `./standalone.yaml -> ../standalone.yaml` (zero broken cross-workspace symlinks).
+- **Web-Interface & DocLink Binding**: Every microservice publishes `ServiceSpec` with concrete `DocLink: "{target_name}/06-Microservices/<service-name>.md"` and `11-Code-Doc/` anti-drift mirrors inside `./{target_name}/`.
+
+## Non-Negotiable Bastien-Antigravity Engineering Invariants
+1. **Validate on the Cold Path, Fail Fast — Keep the Hot Path Pure**:
+   - Perform all configuration, credential, and required-parameter checks once at startup/boot.
+   - Zero hot-path paranoia (`hasattr`, `isinstance`, silent `try/except: pass`, or redundant mutexes around immutable/atomic state).
+2. **Trust Validated `AppConfig` & Zero Silent Fallback**:
+   - Use `appConfig.GetListenAddr(...)`, `appConfig.GetGRPCListenAddr(...)`, `appConfig.GetRESTAddr(...)`, and `appConfig.GetVersion()` / `app_config.get_version()` directly.
+   - Never invent silent fallback defaults or hardcoded host/port literals.
+3. **Versioning via `VERSION.txt` (`0.0.1`) ONLY**:
+   - Resolve version strictly via `AppConfig` (`GetVersion()` / `get_version()`); never read `APP_VERSION` or `SERVICE_VERSION` env overrides.
+4. **Canonical 12 Log Levels (`flexible-logger` / `UniLog`)**:
+   - Only `NOTSET` (0), `DEBUG` (1), `STREAM` (2), `INFO` (3), `LOGON` (4), `LOGOUT` (5), `TRADE` (6), `SCHEDULE` (7), `REPORT` (8), `WARNING` (9), `ERROR` (10), `CRITICAL` (11). Never use `WARN`, `CRIT`, `FATAL`, or `PANIC`.
+5. **Always Use Standard `microservice-toolbox` Modules**:
+   - Bootstrap with `BootstrapService` (Go) / `bootstrap_microservice` (Python) / `load_config` (Rust/C++), publish specs via `PublishWithLifecycle`, and expose `/api/v1/contracts`.
+   - External repos import `github.com/Bastien-Antigravity/microservice-toolbox` and `universal-logger` via GitHub module/package references (`v0.0.1` / `develop`), never local relative `replace` directives.
+6. **Bastien Formatting & Language Standards**:
+   - **Triple-Block Header** (`ESSENTIAL PROCESS`, `DATA FLOW`, `KEY PARAMETERS`) on all non-test source files + horizontal dividers (`77` dashes for Go/C++/SQL, `95` dashes for Python/Rust).
+   - **Python**: Shebang + `# coding:utf-8`, granular camelCase stdlib/external aliases (`from os.path import join as osPathJoin`), single-line combined module imports, NO aliasing of local `src.*` imports, One-Class Rule, keyword-only `*` on >1 arg methods, and `self.logger.info(f"{{self.Name}} : {{msg}}")`.
+   - **Go**: 4-block imports, `M` prefix on models, `I` prefix on interfaces, `GOPRIVATE=github.com/Bastien-Antigravity/*`.
+   - **Anti-Drift (`11-Code-Doc`) & BDD (`02-Business-BDD`)**: Author `FEAT-*.md` specs in `{target_name}/02-Business-BDD/02-Behavior-Specs/<svc>/` before implementation and hand off to `@obsidian-brain:orchestrator` when coordinating cross-fleet changes.
+"""
+    create_file(workspace_dest / "AGENTS.md", workspace_agents_md, dry_run)
+
+    # Root AI-CONTEXT.md
+    workspace_ai_context_md = f"""---
+microservice: {target_name}
+type: context
+status: active
+tags:
+- '#service/{target_name}'
+- '#domain/context'
+- '#type/context'
+- '#state/active'
+---
+
+# AI-CONTEXT: {target_name} Domain Workspace
+
+## Workspace Topology
+- `./{target_name}/`: Pure domain knowledge vault
+  - `00-AI-Orchestration/`: Domain DNA, session state, and initialization compass
+  - `02-Business-BDD/02-Behavior-Specs/<svc>/FEAT-*.md`: Authoritative Gherkin behavior specs
+  - `05-Fleet-Operation/00-Repo-Control/`: Domain `inventory.json` and `service-registry.json`
+  - `06-Microservices/<svc>.md`: Markdown service hub specifications (docs only)
+  - `07-Core-KMS/Role-Prompts/`: Custom domain agent personas (e.g. `20-DomainSpecialist`)
+  - `11-Code-Doc/`: Anti-drift architectural documentation mirror
+- `./<service-name>/`: Domain L3/L4/L5 microservice repositories (siblings of `./{target_name}/`), each symlinking `./standalone.yaml -> ../standalone.yaml`
+- `./standalone.yaml`: Self-contained fleet endpoint profile for connecting to the central `Bastien-Antigravity` L1/L2 base fleet
+- `./.agents/skills/`: Merged Antigravity IDE skills (central `Bastien-Antigravity` engineering skills + `{target_name}` domain personas)
+
+## Base Fleet Endpoint Modes
+Switch `./standalone.yaml` dynamically between native and Dockerized base L1/L2 fleets:
+- **Local Native Fleet (`127.0.0.1`)**: `make switch-local`
+- **Docker Host-Bridge Fleet (`127.0.0.2`)**: `make switch-docker`
+
+## Cross-Brain BDD Handoff Workflow
+1. Use domain personas (e.g., `@domainspecialist`) to draft domain specs in `./{target_name}/02-Business-BDD/02-Behavior-Specs/<svc>/FEAT-*.md` and hub docs in `./{target_name}/06-Microservices/<svc>.md`.
+2. Hand off implementation, fleet verification, or central infrastructure changes to `@obsidian-brain:orchestrator` referencing the concrete `FEAT-*.md` path and this workspace directory.
+3. Run compliance and scaffolding tooling directly from the central `Bastien-Antigravity` installation (`obsidian-brain/08-Squad-Agent/main.py`) without duplicating core scripts locally.
+"""
+    create_file(workspace_dest / "AI-CONTEXT.md", workspace_ai_context_md, dry_run)
+
+    # Root Makefile (switch-local, switch-docker, docker-up, docker-down, status)
+    workspace_makefile = f"""# External Domain Workspace Controller: {target_name}
+.PHONY: switch-local switch-docker docker-up docker-down status
+
+switch-local:
+\t@python3 -c 'from pathlib import Path; p=Path("standalone.yaml"); t=p.read_text(encoding="utf-8").replace(":-127.0.0.2}}", ":-127.0.0.1}}").replace(":127.0.0.2}}", ":127.0.0.1}}"); p.write_text(t, encoding="utf-8")'
+\t@echo "Switched ./standalone.yaml base fleet host to 127.0.0.1 (local native fleet)"
+
+switch-docker:
+\t@python3 -c 'from pathlib import Path; p=Path("standalone.yaml"); t=p.read_text(encoding="utf-8").replace(":-127.0.0.1}}", ":-127.0.0.2}}").replace(":127.0.0.1}}", ":127.0.0.2}}"); p.write_text(t, encoding="utf-8")'
+\t@echo "Switched ./standalone.yaml base fleet host to 127.0.0.2 (docker host-bridge fleet)"
+
+docker-up:
+\tdocker compose up -d
+
+docker-down:
+\tdocker compose down
+
+status:
+\tdocker compose ps
+"""
+    create_file(workspace_dest / "Makefile", workspace_makefile, dry_run)
+
+    # Root docker-compose.yaml (ZERO squad-agent, ZERO base L1/L2 containers)
+    workspace_compose = f"""# =============================================================================
+# Domain Workspace Compose: {target_name}
+# Orchestrates ONLY this domain's L3/L4/L5 microservices on teleremote-network.
+# Base L1/L2 services and squad-agent run centrally in Bastien-Antigravity.
+# =============================================================================
+services: {{}}
+
+networks:
+  teleremote-network:
+    name: teleremote-network
+    external: true
+"""
+    create_file(workspace_dest / "docker-compose.yaml", workspace_compose, dry_run)
+
+    # 3. Seed pure domain vault files inside vault_dest
+    seed_domain_repo_control(vault_dest, target_name, dry_run)
+    create_file(vault_dest / "VERSION.txt", f"{active_version}\n", dry_run)
+
+    dna_content = f"""---
+microservice: {target_name}
+type: governance
+status: active
+tags:
+- '#service/{target_name}'
+- '#type/governance'
+- '#state/active'
+- '#zone/0-orchestration'
+---
+# 🧬 AI Project DNA: {target_name}
+
+## 🎯 High-Level Vision
+Pure domain knowledge vault, behavioral specifications (`02-Business-BDD/`), microservice hubs (`06-Microservices/`), and anti-drift mirror (`11-Code-Doc/`) for `{target_name}`.
+
+## 🛡️ Domain Isolation Rules
+1. Keep domain documentation in `{target_name}/` and microservice repositories as sibling folders in `{workspace_dest.name}/`.
+2. Never duplicate `08-Squad-Agent` or central `03-Tech-Stack` / `07-Core-KMS` templates inside this vault.
+3. Maintain canonical YAML frontmatter (`microservice`, `type`, `status`, `tags`) on every vault markdown note.
+"""
+    create_file(vault_dest / "00-AI-Orchestration/AI-Project-DNA.md", dna_content, dry_run)
+
+    session_content = f"""---
+microservice: {target_name}
+type: state
+status: active
+active-protocol: "🛡️ Mode 1: Spec-First"
+tags:
+- '#service/{target_name}'
+- '#type/state'
+- '#state/active'
+- '#zone/0-orchestration'
+---
+# 🧠 AI Session State: {target_name}
+
+## 🚀 Active Missions
+- [ ] Author initial domain BDD behavior specs under `02-Business-BDD/02-Behavior-Specs/`.
+- [ ] Scaffold sibling L3/L4/L5 microservices and hand off orchestration to `@obsidian-brain:orchestrator`.
+"""
+    create_file(vault_dest / "00-AI-Orchestration/AI-Session-State.md", session_content, dry_run)
+
+    init_content = f"""---
+microservice: {target_name}
+type: governance
+status: active
+tags:
+- '#service/{target_name}'
+- '#type/governance'
+- '#state/active'
+- '#zone/0-orchestration'
+---
+# ⚡ AI Initialization: {target_name}
+
+> [!IMPORTANT] MANDATORY INITIALIZATION
+> 1. Read workspace rules in `../AGENTS.md` and `../AI-CONTEXT.md`.
+> 2. Read the ecosystem map in **[[Ecosystem-Map-MOC]]**.
+> 3. Load domain constraints from **[[AI-Project-DNA]]** and restore **[[AI-Session-State]]**.
+"""
+    create_file(vault_dest / "00-AI-Orchestration/AI-Init.md", init_content, dry_run)
+
+    mode_content = "active_mode: 1\n\n# Mode Manual\n1: Spec-First\n2: Free-Labs\n3: Fleet-Commander\n"
+    create_file(vault_dest / "00-AI-Orchestration/Config/MODE-MANUAL.md", mode_content, dry_run)
+
+    moc_content = f"""---
+microservice: {target_name}
+type: moc
+status: active
+tags:
+- '#service/{target_name}'
+- '#type/moc'
+- '#state/active'
+- '#zone/0-orchestration'
+---
+# 🌌 {target_name}: Domain Knowledge Hub (MOC)
+
+## 🤖 00 - AI Orchestration
+- [[00-AI-Orchestration/AI-Project-DNA|🧬 AI Project DNA]]
+- [[00-AI-Orchestration/AI-Init|⚡ AI Initialization]]
+- [[00-AI-Orchestration/AI-Session-State|🧠 AI Session State]]
+
+## 🧩 02 - Business BDD & 06 - Microservices
+- `02-Business-BDD/02-Behavior-Specs/`: Gherkin feature specifications (`FEAT-*.md`)
+- `06-Microservices/`: Markdown microservice specification hubs (code lives as sibling repos `../<svc>/`)
+- `11-Code-Doc/`: Anti-drift code documentation mirror
+"""
+    create_file(vault_dest / "Ecosystem-Map-MOC.md", moc_content, dry_run)
+
+    microservices_hub_readme = f"""---
+microservice: {target_name}
+type: documentation
+status: active
+tags:
+- '#service/{target_name}'
+- '#type/documentation'
+- '#state/active'
+---
+# 📦 {target_name} Microservice Hubs
+
+This folder stores **markdown specification hubs ONLY** (`<service-name>.md`).
+Domain L3/L4/L5 microservice source repositories live as direct siblings of `{target_name}/` inside `{workspace_dest.name}/` (e.g. `../<service-name>/`), each linking `./standalone.yaml -> ../standalone.yaml`.
+"""
+    create_file(vault_dest / "06-Microservices/README.md", microservices_hub_readme, dry_run)
+
+    code_doc_readme = f"""---
+microservice: {target_name}
+type: documentation
+status: active
+tags:
+- '#service/{target_name}'
+- '#type/documentation'
+- '#state/active'
+---
+# 📚 Anti-Drift Code Documentation Mirror (`11-Code-Doc`)
+
+Keep one mirror folder per domain microservice here so documentation stays synchronized with sibling service repositories (`../<service-name>/`).
+"""
+    create_file(vault_dest / "11-Code-Doc/README.md", code_doc_readme, dry_run)
+
+    domain_specialist_prompt = f"""---
+microservice: {target_name}
+type: prompt
+status: active
+tags:
+- '#service/{target_name}'
+- '#type/prompt'
+- '#state/active'
+- '#agent/domain-specialist'
+---
+# Role: {target_name} Domain Specialist
+
+## 🎯 Mission
+You are the authoritative domain analyst and BDD architect for the `{target_name}` workspace.
+Your responsibility is to translate domain requirements into unambiguous Gherkin specifications,
+maintain microservice markdown hubs, and coordinate cross-brain implementation handoffs without
+duplicating core `Bastien-Antigravity` infrastructure.
+
+## 🛠️ Core Responsibilities
+1. **Author BDD Feature Specs**:
+   - Create `02-Business-BDD/02-Behavior-Specs/<service>/FEAT-NNN-<Title>.md` with concrete `Given / When / Then` scenarios and capability names.
+2. **Maintain Microservice Hubs & Anti-Drift Docs**:
+   - Keep `06-Microservices/<service>.md` linked to its `FEAT-*.md` specs and mirror architectural contracts in `11-Code-Doc/<service>/`.
+3. **Cross-Brain Handoff (`@obsidian-brain:orchestrator`)**:
+   - Once BDD specs are ready for implementation or fleet wiring, emit a structured handoff to `@obsidian-brain:orchestrator` citing:
+     - Concrete `FEAT-*.md` spec paths inside `{target_name}/02-Business-BDD/02-Behavior-Specs/<service>/`
+     - Sibling service repository path `{workspace_dest.name}/<service>/`
+     - Target layer (`L3`/`L4`/`L5`), language (`go`/`python`/`rust`/`cpp`), and capability name.
+"""
+    create_file(
+        vault_dest / "07-Core-KMS/Role-Prompts/20-DomainSpecialist/Prompt-DomainSpecialist.md",
+        domain_specialist_prompt,
+        dry_run,
+    )
+
+    # 4. Compile merged Antigravity IDE skills (central engineering + domain personas) into workspace_dest/.agents/skills
+    logger.info("ScaffoldNewBrain : Compiling merged Antigravity IDE skills into .agents/skills...")
+    if not dry_run:
+        compile_skills(
+            brain_dir=str(vault_dest),
+            merge_core=True,
+            out_dir=str(workspace_dest / ".agents" / "skills"),
+            skip_workspace_link=True,
+        )
+
+    # 5. Non-fatally register workspace with 09-RAG-Engine
+    if not dry_run:
+        _register_workspace_with_rag(target_name, vault_dest, logger)
+
+    logger.info(
+        f"ScaffoldNewBrain : SUCCESS! External domain workspace ready at: {workspace_dest} "
+        f"(vault: {vault_dest})"
+    )
+
+# -----------------------------------------------------------------------------------------------
+
 def scaffold_brain(
     target_name: str,
     target_path: pathPath,
@@ -618,13 +1042,27 @@ def scaffold_brain(
     sa_port: typeOptional[int] = None,
     sa_grpc_port: typeOptional[int] = None,
     sandbox: bool = False,
-    fleet_mode: str = "auto"
+    fleet_mode: str = "auto",
+    workspace: bool = False
 ) -> None:
     """
     Executes complete scaffolding of a new Bastien-Antigravity brain vault.
+    When workspace=True, delegates to scaffold_workspace() to fabricate a clean
+    zero-mixing external domain workspace container.
     When sandbox=True, generates a self-contained standalone.yaml and isolated
     fleet inventory so testing never mutates live ecosystem files.
     """
+    if workspace:
+        scaffold_workspace(
+            target_name,
+            target_path,
+            vault_root,
+            dry_run=dry_run,
+            sa_port=sa_port,
+            sa_grpc_port=sa_grpc_port,
+            fleet_mode=fleet_mode,
+        )
+        return
     mode_tag = " [ISOLATED SANDBOX]" if sandbox else ""
     logger.info(f"ScaffoldNewBrain : Fabricating '{target_name}'{mode_tag} at {target_path}...")
 
@@ -1146,7 +1584,8 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="Preview file fabrication without writing to disk")
     parser.add_argument("--docker", action="store_true", help="Automatically launch the newly scaffolded brain in Docker")
     parser.add_argument("--sandbox", "--isolated", dest="sandbox", action="store_true", help="Create an isolated sandbox brain with a self-contained standalone.yaml and isolated inventory")
-    parser.add_argument("--destroy", action="store_true", help="Destroy an isolated sandbox brain and purge its brain_id from RAG/PostgreSQL")
+    parser.add_argument("--workspace", action="store_true", help="Create a clean zero-mixing external domain workspace container (auto-enabled when --dest is outside Bastien-Antigravity and --sandbox is False)")
+    parser.add_argument("--destroy", action="store_true", help="Destroy an isolated sandbox brain or domain workspace and purge its brain_id from RAG/PostgreSQL")
     parser.add_argument("--port", "-p", type=int, default=None, help="Explicit host HTTP port for squad-agent (defaults to auto-allocating 8185+)")
     parser.add_argument("--grpc-port", type=int, default=None, help="Explicit host gRPC port for squad-agent (defaults to port + 2)")
     parser.add_argument("--fleet-mode", choices=["auto", "local", "docker"], default="auto", help="Base fleet config target for standalone.yaml ('auto' probes active fleet, 'local' -> native.yaml 127.0.0.1, 'docker' -> host-bridge.yaml 127.0.0.2)")
@@ -1164,18 +1603,24 @@ def main() -> None:
         return
 
     dest_input = args.dest.strip()
-    default_target = (workspace_root / "_sandbox" / target_name).resolve() if (args.sandbox or args.destroy) else (workspace_root / target_name).resolve()
+    if args.sandbox or args.destroy:
+        default_target = (workspace_root / "_sandbox" / target_name).resolve()
+    elif args.workspace:
+        default_target = (workspace_root.parent / f"{target_name}-workspace").resolve()
+    else:
+        default_target = (workspace_root / target_name).resolve()
+
     if not dest_input:
-        if args.sandbox or args.destroy:
+        if args.sandbox or args.destroy or args.workspace:
             target_path = default_target
         else:
             try:
                 dest_input = input(f"Enter destination path [default: {default_target}]: ").strip()
             except EOFError:
                 dest_input = ""
-            target_path = pathPath(dest_input).resolve() if dest_input else default_target
+            target_path = pathPath(dest_input).expanduser().resolve() if dest_input else default_target
     else:
-        target_path = pathPath(dest_input).resolve()
+        target_path = pathPath(dest_input).expanduser().resolve()
 
     if args.destroy:
         destroy_sandbox_brain(target_name, target_path, vault_root, dry_run=args.dry_run)
@@ -1184,6 +1629,11 @@ def main() -> None:
     if target_path.exists() and not args.dry_run:
         logger.error(f"ScaffoldNewBrain : Path {target_path} already exists.")
         return
+
+    use_workspace = args.workspace or (
+        not args.sandbox
+        and not target_path.resolve().is_relative_to(workspace_root.resolve())
+    )
 
     scaffold_brain(
         target_name,
@@ -1194,7 +1644,8 @@ def main() -> None:
         sa_port=args.port,
         sa_grpc_port=args.grpc_port,
         sandbox=args.sandbox,
-        fleet_mode=args.fleet_mode
+        fleet_mode=args.fleet_mode,
+        workspace=use_workspace,
     )
 
 # -----------------------------------------------------------------------------

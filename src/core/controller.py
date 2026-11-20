@@ -64,7 +64,6 @@ class CommandController(Command):
         self.agents: List[Any] = []
         self.agent_states: Dict[str, str] = {}
         self.grpc_ready: bool = True
-        from pathlib import Path
         self.repo_root = Path(__file__).resolve().parent.parent.parent
         caps = (self.config.data or {}).get("capabilities") or {}
         squad_cap = caps.get("squad_agent") or {}
@@ -105,18 +104,24 @@ class CommandController(Command):
         ready_count = 0
         for agent in self.agents:
             role = getattr(agent, "role_name", agent.__class__.__name__)
-            self.agent_states[role] = "starting"
+            target_brain = getattr(agent, "target_brain_id", None)
+            state_key = (
+                role
+                if role not in self.agent_states or target_brain in ("obsidian-brain", "root", "main", None)
+                else f"{target_brain}:{role}"
+            )
+            self.agent_states[state_key] = "starting"
             try:
                 await agent.start()
                 if getattr(agent, "running", False):
-                    self.agent_states[role] = "ready"
+                    self.agent_states[state_key] = "ready"
                     ready_count += 1
                 else:
-                    self.agent_states[role] = "failed"
-                    self.logger.error(f"{self.Name} : Agent '{role}' completed start() without entering running state.")
+                    self.agent_states[state_key] = "failed"
+                    self.logger.error(f"{self.Name} : Agent '{state_key}' completed start() without entering running state.")
             except Exception as exc:
-                self.agent_states[role] = "failed"
-                self.logger.error(f"{self.Name} : Agent '{role}' failed during startup: {exc}")
+                self.agent_states[state_key] = "failed"
+                self.logger.error(f"{self.Name} : Agent '{state_key}' failed during startup: {exc}")
         return ready_count
 
     # -----------------------------------------------------------------------------------------------
@@ -203,7 +208,14 @@ class CommandController(Command):
 
     # -----------------------------------------------------------------------------------------------
 
-    def process_message(self, *, channel: str, session_id: str, user_msg: str) -> Dict[str, Any]:
+    def process_message(
+        self,
+        *,
+        channel: str,
+        session_id: str,
+        user_msg: str,
+        task_context: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         """
         Receives user input from a synchronous client/CLI facade, persists the user turn,
         hydrates short-term and semantic RAG context, and dispatches onto the Squad Event Bus.
@@ -223,14 +235,16 @@ class CommandController(Command):
             if self.brain_id and self.brain_id not in ("obsidian-brain", "root", "main")
             else "bastien-antigravity.squad.chat"
         )
-        payload_data = {
+        payload_data: Dict[str, Any] = {
             "sender": "user",
             "channel": channel,
             "session_id": session_id,
             "content": user_msg,
             "source_brain_id": self.brain_id,
-            "reply_topic": target_topic
+            "reply_topic": target_topic,
         }
+        if task_context is not None:
+            payload_data["task_context"] = dict(task_context)
         dispatched = False
         try:
             if hasattr(self, "event_bus") and self.event_bus:
@@ -287,15 +301,16 @@ class CommandController(Command):
         """Reads active mode from the orchestration manual."""
         mode_file = self.repo_root.parent / "00-AI-Orchestration" / "Config" / "MODE-MANUAL.md"
         choice = "4"
-        if mode_file.exists():
-            try:
-                with open(mode_file, 'r', encoding='utf-8') as f:
-                    for line in f:
-                        if line.startswith("active_mode:"):
-                            choice = line.split(":")[1].strip()
-                            break
-            except Exception as e:
-                self.logger.warning(f"Error reading active mode: {e}")
+        try:
+            with open(mode_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    if line.startswith("active_mode:"):
+                        choice = line.split(":")[1].strip()
+                        break
+        except FileNotFoundError:
+            return choice
+        except Exception as e:
+            self.logger.warning(f"{self.Name} : Error reading active mode: {e}")
         return choice
 
     def get_mode_details(self, mode: str) -> tuple:
@@ -476,7 +491,13 @@ class CommandController(Command):
             self.logger.warning(f"Failed to retrieve memory fallback: {e}")
             return []
 
-    async def publish_user_message(self, session_id: str, message: str, brain_id: Optional[str] = None) -> None:
+    async def publish_user_message(
+        self,
+        session_id: str,
+        message: str,
+        brain_id: Optional[str] = None,
+        task_context: Optional[Dict[str, Any]] = None,
+    ) -> None:
         """Saves a user message and publishes it to EventBus to trigger agents."""
         # 1. Save to in-memory memory store
         try:
@@ -506,13 +527,15 @@ class CommandController(Command):
         # 3. Publish to SquadEventBus or LocalEventBus
         try:
             target_topic = f"bastien-antigravity.{brain_id}.squad.chat" if brain_id and brain_id not in ("obsidian-brain", "root", "main") else "bastien-antigravity.squad.chat"
-            payload_data = {
+            payload_data: Dict[str, Any] = {
                 "sender": "user",
                 "session_id": session_id,
                 "content": message,
                 "source_brain_id": brain_id or "obsidian-brain",
                 "reply_topic": target_topic
             }
+            if task_context is not None:
+                payload_data["task_context"] = dict(task_context)
             if hasattr(self, "event_bus") and self.event_bus:
                 await self.event_bus.publish(target_topic, payload_data)
             else:

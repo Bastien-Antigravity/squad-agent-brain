@@ -27,6 +27,7 @@ from os import environ as osEnviron, symlink as osSymlink
 from os.path import relpath as osPathRelpath
 from pathlib import Path as pathPath
 from sys import exit as sysExit
+from typing import Optional as typeOptional
 
 # -----------------------------------------------------------------------------
 
@@ -98,6 +99,45 @@ def _is_core_workspace(target_dir: pathPath, workspace_root: pathPath) -> bool:
         (workspace_root / "microservice-toolbox").exists()
         and target_dir.resolve().is_relative_to(workspace_root.resolve())
     )
+
+# -----------------------------------------------------------------------------------------------
+
+def _is_external_domain_workspace(brain_dir: pathPath, workspace_root: pathPath) -> bool:
+    """
+    Returns True when brain_dir is a pure domain vault inside an external domain workspace
+    container (brain_dir outside Bastien-Antigravity with brain_dir.parent/standalone.yaml
+    existing as a regular non-symlink file).
+    """
+    parent_yaml = brain_dir.parent / "standalone.yaml"
+    return (
+        parent_yaml.is_file()
+        and not parent_yaml.is_symlink()
+        and not _is_core_workspace(brain_dir, workspace_root)
+    )
+
+# -----------------------------------------------------------------------------------------------
+
+def _resolve_brain_name(target_dir: pathPath, brain_name: typeOptional[str] = None) -> str:
+    """
+    Resolves the concrete target knowledge brain directory name for ServiceSpec.DocLink
+    without defaulting blindly to 'obsidian-brain' inside external domain workspaces.
+    """
+    if brain_name:
+        return brain_name
+    if target_dir.parent.name == "06-Microservices":
+        return target_dir.parent.parent.name
+    parent_yaml = target_dir.parent / "standalone.yaml"
+    if parent_yaml.is_file() and not parent_yaml.is_symlink():
+        try:
+            candidates = [
+                d for d in target_dir.parent.iterdir()
+                if d.is_dir() and (d / "06-Microservices").is_dir() and (d / "02-Business-BDD").is_dir()
+            ]
+        except OSError:
+            candidates = []
+        if len(candidates) == 1:
+            return candidates[0].name
+    return "obsidian-brain"
 
 # -----------------------------------------------------------------------------------------------
 
@@ -257,9 +297,18 @@ if (window.BastienMFEElement && typeof window.BastienMFEElement.register === 'fu
 
 # -----------------------------------------------------------------------------
 
-def generate_go_scaffold(target_dir: pathPath, name: str, port: int, desc: str, dry_run: bool, layer: str = "L3") -> None:
+def generate_go_scaffold(
+    target_dir: pathPath,
+    name: str,
+    port: int,
+    desc: str,
+    dry_run: bool,
+    layer: str = "L3",
+    brain_name: typeOptional[str] = None
+) -> None:
     """Generates the Go microservice skeleton and source files."""
     cap_name = name.replace("-", "_")
+    resolved_brain = _resolve_brain_name(target_dir, brain_name)
 
     # 1. cmd/<name>/main.go
     main_go = f"""package main
@@ -348,7 +397,7 @@ func main() {{
 		Description: "{desc}",
 		Protocol:    "HTTP/1.1 REST",
 		Framing:     fmt.Sprintf("Port %d REST", toolbox_spec.ResolveContractPort(addr)),
-		DocLink:     "obsidian-brain/06-Microservices/{name}.md",
+		DocLink:     "{resolved_brain}/06-Microservices/{name}.md",
 		Contracts:   rest.BuildServiceContracts(addr),
 	}})
 
@@ -814,9 +863,18 @@ func TestHandlerContractsAndMFE(t *testing.T) {{
 
 # -----------------------------------------------------------------------------
 
-def generate_rust_scaffold(target_dir: pathPath, name: str, port: int, desc: str, dry_run: bool, layer: str = "L3") -> None:
+def generate_rust_scaffold(
+    target_dir: pathPath,
+    name: str,
+    port: int,
+    desc: str,
+    dry_run: bool,
+    layer: str = "L3",
+    brain_name: typeOptional[str] = None
+) -> None:
     """Generates the Rust microservice skeleton and source files."""
     cap_name = name.replace("-", "_")
+    resolved_brain = _resolve_brain_name(target_dir, brain_name)
 
     # 0. build.rs (Dynamic Versioning Standard from VERSION.txt)
     build_rs = f"""// =============================================================================
@@ -907,7 +965,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {{
         description: "{desc}".to_string(),
         protocol: "SafeSocket TCP / gRPC".to_string(),
         framing: format!("Port {{}}", listen_addr.rsplit(':').next().unwrap_or("")),
-        doc_link: "obsidian-brain/06-Microservices/{name}.md".to_string(),
+        doc_link: "{resolved_brain}/06-Microservices/{name}.md".to_string(),
         contracts: _contracts,
         ..Default::default()
     }};
@@ -1038,9 +1096,18 @@ async fn test_scaffold_initialization() {{
 
 # -----------------------------------------------------------------------------
 
-def generate_python_scaffold(target_dir: pathPath, name: str, port: int, desc: str, dry_run: bool, layer: str = "L3") -> None:
+def generate_python_scaffold(
+    target_dir: pathPath,
+    name: str,
+    port: int,
+    desc: str,
+    dry_run: bool,
+    layer: str = "L3",
+    brain_name: typeOptional[str] = None
+) -> None:
     """Generates the Python microservice skeleton and architecture folders."""
     cap_name = name.replace("-", "_")
+    resolved_brain = _resolve_brain_name(target_dir, brain_name)
 
     # 1. main.py
     main_py = f"""#!/usr/bin/env python
@@ -1133,7 +1200,7 @@ def main():
             description="{desc}",
             protocol="HTTP/1.1 REST",
             framing=framing_label,
-            doc_link="obsidian-brain/06-Microservices/{name}.md",
+            doc_link="{resolved_brain}/06-Microservices/{name}.md",
             contracts=contract_env.get("contracts", []),
         ),
     )
@@ -1450,9 +1517,18 @@ def test_scaffold_initialization():
 
 # -----------------------------------------------------------------------------
 
-def generate_cpp_scaffold(target_dir: pathPath, name: str, port: int, desc: str, dry_run: bool, layer: str = "L3") -> None:
+def generate_cpp_scaffold(
+    target_dir: pathPath,
+    name: str,
+    port: int,
+    desc: str,
+    dry_run: bool,
+    layer: str = "L3",
+    brain_name: typeOptional[str] = None
+) -> None:
     """Generates a C++17 microservice skeleton wired to microservice-toolbox/cpp spec & contracts."""
     cap_name = name.replace("-", "_")
+    resolved_brain = _resolve_brain_name(target_dir, brain_name)
 
     # 1. src/contracts/contracts.hpp
     contracts_hpp = f"""#ifndef {cap_name.upper()}_CONTRACTS_HPP
@@ -1659,7 +1735,7 @@ int main(int argc, char** argv) {{
     spec.description = "{desc}";
     spec.protocol = "TCP Wire";
     spec.framing = "Port %s";
-    spec.docLink = "obsidian-brain/06-Microservices/{name}.md";
+    spec.docLink = "{resolved_brain}/06-Microservices/{name}.md";
     spec.contracts = {cap_name}::contracts::BuildServiceContracts(addr);
 
     // SpecPublisher auto-enriches URL, Framing %s ports, Version (appConfig->GetVersion()), Node, and Health
@@ -1724,11 +1800,18 @@ def generate_common_files(
 
     # Resolve standalone.yaml symlink target dynamically so external L3/L4/L5 repos never get dangling links
     brain_root_candidate = target_dir.parent.parent if target_dir.parent.name == "06-Microservices" else None
+    parent_standalone = target_dir.parent / "standalone.yaml"
     if brain_root_candidate and (
         (brain_root_candidate / "standalone.yaml").exists()
         or (brain_root_candidate / "standalone.yaml").is_symlink()
     ):
         standalone_link_target = "../../standalone.yaml"
+    elif (
+        parent_standalone.is_file()
+        and not parent_standalone.is_symlink()
+        and not _is_core_workspace(target_dir, workspace_root)
+    ):
+        standalone_link_target = "../standalone.yaml"
     else:
         if fleet_mode == "docker":
             cfg_rel_parts = ("docker-deployment", "modes", "docker", "config", "host-bridge.yaml")
@@ -2428,12 +2511,18 @@ def register_sandbox_service(
     layer: str = "L3"
 ) -> None:
     """
-    When operating inside an isolated sandbox brain (where standalone.yaml is a regular
-    file rather than a symlink to live native.yaml), automatically registers the newly
-    scaffolded microservice capability and repository entry in the sandbox brain.
+    When operating inside an isolated sandbox brain or external domain workspace
+    (where standalone.yaml is a regular file at brain_dir or brain_dir.parent),
+    automatically registers the newly scaffolded microservice capability and repository
+    entry in standalone.yaml and 05-Fleet-Operation/00-Repo-Control/{inventory,service-registry}.json.
     """
-    standalone_path = brain_dir / "standalone.yaml"
-    if standalone_path.is_symlink():
+    brain_standalone = brain_dir / "standalone.yaml"
+    workspace_standalone = brain_dir.parent / "standalone.yaml"
+    if brain_standalone.is_file() and not brain_standalone.is_symlink():
+        standalone_path = brain_standalone
+    elif workspace_standalone.is_file() and not workspace_standalone.is_symlink():
+        standalone_path = workspace_standalone
+    else:
         return
     try:
         raw_yaml = standalone_path.read_text(encoding="utf-8")
@@ -2458,7 +2547,7 @@ def register_sandbox_service(
         else:
             raw_yaml = raw_yaml.rstrip() + f"\n\ncapabilities:\n{cap_snippet}"
         standalone_path.write_text(raw_yaml, encoding="utf-8")
-        print(f"  ✅ Registered capability '{cap_name}' (port {port}) in sandbox {standalone_path}")
+        print(f"  ✅ Registered capability '{cap_name}' (port {port}) in {standalone_path}")
 
     repo_ctrl = brain_dir / "05-Fleet-Operation" / "00-Repo-Control"
     inv_file = repo_ctrl / "inventory.json"
@@ -2471,13 +2560,14 @@ def register_sandbox_service(
     if inv_raw:
         try:
             inv_data = jsonLoads(inv_raw)
-            if inv_data.get("isolated_sandbox"):
+            if inv_data.get("isolated_sandbox") or inv_data.get("domain_workspace"):
                 repos = inv_data.setdefault("repositories", [])
                 if not any(r.get("name") == name for r in repos):
                     try:
-                        rel_p = "./" + osPathRelpath(str(target_dir), str(brain_dir))
+                        rel_raw = osPathRelpath(str(target_dir), str(brain_dir))
+                        rel_p = rel_raw if rel_raw.startswith("..") else f"./{rel_raw}"
                     except ValueError:
-                        rel_p = f"./06-Microservices/{name}"
+                        rel_p = f"../{name}" if target_dir.parent == brain_dir.parent else f"./06-Microservices/{name}"
                     repos.append({
                         "name": name,
                         "path": rel_p,
@@ -2547,23 +2637,35 @@ def main() -> None:
 
     workspace_root = resolve_workspace_root()
     if args.brain:
-        brain_dir = pathPath(args.brain).resolve()
+        brain_dir = pathPath(args.brain).expanduser().resolve()
     elif (pathPath.cwd() / "02-Business-BDD").exists() and (pathPath.cwd() / "06-Microservices").exists():
         brain_dir = pathPath.cwd().resolve()
+    elif (pathPath.cwd() / "standalone.yaml").is_file() and not (pathPath.cwd() / "standalone.yaml").is_symlink():
+        child_brains = [
+            d for d in pathPath.cwd().iterdir()
+            if d.is_dir() and (d / "02-Business-BDD").is_dir() and (d / "06-Microservices").is_dir()
+        ]
+        brain_dir = child_brains[0].resolve() if len(child_brains) == 1 else (workspace_root / "obsidian-brain")
     else:
         brain_dir = workspace_root / "obsidian-brain"
 
+    is_external_workspace = _is_external_domain_workspace(brain_dir, workspace_root)
     is_satellite_sandbox = (
-        args.sandbox
-        or brain_dir.name != "obsidian-brain"
-        or (
-            (brain_dir / "standalone.yaml").is_file()
-            and not (brain_dir / "standalone.yaml").is_symlink()
+        not is_external_workspace
+        and (
+            args.sandbox
+            or brain_dir.name != "obsidian-brain"
+            or (
+                (brain_dir / "standalone.yaml").is_file()
+                and not (brain_dir / "standalone.yaml").is_symlink()
+            )
         )
     )
 
     if args.dest:
-        target_dir = pathPath(args.dest).resolve()
+        target_dir = pathPath(args.dest).expanduser().resolve()
+    elif is_external_workspace:
+        target_dir = (brain_dir.parent / name).resolve()
     elif is_satellite_sandbox:
         target_dir = (brain_dir / "06-Microservices" / name).resolve()
     else:
@@ -2578,13 +2680,13 @@ def main() -> None:
 
     # 1. Generate language specific scaffold
     if lang == "go":
-        generate_go_scaffold(target_dir, name, port, desc, dry_run, layer=layer)
+        generate_go_scaffold(target_dir, name, port, desc, dry_run, layer=layer, brain_name=brain_dir.name)
     elif lang == "python":
-        generate_python_scaffold(target_dir, name, port, desc, dry_run, layer=layer)
+        generate_python_scaffold(target_dir, name, port, desc, dry_run, layer=layer, brain_name=brain_dir.name)
     elif lang == "rust":
-        generate_rust_scaffold(target_dir, name, port, desc, dry_run, layer=layer)
+        generate_rust_scaffold(target_dir, name, port, desc, dry_run, layer=layer, brain_name=brain_dir.name)
     elif lang == "cpp":
-        generate_cpp_scaffold(target_dir, name, port, desc, dry_run, layer=layer)
+        generate_cpp_scaffold(target_dir, name, port, desc, dry_run, layer=layer, brain_name=brain_dir.name)
 
     # 2. Generate common ecosystem files
     generate_common_files(target_dir, name, lang, port, desc, dry_run, layer=layer, fleet_mode=args.fleet_mode)
@@ -2592,8 +2694,8 @@ def main() -> None:
     # 3. Generate BDD specification stub & 06-Microservices/<name>.md
     generate_bdd_spec(brain_dir, name, desc, dry_run)
 
-    # 4. Auto-register in sandbox standalone.yaml and inventory if operating in isolated sandbox brain
-    if is_satellite_sandbox:
+    # 4. Auto-register in domain/sandbox standalone.yaml and inventory
+    if is_external_workspace or is_satellite_sandbox:
         register_sandbox_service(brain_dir, target_dir, name, port, dry_run, layer=layer)
 
     cap_name = name.replace("-", "_")

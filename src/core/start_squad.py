@@ -21,7 +21,11 @@ KEY PARAMETERS:
 import sys
 from pathlib import Path
 
-from lib.bootstrap import ensure_virtualenv, prepend_venv_bin, ensure_import_paths, get_venv_python
+try:
+    import src.bootstrap as bootstrap
+    from src.lib.bootstrap import ensure_virtualenv, prepend_venv_bin, ensure_import_paths, get_venv_python
+except ImportError:
+    from lib.bootstrap import ensure_virtualenv, prepend_venv_bin, ensure_import_paths, get_venv_python
 
 # Ensure we are running inside the virtual environment
 script_dir = Path(__file__).resolve().parent
@@ -35,6 +39,7 @@ workspace_root = str(vault_root_path.parent)
 from os import makedirs as osMakedirs, listdir as osListdir, name as osName, getenv as osGetenv, remove as osRemove, \
                environ as osEnviron, chmod as osChmod, walk as osWalk
 from json import dump as jsonDump, load as jsonLoad
+from pathlib import Path as pathPath
 from subprocess import run as subprocessRun
 from os.path import abspath as osPathAbspath, join as osPathJoin, dirname as osPathDirname, exists as osPathExists, \
                     expanduser as osPathExpanduser, isdir as osPathIsdir, basename as osPathBasename, getmtime as osPathGetmtime, \
@@ -42,14 +47,19 @@ from os.path import abspath as osPathAbspath, join as osPathJoin, dirname as osP
 from sys import exit as sysExit, executable as sysExecutable, path as sysPath, stdout as sysStdout
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
+from typing import Any as typeAny, List as typeList, Optional as typeOptional
 
 
 try:
-    from lib.orchestration_lib import get_logger, get_config
+    try:
+        from src.lib.orchestration_lib import get_logger, get_config
+        from src.core.switch_mode import apply_mode_protocol, MODES
+        from src.core.mission_help import MissionHelper
+    except ImportError:
+        from lib.orchestration_lib import get_logger, get_config
+        from switch_mode import apply_mode_protocol, MODES
+        from mission_help import MissionHelper
     logger = get_logger("SquadAgent")
-    
-    from switch_mode import apply_mode_protocol, MODES
-    from mission_help import MissionHelper
 except ImportError:
     print("❌ Error: Could not find required launcher modules in 08-Squad-Agent/")
     sysExit(1)
@@ -432,8 +442,8 @@ def _check_single_repo(repo_info, exclusions):
                     
         if uncommitted:
             return (repo_name, len(uncommitted))
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug(f"SquadAgent : Git status check skipped for {repo_name}: {exc}")
     return None
 
 def check_session_health(mode_choice: str) -> None:
@@ -646,16 +656,16 @@ def unlock_core_kms() -> None:
             dir_path = osPathJoin(root, d)
             try:
                 osChmod(dir_path, 0o755)
-            except Exception:
-                pass
+            except OSError as exc:
+                logger.debug(f"SquadAgent : Could not chmod dir '{dir_path}': {exc}")
         for f in files:
             if f.startswith(".git"):
                 continue
             file_path = osPathJoin(root, f)
             try:
                 osChmod(file_path, 0o644)
-            except Exception:
-                pass
+            except OSError as exc:
+                logger.debug(f"SquadAgent : Could not chmod file '{file_path}': {exc}")
 
 def protect_core_kms() -> None:
     """
@@ -678,16 +688,16 @@ def protect_core_kms() -> None:
             dir_path = osPathJoin(root, d)
             try:
                 osChmod(dir_path, 0o555)
-            except Exception:
-                pass
+            except OSError as exc:
+                logger.debug(f"SquadAgent : Could not protect dir '{dir_path}': {exc}")
         for f in files:
             if f.startswith(".git"):
                 continue
             file_path = osPathJoin(root, f)
             try:
                 osChmod(file_path, 0o444)
-            except Exception:
-                pass
+            except OSError as exc:
+                logger.debug(f"SquadAgent : Could not protect file '{file_path}': {exc}")
 
 def check_rag_attached() -> bool:
     """Returns True if the 09-RAG-Engine exists and a valid server entrypoint is available."""
@@ -817,6 +827,102 @@ def ensure_background_services() -> None:
             logger.warning(f"Tele-Remote binary not found at {tele_bin}")
     else:
         logger.info(f"✅ Tele-Remote is already running on port {tele_port}.")
+
+# -----------------------------------------------------------------------------------------------
+
+_CORE_SQUAD_ROLES = frozenset({
+    "oracle",
+    "orchestrator",
+    "architect",
+    "developer",
+    "qa",
+    "fleetarchitect",
+    "docmaintainer",
+    "fleetcommander",
+    "purger",
+    "sentinel",
+    "docindexer",
+    "codeindexer",
+    "patternsentinel",
+    "prototyper",
+    "debloatsentinel",
+    "autorepair",
+})
+
+
+def discover_domain_agents(
+    *,
+    bus: typeAny,
+    logger: typeAny,
+    central_vault_root: pathPath,
+    central_workspace_root: pathPath,
+    config: typeOptional[typeAny] = None,
+    pg_pool: typeOptional[typeAny] = None,
+) -> typeList[typeAny]:
+    """
+    Discovers external registered domain vaults (via EXTRA_WORKSPACES_DIR, EXTRA_WORKSPACES,
+    and <central_vault_root>/09-RAG-Engine/workspaces.yaml) and instantiates lightweight
+    BaseAgent workers for each custom domain role in <domain_vault>/07-Core-KMS/Role-Prompts/*/Prompt-*.md.
+    """
+    from src.agents.base_agent import BaseAgent, discover_registered_domain_workspaces, slugify_role_name
+
+    active_config = config if config is not None else get_config()
+    domain_entries = discover_registered_domain_workspaces(
+        central_vault_root=pathPath(central_vault_root).resolve(),
+        central_workspace_root=pathPath(central_workspace_root).resolve(),
+        logger=logger,
+    )
+
+    domain_agents: typeList[typeAny] = []
+    seen_pairs = set()
+
+    for entry in domain_entries:
+        brain_id = entry["brain_id"]
+        domain_vault = entry["vault_path"]
+        domain_workspace = entry["workspace_path"]
+        prompts_dir = domain_vault / "07-Core-KMS" / "Role-Prompts"
+        if not prompts_dir.is_dir():
+            continue
+
+        prompt_files: typeList[pathPath] = []
+        try:
+            prompt_files.extend(sorted(prompts_dir.glob("*/Prompt-*.md"), key=lambda p: str(p)))
+            prompt_files.extend(sorted(prompts_dir.glob("Prompt-*.md"), key=lambda p: str(p)))
+        except OSError as exc:
+            logger.warning(f"SquadAgent : Failed scanning domain role prompts in '{prompts_dir}': {exc}")
+            continue
+
+        for prompt_path in prompt_files:
+            if not prompt_path.is_file():
+                continue
+            role_slug = slugify_role_name(prompt_path.stem)
+            if not role_slug or role_slug in _CORE_SQUAD_ROLES:
+                continue
+            pair_key = (brain_id, role_slug)
+            if pair_key in seen_pairs:
+                continue
+            seen_pairs.add(pair_key)
+
+            rel_prompt = str(prompt_path.relative_to(prompts_dir))
+            agent = BaseAgent(
+                role_name=role_slug,
+                prompt_file=rel_prompt,
+                config=active_config,
+                logger=logger,
+                pg_pool=pg_pool,
+                event_bus=bus,
+                target_brain_id=brain_id,
+                domain_vault_root=domain_vault,
+                domain_workspace_root=domain_workspace,
+            )
+            logger.info(
+                f"SquadAgent : Discovered domain agent '{role_slug}' for brain '{brain_id}' "
+                f"subscribed to '{agent.squad_chat_topic}'"
+            )
+            domain_agents.append(agent)
+
+    return domain_agents
+
 
 # -----------------------------------------------------------------------------------------------
 
@@ -967,7 +1073,17 @@ def start_engine() -> None:
             SentinelAgent(config=config, logger=logger, pg_pool=controller.pool, event_bus=event_bus),
             DebloatSentinelAgent(config=config, logger=logger, pg_pool=controller.pool, event_bus=event_bus),
         ]
-        
+
+        domain_agents = discover_domain_agents(
+            bus=event_bus,
+            logger=logger,
+            central_vault_root=vault_root_path,
+            central_workspace_root=pathPath(workspace_root),
+            config=config,
+            pg_pool=controller.pool,
+        )
+        agents.extend(domain_agents)
+
         ready_count = loop.run_until_complete(controller.start_and_supervise_agents(agents))
         logger.info(
             f"Collaborative AI squad: {ready_count}/{len(agents)} agents verified ready and listening."
@@ -1011,8 +1127,8 @@ def main():
             from src.core.controller import CommandController
             ctrl = CommandController(config=bootstrap.config, logger=bootstrap.logger)
             ctrl.dispatch_alert_sync("CRITICAL", f"Squad Agent Daemon crashed: {e}", "squad", "fatal")
-        except Exception:
-            pass
+        except Exception as alert_err:
+            logger.debug(f"SquadAgent : Could not dispatch fatal crash alert: {alert_err}")
         raise
 
 

@@ -492,6 +492,147 @@ class TestScaffoldBrain(unittest.TestCase):
             _register_workspace_with_rag("reg-brain", target_path, mock_logger_offline)
         mock_logger_offline.warning.assert_called()
 
+    def test_workspace_mode_zero_mixing_and_merged_skills(self):
+        """Verifies --workspace creates a clean external domain container with zero 08-Squad-Agent or squad-agent duplication."""
+        import json
+        import subprocess
+        from unittest.mock import patch
+        from src.lifecycle.scaffold_new_brain import destroy_sandbox_brain, main as scaffold_brain_main
+
+        target_name = "trading-brain"
+        ws_dest = self.test_dir / "My-Trading-Workspace"
+        vault_dest = ws_dest / target_name
+
+        # Invoke via CLI main() to verify auto-activation when --dest is outside Bastien-Antigravity and --sandbox is False
+        with patch.object(
+            sys,
+            "argv",
+            [
+                "scaffold_new_brain.py",
+                "--name",
+                target_name,
+                "--dest",
+                str(ws_dest),
+                "--fleet-mode",
+                "local",
+            ],
+        ), patch("src.lifecycle.scaffold_new_brain._register_workspace_with_rag"):
+            scaffold_brain_main()
+
+        # 1. Root workspace files exist and contain zero cross-workspace symlinks
+        for root_file in ("AGENTS.md", "AI-CONTEXT.md", "standalone.yaml", "Makefile", "docker-compose.yaml", "VERSION.txt"):
+            p = ws_dest / root_file
+            self.assertTrue(p.is_file(), f"Workspace root file missing: {root_file}")
+            self.assertFalse(p.is_symlink(), f"Workspace root file must not be a symlink: {root_file}")
+
+        self.assertEqual((ws_dest / "VERSION.txt").read_text(encoding="utf-8").strip(), "0.0.1")
+
+        agents_md = (ws_dest / "AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn("VERSION.txt", agents_md)
+        self.assertIn("microservice-toolbox", agents_md)
+        self.assertIn("ZERO Mixing", agents_md)
+
+        ai_ctx = (ws_dest / "AI-CONTEXT.md").read_text(encoding="utf-8")
+        self.assertIn("@obsidian-brain:orchestrator", ai_ctx)
+        self.assertIn("02-Business-BDD/02-Behavior-Specs", ai_ctx)
+
+        # 2. Concrete standalone.yaml seeded with target_brain_id and local 127.0.0.1
+        standalone_text = (ws_dest / "standalone.yaml").read_text(encoding="utf-8")
+        self.assertIn(f"target_brain_id: ${{TARGET_BRAIN_ID:{target_name}}}", standalone_text)
+        self.assertIn(f"brain_id: ${{TARGET_BRAIN_ID:{target_name}}}", standalone_text)
+        self.assertIn("127.0.0.1", standalone_text)
+
+        # 3. docker-compose.yaml has ZERO squad-agent and ZERO base L1/L2 containers
+        compose_data = yaml.safe_load((ws_dest / "docker-compose.yaml").read_text(encoding="utf-8"))
+        self.assertEqual(compose_data.get("services"), {})
+        self.assertIn("teleremote-network", compose_data.get("networks", {}))
+        self.assertTrue(compose_data["networks"]["teleremote-network"]["external"])
+
+        # 4. Makefile has switch-local / switch-docker / docker-up / docker-down / status and toggles standalone.yaml
+        makefile_text = (ws_dest / "Makefile").read_text(encoding="utf-8")
+        for target in ("switch-local:", "switch-docker:", "docker-up:", "docker-down:", "status:"):
+            self.assertIn(target, makefile_text)
+
+        if shutil.which("make"):
+            subprocess.run(["make", "switch-docker"], cwd=str(ws_dest), check=True, capture_output=True)
+            self.assertIn("127.0.0.2", (ws_dest / "standalone.yaml").read_text(encoding="utf-8"))
+            subprocess.run(["make", "switch-local"], cwd=str(ws_dest), check=True, capture_output=True)
+            self.assertIn("127.0.0.1", (ws_dest / "standalone.yaml").read_text(encoding="utf-8"))
+
+        # 5. Pure domain vault: ZERO 08-Squad-Agent, ZERO central Role-Prompts/Tech-Stack copies
+        self.assertFalse((ws_dest / "08-Squad-Agent").exists())
+        self.assertFalse((vault_dest / "08-Squad-Agent").exists())
+        self.assertFalse((vault_dest / "07-Core-KMS" / "Role-Prompts" / "02-Architect").exists())
+        self.assertEqual(list((vault_dest / "03-Tech-Stack").iterdir()), [])
+
+        for rel_dir in (
+            "00-AI-Orchestration/Config",
+            "01-Strategic-Nexus",
+            "02-Business-BDD/02-Behavior-Specs",
+            "03-Tech-Stack",
+            "04-Rapid-Prototyping/Inbox",
+            "05-Fleet-Operation/00-Repo-Control",
+            "06-Microservices",
+            "11-Code-Doc",
+        ):
+            self.assertTrue((vault_dest / rel_dir).is_dir(), f"Missing domain vault folder: {rel_dir}")
+
+        domain_prompt = vault_dest / "07-Core-KMS/Role-Prompts/20-DomainSpecialist/Prompt-DomainSpecialist.md"
+        self.assertTrue(domain_prompt.is_file())
+        self.assertIn("@obsidian-brain:orchestrator", domain_prompt.read_text(encoding="utf-8"))
+
+        inv_data = json.loads((vault_dest / "05-Fleet-Operation/00-Repo-Control/inventory.json").read_text(encoding="utf-8"))
+        self.assertTrue(inv_data.get("domain_workspace"))
+        self.assertEqual(inv_data.get("repositories"), [])
+        reg_data = json.loads((vault_dest / "05-Fleet-Operation/00-Repo-Control/service-registry.json").read_text(encoding="utf-8"))
+        self.assertEqual(reg_data.get("services"), [])
+
+        # 6. Merged .agents/skills/ contains BOTH central engineering skills and domain skills
+        skills_dir = ws_dest / ".agents" / "skills"
+        self.assertTrue((skills_dir / "domainspecialist" / "SKILL.md").is_file())
+        for core_skill in ("architect", "developer", "orchestrator", "qa", "pythonspecialist", "gospecialist"):
+            self.assertTrue((skills_dir / core_skill / "SKILL.md").is_file(), f"Missing merged core skill: {core_skill}")
+
+        # 7. Clean teardown removes workspace container safely without touching Bastien-Antigravity
+        self.assertFalse(destroy_sandbox_brain("Bastien-Antigravity", self.vault_root.parent, self.vault_root, dry_run=False))
+        self.assertTrue(destroy_sandbox_brain(target_name, ws_dest, self.vault_root, dry_run=False))
+        self.assertFalse(ws_dest.exists())
+
+    def test_convert_agents_external_brain_merge_and_protection(self):
+        """Verifies convert_agents supports arbitrary domain personas, --merge-core, --out, and core protection."""
+        from src.fleet.convert_agents import compile_skills
+
+        ext_ws = self.test_dir / "Ext-Domain-WS"
+        ext_brain = ext_ws / "quant-brain"
+        custom_prompt_dir = ext_brain / "07-Core-KMS" / "Role-Prompts" / "20-TradingStrategist"
+        custom_prompt_dir.mkdir(parents=True, exist_ok=True)
+        (custom_prompt_dir / "Prompt-TradingStrategist.md").write_text(
+            "# Trading Strategist\nDesign alpha strategies.\n",
+            encoding="utf-8",
+        )
+
+        out_skills = ext_ws / ".agents" / "skills"
+        written = compile_skills(
+            brain_dir=str(ext_brain),
+            merge_core=True,
+            out_dir=str(out_skills),
+            skip_workspace_link=True,
+        )
+        self.assertIn("tradingstrategist", written)
+        self.assertIn("architect", written)
+        self.assertTrue((out_skills / "tradingstrategist" / "SKILL.md").is_file())
+        self.assertIn("Design alpha strategies.", (out_skills / "tradingstrategist" / "SKILL.md").read_text(encoding="utf-8"))
+
+        # Safety guard: refusing to overwrite core Bastien-Antigravity/.agents/skills when external --brain is passed
+        core_ws_skills = self.vault_root.parent / ".agents" / "skills"
+        with self.assertRaises(ValueError):
+            compile_skills(
+                brain_dir=str(ext_brain),
+                merge_core=True,
+                out_dir=str(core_ws_skills),
+                skip_workspace_link=True,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
