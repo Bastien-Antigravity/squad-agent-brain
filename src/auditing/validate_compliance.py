@@ -64,6 +64,15 @@ EXCLUDED_DIRS = {
     "obj", "dist", "build", "vendor", ".rag_cache", "__pycache__"
 }
 
+PLATFORM_EXCLUSIVE_MODULES = {
+    "winreg", "msvcrt", "winsound",
+    "fcntl", "termios", "pwd", "grp", "resource", "pty", "syslog",
+}
+
+PLATFORM_EXCLUSIVE_OS_SYMBOLS = {
+    "startfile", "fork", "getuid", "geteuid", "setuid", "killpg", "mkfifo", "waitpid",
+}
+
 # -----------------------------------------------------------------------------
 
 class ComplianceAuditor:
@@ -193,6 +202,156 @@ class ComplianceAuditor:
 
     # -----------------------------------------------------------------------------
 
+    def _audit_dockerenv_prohibited(
+        self,
+        *,
+        file_path: Path,
+        ext: str,
+        content: str,
+        lines: List[str],
+    ) -> List[Dict[str, Any]]:
+        """Flags literal '/.dockerenv' references outside comments and docstrings."""
+        violations: List[Dict[str, Any]] = []
+        target_literal = "/." + "dockerenv"
+        rule_msg = (
+            "Literal reference to '/.dockerenv' is prohibited. "
+            "Check environment variable DOCKER_ENV == \"true\" instead."
+        )
+
+        if target_literal not in content:
+            return violations
+
+        if ext == ".py":
+            try:
+                tree = ast.parse(content, filename=str(file_path))
+                docstring_node_ids = set()
+                for parent in ast.walk(tree):
+                    if isinstance(parent, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+                        if parent.body and isinstance(parent.body[0], ast.Expr):
+                            val = parent.body[0].value
+                            if isinstance(val, ast.Constant) and isinstance(val.value, str):
+                                docstring_node_ids.add(id(val))
+
+                for node in ast.walk(tree):
+                    if (
+                        isinstance(node, ast.Constant)
+                        and isinstance(node.value, str)
+                        and id(node) not in docstring_node_ids
+                        and target_literal in node.value
+                    ):
+                        violations.append({
+                            "file": str(file_path),
+                            "line": node.lineno,
+                            "rule": "DOCKERENV_PROHIBITED",
+                            "message": rule_msg,
+                        })
+                return violations
+            except SyntaxError:
+                pass
+
+        in_block_comment = False
+        for idx, line in enumerate(lines, 1):
+            stripped = line.strip()
+            if ext in (".py", ".sh"):
+                if stripped.startswith("#"):
+                    continue
+                code_part = re.split(r"(?:^|\s)#", line, maxsplit=1)[0]
+                if target_literal in code_part:
+                    violations.append({
+                        "file": str(file_path),
+                        "line": idx,
+                        "rule": "DOCKERENV_PROHIBITED",
+                        "message": rule_msg,
+                    })
+                continue
+
+            # C-family / Go / Rust comment stripping
+            work = line
+            if in_block_comment:
+                if "*/" in work:
+                    work = work.split("*/", 1)[1]
+                    in_block_comment = False
+                else:
+                    continue
+            work = re.sub(r"/\*.*?\*/", "", work)
+            if "/*" in work:
+                work = work.split("/*", 1)[0]
+                in_block_comment = True
+            work = re.sub(r"(?<!:)//.*$", "", work)
+            if target_literal in work:
+                violations.append({
+                    "file": str(file_path),
+                    "line": idx,
+                    "rule": "DOCKERENV_PROHIBITED",
+                    "message": rule_msg,
+                })
+
+        return violations
+
+    # -----------------------------------------------------------------------------
+
+    def _audit_cross_os_top_level_imports(
+        self,
+        *,
+        file_path: Path,
+        content: str,
+    ) -> List[Dict[str, Any]]:
+        """Bans platform-exclusive stdlib imports at module top-level (tree.body)."""
+        violations: List[Dict[str, Any]] = []
+        try:
+            tree = ast.parse(content, filename=str(file_path))
+        except SyntaxError:
+            return violations
+
+        for node in tree.body:
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    parts = alias.name.split(".")
+                    root_mod = parts[0]
+                    is_banned_mod = root_mod in PLATFORM_EXCLUSIVE_MODULES
+                    is_banned_os = root_mod == "os" and len(parts) > 1 and parts[1] in PLATFORM_EXCLUSIVE_OS_SYMBOLS
+                    if is_banned_mod or is_banned_os:
+                        violations.append({
+                            "file": str(file_path),
+                            "line": node.lineno,
+                            "rule": "CROSS_OS_TOP_LEVEL_IMPORT",
+                            "message": (
+                                f"Platform-exclusive top-level import '{alias.name}' breaks cross-OS compatibility. "
+                                f"Defer import inside a platform guard (e.g., if sysPlatform == 'win32':) or function scope."
+                            ),
+                        })
+            elif isinstance(node, ast.ImportFrom):
+                if (node.level or 0) > 0:
+                    continue
+                mod_name = node.module or ""
+                root_mod = mod_name.split(".")[0]
+                if root_mod in PLATFORM_EXCLUSIVE_MODULES:
+                    violations.append({
+                        "file": str(file_path),
+                        "line": node.lineno,
+                        "rule": "CROSS_OS_TOP_LEVEL_IMPORT",
+                        "message": (
+                            f"Platform-exclusive top-level import from '{mod_name}' breaks cross-OS compatibility. "
+                            f"Defer import inside a platform guard (e.g., if sysPlatform == 'win32':) or function scope."
+                        ),
+                    })
+                elif mod_name == "os":
+                    for alias in node.names:
+                        if alias.name in PLATFORM_EXCLUSIVE_OS_SYMBOLS:
+                            violations.append({
+                                "file": str(file_path),
+                                "line": node.lineno,
+                                "rule": "CROSS_OS_TOP_LEVEL_IMPORT",
+                                "message": (
+                                    f"Platform-exclusive top-level import 'from os import {alias.name}' breaks cross-OS compatibility. "
+                                    f"Defer import inside a platform guard (e.g., if sysPlatform == 'win32':) or function scope."
+                                ),
+                            })
+
+        return violations
+
+    # -----------------------------------------------------------------------------
+
     def audit_file(self, file_path: Path, strict_imports: bool = False, strict_lean: bool = False) -> List[Dict[str, Any]]:
         """Audits a single source file and returns a list of detected violations."""
         violations = []
@@ -200,7 +359,7 @@ class ComplianceAuditor:
             return violations
 
         ext = file_path.suffix.lower()
-        if ext not in (".go", ".py", ".rs", ".cpp", ".h", ".hpp"):
+        if ext not in (".go", ".py", ".rs", ".cpp", ".c", ".h", ".hpp", ".sh"):
             return violations
 
         filename = file_path.name
@@ -238,6 +397,29 @@ class ComplianceAuditor:
 
         lines = content.splitlines()
         total_lines = len(lines)
+
+        # Rule A: /.dockerenv is strictly prohibited in non-test source files
+        if not is_test_file:
+            violations.extend(
+                self._audit_dockerenv_prohibited(
+                    file_path=file_path,
+                    ext=ext,
+                    content=content,
+                    lines=lines,
+                )
+            )
+
+        if ext == ".sh":
+            return violations
+
+        # Rule B: Platform-exclusive stdlib imports banned at module top-level in Python
+        if ext == ".py" and not is_test_file:
+            violations.extend(
+                self._audit_cross_os_top_level_imports(
+                    file_path=file_path,
+                    content=content,
+                )
+            )
 
         # 0. Shebang and Encoding Check (All Python files)
         if ext == ".py":

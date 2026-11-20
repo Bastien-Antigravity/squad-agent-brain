@@ -89,18 +89,18 @@ def increment_semver(current_v: str, bump_type: str = "patch") -> str:
 # -----------------------------------------------------------------------------
 
 def get_repo_git_tag(repo_dir: Path) -> str:
-    """Returns the latest Git tag for the repository, or 'none'."""
+    """Returns the latest semver Git tag (v*) for the repository, or 'none'."""
     try:
         res = subprocess.run(
-            ["git", "describe", "--tags", "--abbrev=0"],
+            ["git", "describe", "--tags", "--match", "v*", "--abbrev=0"],
             cwd=repo_dir,
             capture_output=True,
             text=True,
             check=False,
         )
-        tag = res.stdout.strip()
+        tag = res.stdout.strip() if res.returncode == 0 else ""
         return tag if tag else "none"
-    except Exception:
+    except OSError:
         return "none"
 
 # -----------------------------------------------------------------------------
@@ -112,31 +112,31 @@ def inspect_repo_version(repo_dir: Path) -> Dict[str, Optional[str]]:
         "dna_version": None,
         "git_tag": "none",
         "status": "OK",
+        "warning": None,
     }
 
     # 1. VERSION.txt
     v_txt = repo_dir / "VERSION.txt"
-    if v_txt.exists():
-        try:
-            val = v_txt.read_text(encoding="utf-8").strip()
-            result["version_txt"] = val
-        except Exception as e:
-            result["status"] = f"ERR_READ_VERSION_TXT ({e})"
-    else:
+    try:
+        result["version_txt"] = v_txt.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
         result["status"] = "MISSING_VERSION_TXT"
+    except OSError as e:
+        result["status"] = f"ERR_READ_VERSION_TXT ({e})"
 
     # 2. AI-Project-DNA.md
     dna_file = repo_dir / "AI-Project-DNA.md"
-    if dna_file.exists():
-        try:
-            content = dna_file.read_text(encoding="utf-8")
-            m = re.search(r"^-\s*Version:\s*([^\r\n]+)", content, re.MULTILINE)
-            if m:
-                result["dna_version"] = m.group(1).strip()
-        except Exception:
-            pass
+    try:
+        dna_content = dna_file.read_text(encoding="utf-8")
+        m = re.search(r"^-\s*Version:\s*([^\r\n]+)", dna_content, re.MULTILINE)
+        if m:
+            result["dna_version"] = m.group(1).strip()
+    except FileNotFoundError:
+        dna_content = ""
+    except OSError as e:
+        result["warning"] = f"ERR_READ_DNA ({e})"
 
-    # 3. Git tag
+    # 3. Git tag (semver v* only; restore/* tags never shadow releases)
     result["git_tag"] = get_repo_git_tag(repo_dir)
 
     # 4. Status determination
@@ -150,6 +150,18 @@ def inspect_repo_version(repo_dir: Path) -> Dict[str, Optional[str]]:
         if result["dna_version"] and result["version_txt"]:
             if result["dna_version"] != result["version_txt"]:
                 result["status"] = "DNA_DRIFT"
+
+    if (
+        result["git_tag"]
+        and result["git_tag"] != "none"
+        and result["version_txt"]
+        and result["git_tag"] != f"v{result['version_txt']}"
+    ):
+        result["warning"] = (
+            f"TAG_DRIFT: git tag '{result['git_tag']}' != expected 'v{result['version_txt']}'"
+        )
+        if result["status"] == "OK":
+            result["status"] = "TAG_DRIFT"
 
     return result
 
@@ -175,8 +187,13 @@ def update_repo_version(
     v_txt.write_text(f"{new_version}\n", encoding="utf-8")
 
     # 2. Update AI-Project-DNA.md if present
-    if dna_file.exists():
+    dna_updated = False
+    try:
         content = dna_file.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        content = ""
+
+    if content:
         # Replace '- Version: ...'
         updated = re.sub(
             r"^(-\s*Version:\s*)([^\r\n]+)",
@@ -191,12 +208,13 @@ def update_repo_version(
             updated,
         )
         dna_file.write_text(updated, encoding="utf-8")
+        dna_updated = True
 
     # 3. Git commit & tag if requested
     if git_commit and (repo_dir / ".git").exists():
         try:
             subprocess.run(["git", "add", "VERSION.txt"], cwd=repo_dir, check=True)
-            if dna_file.exists():
+            if dna_updated:
                 subprocess.run(["git", "add", "AI-Project-DNA.md"], cwd=repo_dir, check=True)
             
             commit_msg = f"chore(release): bump version to v{new_version}"
@@ -279,8 +297,8 @@ def run_status_or_check(targets: List[Tuple[str, Path]], is_check: bool = False)
 
         if status == "OK":
             status_display = f"{C_GREEN}✅ OK{C_RESET}"
-        elif status == "DNA_DRIFT":
-            status_display = f"{C_YELLOW}⚠️ DNA_DRIFT{C_RESET}"
+        elif status in ("DNA_DRIFT", "TAG_DRIFT"):
+            status_display = f"{C_YELLOW}⚠️ {status}{C_RESET}"
             all_ok = False
         else:
             status_display = f"{C_RED}❌ {status}{C_RESET}"

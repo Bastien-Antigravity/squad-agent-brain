@@ -20,14 +20,14 @@ KEY PARAMETERS:
 - dry_run: Simulate operations without modifying repositories.
 """
 
-import os
-import sys
-import shlex
-import argparse
-import subprocess
-from pathlib import Path
-from typing import List, Dict, Optional, Tuple, Any, Union
+from argparse import ArgumentParser as argparseArgumentParser
 from json import load as jsonLoad
+from os.path import join as osPathJoin
+from pathlib import Path as pathlibPath
+from shlex import split as shlexSplit
+from subprocess import CalledProcessError as subprocessCalledProcessError, run as subprocessRun
+from sys import executable as sysExecutable, exit as sysExit
+from typing import Any as typeAny, Dict as typeDict, List as typeList, Optional as typeOptional, Tuple as typeTuple, Union as typeUnion
 
 from lib.orchestration_lib import setup_terminal, get_logger, resolve_vault_and_workspace, resolve_active_workspaces
 
@@ -51,19 +51,20 @@ class FleetCommander:
     def __init__(
         self,
         base_path: str,
-        config: Optional[object] = None,
-        logger: Optional[object] = None,
+        config: typeOptional[object] = None,
+        logger: typeOptional[object] = None,
         dry_run: bool = False,
-        target_repo: Optional[str] = None,
+        target_repo: typeOptional[str] = None,
         is_fleet: bool = False,
-        commit_msg: Optional[str] = None,
-        tag: Optional[str] = None,
+        commit_msg: typeOptional[str] = None,
+        tag: typeOptional[str] = None,
+        allow_tag_mismatch: bool = False,
     ) -> None:
         self.config = config
         self.logger = logger or get_logger(self.Name)
         self.base_path: str = base_path
         self.dry_run: bool = dry_run
-        self.engine = Sovereignty(workspace_root=Path(self.base_path)) if Sovereignty else None
+        self.engine = Sovereignty(workspace_root=pathlibPath(self.base_path)) if Sovereignty else None
         self.excluded_repos = set()
 
         vault_root, workspace_root = resolve_vault_and_workspace(__file__)
@@ -71,7 +72,7 @@ class FleetCommander:
         self.workspace_root = workspace_root
 
         self.inventory_path = self.vault_root / "05-Fleet-Operation" / "00-Repo-Control" / "inventory.json"
-        self.repo_name_to_path: Dict[str, str] = {}
+        self.repo_name_to_path: typeDict[str, str] = {}
         all_repos = self._load_inventory()
 
         if target_repo:
@@ -79,7 +80,7 @@ class FleetCommander:
                 active_names = self._resolve_active_workspaces()
                 self.repos = [
                     p for name, p in self.repo_name_to_path.items()
-                    if name in active_names or Path(p).name in active_names
+                    if name in active_names or pathlibPath(p).name in active_names
                 ]
                 self.single_mode = False
             else:
@@ -94,17 +95,18 @@ class FleetCommander:
             active_names = self._resolve_active_workspaces()
             matched = [
                 p for name, p in self.repo_name_to_path.items()
-                if name in active_names or Path(p).name in active_names
+                if name in active_names or pathlibPath(p).name in active_names
             ]
             self.repos = matched if matched else all_repos
             self.single_mode = False
 
         self.commit_msg: str = commit_msg or "chore(fleet): standardized fleet operation"
-        self.tag: Optional[str] = tag
+        self.tag: typeOptional[str] = tag
+        self.allow_tag_mismatch: bool = allow_tag_mismatch
 
     # -----------------------------------------------------------------------------------------------
 
-    def _load_inventory(self) -> List[str]:
+    def _load_inventory(self) -> typeList[str]:
         """Loads repository paths from inventory.json and populates compliance exclusions."""
         if not self.inventory_path.exists():
             self._log(f"Inventory not found at {self.inventory_path}", "error")
@@ -135,7 +137,7 @@ class FleetCommander:
     # -----------------------------------------------------------------------------------------------
 
     def _resolve_active_workspaces(self) -> set:
-        return resolve_active_workspaces(Path(self.workspace_root))
+        return resolve_active_workspaces(pathlibPath(self.workspace_root))
 
     # -----------------------------------------------------------------------------------------------
 
@@ -148,19 +150,19 @@ class FleetCommander:
     def _step(self, repo: str, action: str) -> None:
         print(f"    {repo.ljust(35)} | {action}...")
 
-    def _run_command(self, cmd: Union[str, List[str]], cwd: str) -> Tuple[str, Optional[str]]:
+    def _run_command(self, cmd: typeUnion[str, typeList[str]], cwd: str) -> typeTuple[str, typeOptional[str]]:
         """
         Executes a command without shell interpolation and returns (stdout, error).
         Any non-zero exit code guarantees a non-empty error string (never None).
         """
         try:
-            cmd_list = shlex.split(cmd) if isinstance(cmd, str) else list(cmd)
-            result = subprocess.run(
+            cmd_list = shlexSplit(cmd) if isinstance(cmd, str) else list(cmd)
+            result = subprocessRun(
                 cmd_list, cwd=cwd, shell=False,
                 capture_output=True, text=True, check=True
             )
             return result.stdout.strip(), None
-        except subprocess.CalledProcessError as e:
+        except subprocessCalledProcessError as e:
             stdout_str = (e.stdout or "").strip()
             stderr_str = (e.stderr or "").strip()
             err_msg = stderr_str or stdout_str or f"Command failed with exit code {e.returncode}"
@@ -170,7 +172,7 @@ class FleetCommander:
 
     # -----------------------------------------------------------------------------------------------
 
-    def _audit_worktree_safety(self, repo_path: Path, repo_name: str, status_out: str) -> bool:
+    def _audit_worktree_safety(self, repo_path: pathlibPath, repo_name: str, status_out: str) -> bool:
         """
         Audits modified and untracked files in git status --porcelain before staging
         to prevent accidental commits of .env files, private keys, or credentials.
@@ -191,7 +193,7 @@ class FleetCommander:
             if " -> " in rel_path:
                 rel_path = rel_path.split(" -> ", 1)[1].strip()
             rel_path = rel_path.strip('"')
-            path_obj = Path(rel_path)
+            path_obj = pathlibPath(rel_path)
             fname_lower = path_obj.name.lower()
 
             if (
@@ -215,8 +217,8 @@ class FleetCommander:
                             "error"
                         )
                         return False
-                except OSError:
-                    pass
+                except OSError as e:
+                    self._log(f"[{repo_name}] Unable to inspect '{rel_path}': {e}", "warning")
 
         return True
 
@@ -224,7 +226,7 @@ class FleetCommander:
     # COMPLIANCE AUDITS
     # -----------------------------------------------------------------------------------------------
 
-    def audit_docs(self, repo_path: Path, repo_name: str) -> bool:
+    def audit_docs(self, repo_path: pathlibPath, repo_name: str) -> bool:
         if not self.engine:
             return True
         self._step(repo_name, "Auditing documentation")
@@ -256,13 +258,13 @@ class FleetCommander:
 
         return success
 
-    def audit_isolation_zone(self, repo_path: Path, repo_name: str) -> bool:
+    def audit_isolation_zone(self, repo_path: pathlibPath, repo_name: str) -> bool:
         if not self.engine:
             return True
         self._step(repo_name, "Auditing isolation zone compliance")
         return self.engine.validate_isolation_zone(repo_path, repo_name)
 
-    def validate_architecture(self, repo_path: Path, repo_name: str) -> bool:
+    def validate_architecture(self, repo_path: pathlibPath, repo_name: str) -> bool:
         self._step(repo_name, "Validating fleet architecture rules")
         workflow_dir = repo_path / ".github" / "workflows"
         if not workflow_dir.exists():
@@ -279,8 +281,8 @@ class FleetCommander:
                     if "Sync-ID:" not in content:
                         self._log(f"[{repo_name}] Workflow {wf.name} missing Sync-ID.", "error")
                         return False
-            except Exception:
-                pass
+            except OSError as e:
+                self._log(f"[{repo_name}] Unable to read workflow {wf.name}: {e}", "warning")
         return True
 
     # -----------------------------------------------------------------------------------------------
@@ -294,8 +296,8 @@ class FleetCommander:
         print("=" * 80)
 
         for repo in self.repos:
-            repo_path_str = os.path.join(self.base_path, repo)
-            repo_path = Path(repo_path_str)
+            repo_path_str = osPathJoin(self.base_path, repo)
+            repo_path = pathlibPath(repo_path_str)
             repo_name = repo_path.name
 
             if not repo_path.exists():
@@ -331,8 +333,8 @@ class FleetCommander:
         results = []
 
         for repo in self.repos:
-            repo_path_str = os.path.join(self.base_path, repo)
-            repo_path = Path(repo_path_str)
+            repo_path_str = osPathJoin(self.base_path, repo)
+            repo_path = pathlibPath(repo_path_str)
             name = repo_path.name
 
             if not repo_path.exists() or not (repo_path / ".git").exists():
@@ -393,7 +395,7 @@ class FleetCommander:
     # COMMAND 3: VAULT-SYNC
     # -----------------------------------------------------------------------------------------------
 
-    def execute_vault_sync(self, commit_msg: Optional[str] = None) -> None:
+    def execute_vault_sync(self, commit_msg: typeOptional[str] = None) -> None:
         """Performs atomic synchronization across all obsidian-brain submodules and parent pointer."""
         msg = commit_msg or self.commit_msg or "chore(vault): atomic sync via Fleet Commander"
         obsidian_dir = self.workspace_root / "obsidian-brain"
@@ -482,24 +484,64 @@ class FleetCommander:
     # COMMAND 4: PUSH (With Full Compliance Audits)
     # -----------------------------------------------------------------------------------------------
 
+    def _validate_tag_matches_version(self, *, repo_path: pathlibPath) -> typeOptional[str]:
+        """Validates that self.tag matches VERSION.txt (v<semver>) when VERSION.txt exists."""
+        if not self.tag or self.allow_tag_mismatch:
+            return None
+
+        version_file = repo_path / "VERSION.txt"
+        try:
+            version_txt = version_file.read_text(encoding="utf-8").strip()
+        except FileNotFoundError:
+            return None
+        except OSError as e:
+            return f"Failed to read VERSION.txt: {e}"
+
+        if not version_txt:
+            return f"Empty VERSION.txt cannot match tag '{self.tag}'"
+
+        expected_tag = f"v{version_txt}"
+        if self.tag != expected_tag:
+            return (
+                f"Tag mismatch: --tag '{self.tag}' != expected '{expected_tag}' "
+                f"from VERSION.txt ({version_txt}). Pass --force-tag to override."
+            )
+        return None
+
+    # -----------------------------------------------------------------------------------------------
+
     def execute_fleet_push(self) -> None:
         """Main execution loop for mass git operations with Sovereignty compliance audits."""
         mode_str = " (DRY RUN MODE)" if self.dry_run else ""
         scope_str = "Single Repo" if self.single_mode else "Mass Push"
         self._log(f"Starting {scope_str} Operation{mode_str} ---", "info")
 
+        if self.tag:
+            if self.allow_tag_mismatch:
+                self._log(
+                    f"Override enabled (--force-tag): bypassing VERSION.txt parity check for tag '{self.tag}'.",
+                    "warning",
+                )
+            else:
+                for repo in self.repos:
+                    repo_path = pathlibPath(osPathJoin(self.base_path, repo))
+                    mismatch_err = self._validate_tag_matches_version(repo_path=repo_path)
+                    if mismatch_err:
+                        self._log(f"[{repo_path.name}] {mismatch_err}", "error")
+                        raise ValueError(f"[{repo_path.name}] {mismatch_err}")
+
         # Automatically trigger housekeeping only when NOT in dry-run mode
         if not self.dry_run:
             try:
                 log_archiver = self.vault_root / "05-Fleet-Operation" / "02-Deployment-Logs" / "archive.py"
                 if log_archiver.exists():
-                    self._run_command([sys.executable, str(log_archiver)], self.base_path)
+                    self._run_command([sysExecutable, str(log_archiver)], self.base_path)
 
                 plan_archiver = self.vault_root / "05-Fleet-Operation" / "01-Fleet-Action-Plans" / "archive.py"
                 if plan_archiver.exists():
-                    self._run_command([sys.executable, str(plan_archiver)], self.base_path)
-            except Exception:
-                pass
+                    self._run_command([sysExecutable, str(plan_archiver)], self.base_path)
+            except Exception as e:
+                self._log(f"Housekeeping archive execution skipped: {e}", "warning")
         else:
             self._log("[DRY RUN] Skipping housekeeping archive script execution.", "info")
 
@@ -508,11 +550,11 @@ class FleetCommander:
             self._log(f"Git not found! {err}", "error")
             return
 
-        results: List[str] = []
+        results: typeList[str] = []
 
         for repo in self.repos:
-            repo_path_str = os.path.join(self.base_path, repo)
-            repo_path = Path(repo_path_str)
+            repo_path_str = osPathJoin(self.base_path, repo)
+            repo_path = pathlibPath(repo_path_str)
             name = repo_path.name
             self._log(f"Processing repository: {repo}", "info")
 
@@ -625,7 +667,7 @@ class FleetCommander:
 # -----------------------------------------------------------------------------------------------
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="FleetCommander - Unified Fleet Git & Compliance Operations")
+    parser = argparseArgumentParser(description="FleetCommander - Unified Fleet Git & Compliance Operations")
     parser.add_argument(
         "action",
         nargs="?",
@@ -638,6 +680,7 @@ def main() -> None:
     parser.add_argument("--fleet", action="store_true", help="Explicitly target the entire fleet")
     parser.add_argument("--message", "-m", type=str, help="Commit message")
     parser.add_argument("--tag", "-t", type=str, help="Attach a Git tag to the commit and push it")
+    parser.add_argument("--force-tag", action="store_true", help="Allow --tag to differ from VERSION.txt (v<semver>)")
 
     args = parser.parse_args()
 
@@ -651,6 +694,7 @@ def main() -> None:
         is_fleet=args.fleet,
         commit_msg=args.message,
         tag=args.tag,
+        allow_tag_mismatch=args.force_tag,
     )
 
     if args.action == "status":
@@ -660,7 +704,10 @@ def main() -> None:
     elif args.action == "vault-sync":
         commander.execute_vault_sync(commit_msg=args.message)
     elif args.action == "push":
-        commander.execute_fleet_push()
+        try:
+            commander.execute_fleet_push()
+        except ValueError:
+            sysExit(1)
 
 
 if __name__ == "__main__":

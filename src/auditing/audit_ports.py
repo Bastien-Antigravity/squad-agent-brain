@@ -29,7 +29,7 @@ import sys
 import json
 import re
 from pathlib import Path
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Optional, Tuple
 import yaml
 
 try:
@@ -52,6 +52,14 @@ logger = get_logger("AuditPorts")
 
 # -----------------------------------------------------------------------------------------------
 
+PORT_KEYS = ("port", "grpc_port", "rest_port", "dashboard_port")
+ALLOWED_PORT_ALIAS_PAIRS = {
+    frozenset(("port", "mcp.port")),
+    frozenset(("dashboard_port", "dashboard.port")),
+}
+
+# -----------------------------------------------------------------------------------------------
+
 def parse_env_default(val: Any) -> int:
     """Extracts numeric port default from '${VAR:DEFAULT}', '${VAR:-DEFAULT}' or raw int/str."""
     if val is None:
@@ -65,54 +73,94 @@ def parse_env_default(val: Any) -> int:
         return int(s)
     return 0
 
+def extract_capability_ports(cap_data: Dict[str, Any]) -> Dict[str, int]:
+    """Extracts all declared numeric ports from a single capability block."""
+    ports: Dict[str, int] = {}
+    for k in PORT_KEYS:
+        if k in cap_data:
+            p = parse_env_default(cap_data[k])
+            if p > 0:
+                ports[k] = p
+
+    if "mcp" in cap_data and isinstance(cap_data["mcp"], dict) and "port" in cap_data["mcp"]:
+        p = parse_env_default(cap_data["mcp"]["port"])
+        if p > 0:
+            ports["mcp.port"] = p
+    if "dashboard" in cap_data and isinstance(cap_data["dashboard"], dict) and "port" in cap_data["dashboard"]:
+        p = parse_env_default(cap_data["dashboard"]["port"])
+        if p > 0:
+            ports["dashboard.port"] = p
+
+    return ports
+
+def load_yaml_capabilities(yaml_path: Path) -> Dict[str, Dict[str, int]]:
+    """Loads port mappings from capabilities and top-level service blocks in a YAML file."""
+    with open(yaml_path, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+
+    if not isinstance(data, dict):
+        return {}
+
+    result: Dict[str, Dict[str, int]] = {}
+    caps = data.get("capabilities", {})
+    if isinstance(caps, dict):
+        for cap_name, cap_data in caps.items():
+            if not isinstance(cap_data, dict):
+                continue
+            ports = extract_capability_ports(cap_data)
+            if ports:
+                result[cap_name] = ports
+
+    # Also inspect top-level service blocks (e.g. config_server in config-server.yaml, nats in nats.yaml)
+    for key, val in data.items():
+        if key in ("common", "local", "capabilities") or not isinstance(val, dict):
+            continue
+        ports = extract_capability_ports(val)
+        if ports and key not in result:
+            result[key] = ports
+
+    return result
+
+def check_intra_service_port_uniqueness(rel_label: str, yaml_caps: Dict[str, Dict[str, int]]) -> List[str]:
+    """Verifies all declared ports within each capability block are mutually distinct."""
+    violations: List[str] = []
+    for cap_name, ports in yaml_caps.items():
+        items = list(ports.items())
+        for idx in range(len(items)):
+            k1, p1 = items[idx]
+            for jdx in range(idx + 1, len(items)):
+                k2, p2 = items[jdx]
+                if p1 == p2 and frozenset((k1, k2)) not in ALLOWED_PORT_ALIAS_PAIRS:
+                    violations.append(
+                        f"COLLISION: {rel_label} -> {cap_name} declares duplicate port {p1} "
+                        f"for '{k1}' and '{k2}'"
+                    )
+    return violations
+
 def load_ssot_capabilities(workspace_root: Path) -> Dict[str, Dict[str, int]]:
     """Loads authoritative port mappings from native.yaml."""
     native_yaml_path = workspace_root / "docker-deployment" / "modes" / "local" / "config" / "native.yaml"
     if not native_yaml_path.exists():
         raise FileNotFoundError(f"Authoritative SSoT file not found: {native_yaml_path}")
-    
-    with open(native_yaml_path, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f)
-    
-    caps = data.get("capabilities", {})
-    ssot = {}
-    for cap_name, cap_data in caps.items():
-        if not isinstance(cap_data, dict):
-            continue
-        ports = {}
-        for k in ["port", "grpc_port", "rest_port"]:
-            if k in cap_data:
-                p = parse_env_default(cap_data[k])
-                if p > 0:
-                    ports[k] = p
-        
-        # Sub-sections like mcp or dashboard
-        if "mcp" in cap_data and isinstance(cap_data["mcp"], dict) and "port" in cap_data["mcp"]:
-            p = parse_env_default(cap_data["mcp"]["port"])
-            if p > 0:
-                ports["mcp_port"] = p
-        if "dashboard" in cap_data and isinstance(cap_data["dashboard"], dict) and "port" in cap_data["dashboard"]:
-            p = parse_env_default(cap_data["dashboard"]["port"])
-            if p > 0:
-                ports["dashboard_port"] = p
-                
-        if ports:
-            ssot[cap_name] = ports
-            
-    return ssot
+    return load_yaml_capabilities(native_yaml_path)
 
-def load_compose_ports(workspace_root: Path) -> Dict[str, List[int]]:
-    """Loads port bindings and env defaults from docker-compose.yaml."""
-    compose_path = workspace_root / "docker-deployment" / "docker-compose.yaml"
-    if not compose_path.exists():
+def load_compose_ports(
+    workspace_root: Path,
+    compose_rel_path: str = "docker-deployment/docker-compose.yaml",
+) -> Dict[str, List[int]]:
+    """Loads port bindings and env defaults from a docker-compose.yaml file."""
+    compose_path = workspace_root / compose_rel_path
+    try:
+        with open(compose_path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    except FileNotFoundError:
         return {}
-        
-    with open(compose_path, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f)
-        
+
     services = data.get("services", {})
     compose_ports = {}
     for svc_name, svc_data in services.items():
+        if not isinstance(svc_data, dict):
+            continue
         ports_list = []
         for port_entry in svc_data.get("ports", []):
             # Remove IPv4 addresses to avoid matching octets like 127
@@ -154,19 +202,55 @@ def load_registry_ports(vault_root: Path) -> Tuple[Path, Dict[str, Any], Dict[st
 
 # -----------------------------------------------------------------------------------------------
 
-def audit_ports(auto_sync: bool = False) -> Tuple[str, List[str]]:
+def _collect_yaml_audit_targets(workspace_root: Path) -> List[Tuple[str, Path]]:
+    """Collects all YAML configuration slices to audit for drift and port collisions."""
+    targets: List[Tuple[str, Path]] = []
+    fixed_paths = [
+        "docker-deployment/modes/local/config/native.yaml",
+        "docker-deployment/modes/docker/config/host-bridge.yaml",
+    ]
+    for rel in fixed_paths:
+        p = workspace_root / rel
+        if p.exists():
+            targets.append((rel, p))
+
+    glob_dirs = [
+        "docker-deployment/modes/docker/config/services",
+        "docker-deployment/modes/production/config/services",
+    ]
+    for rel_dir in glob_dirs:
+        d = workspace_root / rel_dir
+        if d.is_dir():
+            for yaml_file in sorted(d.glob("*.yaml")):
+                targets.append((f"{rel_dir}/{yaml_file.name}", yaml_file))
+
+    return targets
+
+# -----------------------------------------------------------------------------------------------
+
+def audit_ports(
+    auto_sync: bool = False,
+    *,
+    workspace_root: Optional[Path] = None,
+    vault_root: Optional[Path] = None,
+) -> Tuple[str, List[str]]:
     """
-    Executes mechanical 4-layer port drift audit.
+    Executes mechanical multi-layer port drift and intra-service uniqueness audit.
     Returns: (status: GREEN | YELLOW | RED, list of diagnostic messages)
     """
+    ws_root = workspace_root or WORKSPACE_ROOT
+    v_root = vault_root or VAULT_ROOT
     messages = []
     has_critical_drift = False
     has_warning = False
-    
+
     try:
-        ssot = load_ssot_capabilities(WORKSPACE_ROOT)
-        compose = load_compose_ports(WORKSPACE_ROOT)
-        reg_path, raw_registry, registry = load_registry_ports(VAULT_ROOT)
+        ssot = load_ssot_capabilities(ws_root)
+        compose_files = {
+            "docker-deployment/docker-compose.yaml": load_compose_ports(ws_root, "docker-deployment/docker-compose.yaml"),
+            "docker-deployment/modes/docker/docker-compose.yaml": load_compose_ports(ws_root, "docker-deployment/modes/docker/docker-compose.yaml"),
+        }
+        reg_path, raw_registry, registry = load_registry_ports(v_root)
     except Exception as e:
         return "RED", [f"Failed to load architectural configuration files: {e}"]
 
@@ -182,7 +266,7 @@ def audit_ports(auto_sync: bool = False) -> Tuple[str, List[str]]:
         "timescale_db": "timescale-db",
         "rag_engine": "rag-engine",
     }
-    
+
     registry_modified = False
 
     for cap_name, target_name in service_map.items():
@@ -190,15 +274,15 @@ def audit_ports(auto_sync: bool = False) -> Tuple[str, List[str]]:
             messages.append(f"⚠️ Capability '{cap_name}' missing from native.yaml SSoT.")
             has_warning = True
             continue
-            
+
         ssot_ports = ssot[cap_name]
         main_port = ssot_ports.get("port", 0)
         # For watchdog-agent, the primary application API is rest_port
         if cap_name == "watchdog_agent":
             main_port = ssot_ports.get("rest_port", 9095)
         elif cap_name == "rag_engine":
-            main_port = ssot_ports.get("mcp_port", 8090)
-            
+            main_port = ssot_ports.get("mcp.port", ssot_ports.get("port", 8090))
+
         # 1. Audit Layer 3: service-registry.json
         if target_name in registry:
             reg_entry = registry[target_name]
@@ -212,7 +296,7 @@ def audit_ports(auto_sync: bool = False) -> Tuple[str, List[str]]:
                         if app.get("name") == target_name:
                             app["default_port"] = main_port
                             registry_modified = True
-            
+
             # Check gRPC port if defined in SSoT
             if "grpc_port" in ssot_ports:
                 ssot_grpc = ssot_ports["grpc_port"]
@@ -226,7 +310,7 @@ def audit_ports(auto_sync: bool = False) -> Tuple[str, List[str]]:
                             if app.get("name") == target_name:
                                 app["grpc_port"] = ssot_grpc
                                 registry_modified = True
-                                
+
             # Check REST port if defined in SSoT
             if "rest_port" in ssot_ports:
                 ssot_rest = ssot_ports["rest_port"]
@@ -244,13 +328,37 @@ def audit_ports(auto_sync: bool = False) -> Tuple[str, List[str]]:
             messages.append(f"⚠️ Service '{target_name}' not defined in service-registry.json.")
             has_warning = True
 
-        # 2. Audit Layer 2: docker-compose.yaml
-        if target_name in compose and target_name != "watchdog-agent":
-            c_ports = compose[target_name]
-            if main_port not in c_ports:
-                msg = f"DRIFT: {target_name} main port {main_port} not exposed in docker-compose.yaml (has: {c_ports})"
-                messages.append(msg)
-                has_critical_drift = True
+        # 2. Audit Layer 2: docker-compose manifests
+        for compose_label, compose_map in compose_files.items():
+            if target_name in compose_map and target_name != "watchdog-agent":
+                c_ports = compose_map[target_name]
+                if main_port not in c_ports:
+                    msg = f"DRIFT: {target_name} main port {main_port} not exposed in {compose_label} (has: {c_ports})"
+                    messages.append(msg)
+                    has_critical_drift = True
+
+    # 3. Audit all YAML config slices for intra-service port uniqueness & SSoT parity
+    yaml_targets = _collect_yaml_audit_targets(ws_root)
+    for rel_label, yaml_path in yaml_targets:
+        yaml_caps = load_yaml_capabilities(yaml_path)
+        collision_msgs = check_intra_service_port_uniqueness(rel_label, yaml_caps)
+        if collision_msgs:
+            messages.extend(collision_msgs)
+            has_critical_drift = True
+
+        if rel_label == "docker-deployment/modes/local/config/native.yaml":
+            continue
+
+        for cap_name, cap_ports in yaml_caps.items():
+            if cap_name not in ssot:
+                continue
+            ssot_cap = ssot[cap_name]
+            for port_key, port_val in cap_ports.items():
+                if port_key in ssot_cap and ssot_cap[port_key] != port_val:
+                    messages.append(
+                        f"DRIFT: {rel_label} -> {cap_name}.{port_key} ({port_val}) != native.yaml ({ssot_cap[port_key]})"
+                    )
+                    has_critical_drift = True
 
     # Save registry if auto-synced
     if registry_modified and auto_sync:
@@ -263,8 +371,11 @@ def audit_ports(auto_sync: bool = False) -> Tuple[str, List[str]]:
         return "RED", messages
     elif has_warning:
         return "YELLOW", messages
-        
-    messages.append(f"Zero drift detected across all {len(service_map)} core capabilities and architectural layers.")
+
+    messages.append(
+        f"Zero drift detected across all {len(service_map)} core capabilities, "
+        f"{len(yaml_targets)} YAML slices, and compose manifests."
+    )
     return "GREEN", messages
 
 # -----------------------------------------------------------------------------------------------
