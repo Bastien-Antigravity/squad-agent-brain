@@ -45,6 +45,10 @@ RUN grep -v "git+https://github.com/Bastien-Antigravity" requirements.txt > /tmp
 # Copy service source code
 COPY . .
 
+# Preload libunilog.so to prevent static TLS block exhaustion in glibc dlopen
+ENV LD_PRELOAD=/usr/local/lib/libunilog.so
+ENV LIBUNILOG_PATH=/usr/local/lib/libunilog.so
+
 # Set entrypoint
 ENTRYPOINT ["python", "main.py"]
 CMD ["squad-agent", "--daemon"]
