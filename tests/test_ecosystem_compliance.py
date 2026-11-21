@@ -99,6 +99,67 @@ def do_work():
         rules = [v["rule"] for v in violations]
         self.assertIn("BARE_PRINT_PRODUCTION", rules)
 
+    def test_catches_local_go_replace_pollution(self):
+        """Verifies that local filesystem replace directives in go.mod are flagged."""
+        bad_mod = self.test_dir / "go.mod"
+        bad_mod.write_text("""module github.com/Bastien-Antigravity/test-service
+
+go 1.25
+
+require (
+	github.com/Bastien-Antigravity/microservice-toolbox v0.0.1
+)
+
+replace (
+	github.com/Bastien-Antigravity/microservice-toolbox => ../microservice-toolbox
+)
+""")
+        violations = self.auditor.audit_file(bad_mod)
+        rules = [v["rule"] for v in violations]
+        self.assertIn("GO_LOCAL_REPLACE_POLLUTION", rules)
+
+    def test_passes_clean_go_mod_and_version_replace(self):
+        """Verifies that clean go.mod and non-local version replaces pass compliance."""
+        clean_mod = self.test_dir / "go.mod"
+        clean_mod.write_text("""module github.com/Bastien-Antigravity/test-service
+
+go 1.25
+
+require (
+	github.com/Bastien-Antigravity/microservice-toolbox v0.0.1
+)
+
+replace github.com/spf13/viper => github.com/spf13/viper v1.21.0
+""")
+        violations = self.auditor.audit_file(clean_mod)
+        self.assertEqual(violations, [])
+
+    def test_fix_go_mod_strips_local_replace_and_preserves_version_replace(self):
+        """Verifies that fix_go_mod strips local replaces while preserving version pinning."""
+        target_mod = self.test_dir / "go.mod"
+        target_mod.write_text("""module github.com/Bastien-Antigravity/test-service
+
+go 1.25
+
+require (
+	github.com/Bastien-Antigravity/microservice-toolbox v0.0.1
+)
+
+replace github.com/spf13/viper => github.com/spf13/viper v1.21.0
+
+replace (
+	github.com/Bastien-Antigravity/microservice-toolbox => ../microservice-toolbox
+	github.com/Bastien-Antigravity/universal-logger => ../universal-logger
+)
+""")
+        fixed = self.auditor.fix_go_mod(target_mod)
+        self.assertTrue(fixed)
+        content = target_mod.read_text(encoding="utf-8")
+        self.assertNotIn("../microservice-toolbox", content)
+        self.assertNotIn("../universal-logger", content)
+        self.assertIn("replace github.com/spf13/viper => github.com/spf13/viper v1.21.0", content)
+        self.assertEqual(self.auditor.audit_file(target_mod), [])
+
     def test_allows_print_with_cli_allow_print_marker(self):
         """Verifies that # cli:allow-print permits terminal output."""
         cli_file = self.test_dir / "reporter.py"

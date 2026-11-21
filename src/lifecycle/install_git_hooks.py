@@ -20,8 +20,12 @@ import os
 import sys
 import stat
 from pathlib import Path
-from lib.bootstrap import ensure_virtualenv, prepend_venv_bin, ensure_import_paths
-from lib.orchestration_lib import resolve_vault_and_workspace
+try:
+    from src.lib.bootstrap import ensure_virtualenv, prepend_venv_bin, ensure_import_paths
+    from src.lib.orchestration_lib import resolve_vault_and_workspace
+except ImportError:
+    from lib.bootstrap import ensure_virtualenv, prepend_venv_bin, ensure_import_paths
+    from lib.orchestration_lib import resolve_vault_and_workspace
 
 # -----------------------------------------------------------------------------
 
@@ -80,8 +84,33 @@ $PY_BIN ./08-Squad-Agent/main.py ensure-frontmatter --check || exit 1
 $PY_BIN ./08-Squad-Agent/main.py validate-compliance --staged || exit 1
 """
 
+    pre_push_content = """#!/bin/sh
+
+cd "$(dirname "$0")/../.."
+
+if [ -f "./08-Squad-Agent/.venv/bin/python3" ]; then
+    PY_BIN="./08-Squad-Agent/.venv/bin/python3"
+elif [ -f "./08-Squad-Agent/.venv/Scripts/python.exe" ]; then
+    PY_BIN="./08-Squad-Agent/.venv/Scripts/python.exe"
+elif [ -f "./09-RAG-Engine/.venv/bin/python3" ]; then
+    PY_BIN="./09-RAG-Engine/.venv/bin/python3"
+elif [ -f "./09-RAG-Engine/.venv/Scripts/python.exe" ]; then
+    PY_BIN="./09-RAG-Engine/.venv/Scripts/python.exe"
+elif [ -f "./.venv/bin/python3" ]; then
+    PY_BIN="./.venv/bin/python3"
+elif [ -f "./.venv/Scripts/python.exe" ]; then
+    PY_BIN="./.venv/Scripts/python.exe"
+else
+    PY_BIN="python3"
+fi
+
+echo "🛡️ Running pre-push Ecosystem Compliance Gate..."
+$PY_BIN ./08-Squad-Agent/main.py validate-compliance . || exit 1
+"""
+
     hooks_config = {
         "pre-commit": pre_commit_content,
+        "pre-push": pre_push_content,
         "post-commit": hook_content,
         "post-merge": hook_content
     }

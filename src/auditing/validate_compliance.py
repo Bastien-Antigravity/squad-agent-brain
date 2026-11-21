@@ -352,6 +352,136 @@ class ComplianceAuditor:
 
     # -----------------------------------------------------------------------------
 
+    def _audit_go_mod(
+        self,
+        *,
+        file_path: Path,
+        content: str,
+        lines: List[str],
+    ) -> List[Dict[str, Any]]:
+        """
+        Audits a go.mod file for local filesystem replace directives.
+        In Go multi-repo architectures, local sibling dependencies must be resolved via
+        workspace root go.work, never committed as relative replace directives which break
+        standalone CI, Docker builds, and external consumer packages.
+        """
+        violations: List[Dict[str, Any]] = []
+        in_replace_block = False
+
+        for idx, line in enumerate(lines, 1):
+            stripped = line.strip()
+            if stripped.startswith("//"):
+                continue
+            if stripped.startswith("replace ("):
+                in_replace_block = True
+                continue
+            if in_replace_block:
+                if stripped == ")":
+                    in_replace_block = False
+                    continue
+                if "=>" in stripped:
+                    parts = stripped.split("=>", 1)
+                    target = parts[0].strip()
+                    dest = parts[1].strip()
+                    if dest.startswith(".") or dest.startswith("/") or "\\" in dest:
+                        violations.append({
+                            "file": str(file_path),
+                            "line": idx,
+                            "rule": "GO_LOCAL_REPLACE_POLLUTION",
+                            "message": (
+                                f"Local filesystem replace directive detected in go.mod ('{target} => {dest}'). "
+                                f"Pushing this to GitHub breaks standalone CI/Docker builds. "
+                                f"Rely on root go.work for local resolution instead of committing replace directives."
+                            ),
+                        })
+                continue
+
+            if stripped.startswith("replace ") and "=>" in stripped:
+                parts = stripped.split("=>", 1)
+                target = parts[0].replace("replace", "").strip()
+                dest = parts[1].strip()
+                if dest.startswith(".") or dest.startswith("/") or "\\" in dest:
+                    violations.append({
+                        "file": str(file_path),
+                        "line": idx,
+                        "rule": "GO_LOCAL_REPLACE_POLLUTION",
+                        "message": (
+                            f"Local filesystem replace directive detected in go.mod ('{target} => {dest}'). "
+                            f"Pushing this to GitHub breaks standalone CI/Docker builds. "
+                            f"Rely on root go.work for local resolution instead of committing replace directives."
+                        ),
+                    })
+
+        return violations
+
+    # -----------------------------------------------------------------------------
+
+    def fix_go_mod(self, file_path: Path) -> bool:
+        """
+        Safely strips local filesystem replace directives from go.mod.
+        Preserves module version replaces (e.g., replace pkg => pkg v1.2.0).
+        Returns True if modifications were made.
+        """
+        try:
+            content = file_path.read_text(encoding="utf-8")
+        except Exception:
+            return False
+
+        lines = content.splitlines()
+        new_lines: List[str] = []
+        modified = False
+        in_replace_block = False
+        replace_block_lines: List[str] = []
+
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("replace ("):
+                in_replace_block = True
+                replace_block_lines = []
+                continue
+
+            if in_replace_block:
+                if stripped == ")":
+                    in_replace_block = False
+                    kept = []
+                    for r_line in replace_block_lines:
+                        r_stripped = r_line.strip()
+                        if "=>" in r_stripped and not r_stripped.startswith("//"):
+                            parts = r_stripped.split("=>", 1)
+                            dest = parts[1].strip()
+                            if dest.startswith(".") or dest.startswith("/") or "\\" in dest:
+                                modified = True
+                                continue
+                        kept.append(r_line)
+                    if kept:
+                        new_lines.append("replace (")
+                        new_lines.extend(kept)
+                        new_lines.append(")")
+                    else:
+                        modified = True
+                        if new_lines and new_lines[-1] == "":
+                            new_lines.pop()
+                    continue
+                else:
+                    replace_block_lines.append(line)
+                    continue
+
+            if stripped.startswith("replace ") and "=>" in stripped and not stripped.startswith("//"):
+                parts = stripped.split("=>", 1)
+                dest = parts[1].strip()
+                if dest.startswith(".") or dest.startswith("/") or "\\" in dest:
+                    modified = True
+                    continue
+
+            new_lines.append(line)
+
+        if modified:
+            result = "\n".join(new_lines).rstrip() + "\n"
+            file_path.write_text(result, encoding="utf-8")
+        return modified
+
+    # -----------------------------------------------------------------------------
+
     def audit_file(self, file_path: Path, strict_imports: bool = False, strict_lean: bool = False) -> List[Dict[str, Any]]:
         """Audits a single source file and returns a list of detected violations."""
         violations = []
@@ -359,10 +489,10 @@ class ComplianceAuditor:
             return violations
 
         ext = file_path.suffix.lower()
-        if ext not in (".go", ".py", ".rs", ".cpp", ".c", ".h", ".hpp", ".sh"):
+        filename = file_path.name
+        if ext not in (".go", ".py", ".rs", ".cpp", ".c", ".h", ".hpp", ".sh") and filename != "go.mod" and not filename.endswith(".mod"):
             return violations
 
-        filename = file_path.name
         is_test_file = (
             filename.endswith("_test.go") or
             filename.startswith("test_") or
@@ -397,6 +527,10 @@ class ComplianceAuditor:
 
         lines = content.splitlines()
         total_lines = len(lines)
+
+        # Rule GoMod: Check for local replace directives in go.mod files
+        if filename == "go.mod" or filename.endswith(".mod"):
+            return self._audit_go_mod(file_path=file_path, content=content, lines=lines)
 
         # Rule A: /.dockerenv is strictly prohibited in non-test source files
         if not is_test_file:
@@ -703,6 +837,7 @@ class ComplianceAuditor:
         output.append("  7. Use bootstrap_microservice instead of legacy manual sys.path climbing.")
         output.append("  8. Load configuration via microservice-toolbox / distributed-config instead of direct YAML parsing.")
         output.append("  9. Resolve dynamic version via the dedicated AppConfig method (appConfig.GetVersion() / app_config.get_version()).")
+        output.append("  10. Rely on root go.work for Go local workspace resolution instead of committing local relative replace directives to go.mod.")
         return "\n".join(output)
 
     # -----------------------------------------------------------------------------
@@ -751,6 +886,20 @@ def main():
         transformer = CodeTransformer()
         repaired = transformer.transform_path(target)
         print(f"🔧 CodeTransformer auto-repaired {repaired} Python file(s).\n")
+
+        # Also auto-repair local relative replace directives in go.mod files
+        fixed_go_mods = 0
+        if target.is_file() and target.name == "go.mod":
+            if auditor.fix_go_mod(target):
+                fixed_go_mods += 1
+        elif target.is_dir():
+            for gm in target.glob("**/go.mod"):
+                if any(p in gm.parts for p in EXCLUDED_DIRS):
+                    continue
+                if auditor.fix_go_mod(gm):
+                    fixed_go_mods += 1
+        if fixed_go_mods > 0:
+            print(f"🔧 Cleaned local replace directives from {fixed_go_mods} go.mod file(s).\n")
 
     if args.staged:
         violations = auditor.audit_staged()

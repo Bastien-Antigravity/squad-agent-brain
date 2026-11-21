@@ -102,6 +102,36 @@ def _is_core_workspace(target_dir: pathPath, workspace_root: pathPath) -> bool:
 
 # -----------------------------------------------------------------------------------------------
 
+def _register_in_go_work(workspace_root: pathPath, target_dir: pathPath) -> None:
+    """Ensures a newly scaffolded Go microservice is registered in the workspace go.work file."""
+    go_work_path = workspace_root / "go.work"
+    if not go_work_path.is_file():
+        return
+
+    try:
+        rel_path = target_dir.resolve().relative_to(workspace_root.resolve()).as_posix()
+        entry = f"./{rel_path}"
+        content = go_work_path.read_text(encoding="utf-8")
+        if entry in content:
+            return
+
+        if "use (" in content:
+            lines = content.splitlines()
+            new_lines = []
+            inserted = False
+            for line in lines:
+                if line.strip() == ")" and not inserted:
+                    new_lines.append(f"\t{entry}")
+                    inserted = True
+                new_lines.append(line)
+            if inserted:
+                go_work_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+                print(f"  🔗 Registered in {go_work_path.name}: {entry}")
+    except Exception as e:
+        print(f"  ⚠️ Warning: Could not register in go.work: {e}")
+
+# -----------------------------------------------------------------------------------------------
+
 def _is_external_domain_workspace(brain_dir: pathPath, workspace_root: pathPath) -> bool:
     """
     Returns True when brain_dir is a pure domain vault inside an external domain workspace
@@ -546,27 +576,7 @@ type StatusPayload struct {{
 
     # 5. go.mod
     ws_root = resolve_workspace_root()
-    is_docker_workspace = pathPath("/workspace/microservice-toolbox").exists() and str(target_dir).startswith("/app")
     is_core_workspace = _is_core_workspace(target_dir, ws_root)
-
-    replace_block = ""
-    if is_core_workspace:
-        if is_docker_workspace:
-            replace_prefix = "/workspace"
-        else:
-            try:
-                replace_prefix = osPathRelpath(str(ws_root.resolve()), str(target_dir.resolve()))
-            except ValueError:
-                replace_prefix = ".."
-        replace_block = f"""
-replace (
-	github.com/Bastien-Antigravity/distributed-config => {replace_prefix}/distributed-config
-	github.com/Bastien-Antigravity/flexible-logger => {replace_prefix}/flexible-logger
-	github.com/Bastien-Antigravity/microservice-toolbox => {replace_prefix}/microservice-toolbox
-	github.com/Bastien-Antigravity/safe-socket => {replace_prefix}/safe-socket
-	github.com/Bastien-Antigravity/universal-logger => {replace_prefix}/universal-logger
-)
-"""
 
     go_mod = f"""module github.com/Bastien-Antigravity/{name}
 
@@ -579,8 +589,12 @@ require (
 	github.com/Bastien-Antigravity/safe-socket v0.0.1
 	github.com/Bastien-Antigravity/universal-logger v0.0.1
 )
-{replace_block}"""
+"""
     create_file(target_dir / "go.mod", go_mod, dry_run)
+
+    # Automatically register with workspace go.work if present
+    if is_core_workspace and not dry_run:
+        _register_in_go_work(ws_root, target_dir)
 
     # 6. .golangci.yml
     golangci_yml = """version: "2"

@@ -370,6 +370,7 @@ class TestScaffoldUnits(unittest.TestCase):
             "common:\n  name: common\n", encoding="utf-8"
         )
         (mock_core / "microservice-toolbox" / "python").mkdir(parents=True, exist_ok=True)
+        (mock_core / "go.work").write_text("go 1.25\n\nuse (\n\t./config-server\n)\n", encoding="utf-8")
 
         core_go_dir = mock_core / "core-go-svc"
         with patch.dict(os.environ, {"BASTIEN_CORE_ROOT": str(mock_core)}, clear=False):
@@ -377,10 +378,14 @@ class TestScaffoldUnits(unittest.TestCase):
             generate_common_files(core_go_dir, "core-go-svc", lang="go", port=8302, desc="Core Go service", dry_run=False)
 
         core_go_mod = (core_go_dir / "go.mod").read_text(encoding="utf-8")
-        self.assertIn("replace (", core_go_mod)
-        self.assertIn("github.com/Bastien-Antigravity/microservice-toolbox => ../microservice-toolbox", core_go_mod)
+        self.assertNotIn("replace (", core_go_mod)
+        self.assertNotIn("=>", core_go_mod)
         self.assertIn("github.com/Bastien-Antigravity/microservice-toolbox v0.0.1", core_go_mod)
         self.assertNotIn("v0.0.0", core_go_mod)
+
+        # Verify registration in go.work
+        go_work_content = (mock_core / "go.work").read_text(encoding="utf-8")
+        self.assertIn("./core-go-svc", go_work_content)
 
     def test_rust_github_cargo_toml_and_version(self):
         """Verify Rust scaffold Cargo.toml pins v0.0.1 and GitHub develop branch for microservice-toolbox."""
