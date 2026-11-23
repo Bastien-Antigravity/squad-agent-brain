@@ -298,6 +298,44 @@ class TestHardeningAudits(unittest.TestCase):
             cmdr_override.audit_isolation_zone = lambda p, n: True
             cmdr_override.execute_fleet_push()
 
+    # -------------------------------------------------------------------------------------------
+
+    def test_platform_schema_ssot_catches_duplicates_and_legacy_imports(self):
+        """Platform Schema SSoT: flags duplicate .capnp and legacy local imports; passes microservice-toolbox."""
+        dup_logger = self.test_dir / "flexible-logger" / "src" / "schemas" / "capnp" / "logger.capnp"
+        dup_logger.parent.mkdir(parents=True, exist_ok=True)
+        dup_logger.write_text("@0x9123456789abcdef;\nstruct LoggerMsg {}\n", encoding="utf-8")
+
+        dup_notifier = self.test_dir / "notif-server" / "src" / "schemas" / "capnp" / "notifier.capnp"
+        dup_notifier.parent.mkdir(parents=True, exist_ok=True)
+        dup_notifier.write_text("@0x9123456789abcdef;\nstruct NotifMessage {}\n", encoding="utf-8")
+
+        self.assertEqual([v["rule"] for v in self.auditor.audit_file(dup_logger)], ["DUPLICATE_PLATFORM_SCHEMA"])
+        self.assertEqual([v["rule"] for v in self.auditor.audit_file(dup_notifier)], ["DUPLICATE_PLATFORM_SCHEMA"])
+
+        bad_go = self.test_dir / "notif-server" / "src" / "rest" / "contracts.go"
+        bad_go.parent.mkdir(parents=True, exist_ok=True)
+        bad_go.write_text(
+            "// ESSENTIAL PROCESS: Contracts.\n// DATA FLOW: 1. Reflect.\n// KEY PARAMETERS: None.\n\n"
+            "package rest\n\n"
+            'import "github.com/Bastien-Antigravity/notif-server/src/schemas/capnp"\n',
+            encoding="utf-8",
+        )
+        self.assertIn("LEGACY_LOCAL_SCHEMA_IMPORT", [v["rule"] for v in self.auditor.audit_file(bad_go)])
+
+        bad_rs = self.test_dir / "log-server" / "src" / "core" / "contracts.rs"
+        bad_rs.parent.mkdir(parents=True, exist_ok=True)
+        bad_rs.write_text(
+            "// ESSENTIAL PROCESS: Contracts.\n// DATA FLOW: 1. Reflect.\n// KEY PARAMETERS: None.\n\n"
+            'pub const LOGGER_CAPNP_SCHEMA: &str = include_str!("../schema/capnp/logger.capnp");\n',
+            encoding="utf-8",
+        )
+        self.assertIn("LEGACY_LOCAL_SCHEMA_IMPORT", [v["rule"] for v in self.auditor.audit_file(bad_rs)])
+
+        canonical_schemas = SQUAD_AGENT_DIR.parent.parent / "microservice-toolbox" / "go" / "pkg" / "schemas"
+        if canonical_schemas.exists():
+            self.assertEqual(self.auditor.audit_path(canonical_schemas), [])
+
 
 if __name__ == "__main__":
     unittest.main()

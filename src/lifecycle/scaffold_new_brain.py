@@ -31,7 +31,7 @@ from shutil import copy as shutilCopy, copytree as shutilCopytree, ignore_patter
 from socket import AF_INET as socketAF_INET, SOCK_STREAM as socketSOCK_STREAM, socket as socketSocket
 from subprocess import run as subprocessRun
 from sys import executable as sysExecutable
-from typing import Any as typeAny, Dict as typeDict, Optional as typeOptional, Set as typeSet, Tuple as typeTuple
+from typing import Any as typeAny, Dict as typeDict, List as typeList, Optional as typeOptional, Set as typeSet, Tuple as typeTuple
 from urllib.parse import quote as urllibQuote
 from urllib.request import Request as urllibRequest, urlopen as urllibUrlopen
 from yaml import safe_dump as yamlSafeDump
@@ -647,6 +647,68 @@ def seed_domain_repo_control(
 
 # -----------------------------------------------------------------------------------------------
 
+# -----------------------------------------------------------------------------------------------
+
+def _seed_workspace_cargo_config(
+    workspace_dest: pathPath,
+    core_workspace_root: pathPath,
+    dry_run: bool = False
+) -> None:
+    """
+    Seeds workspace_dest/.cargo/config.toml with the Triple-Block header and relative paths
+    to local Rust library crates inside workspace_dest or reachable in core_workspace_root.
+    """
+    ignored_dirs = {".git", ".cargo", ".venv", "venv", "target", "node_modules", "04-Rapid-Prototyping"}
+    discovered_paths: typeList[str] = []
+    seen_paths: typeSet[str] = set()
+
+    def _scan_root_for_crates(scan_root: pathPath) -> None:
+        if not scan_root.is_dir():
+            return
+        try:
+            repos = sorted(scan_root.iterdir())
+        except OSError:
+            return
+        for repo in repos:
+            if not repo.is_dir() or repo.name.startswith(".") or repo.name in ignored_dirs:
+                continue
+            for pat in ("Cargo.toml", "rust/Cargo.toml", "*/rust/Cargo.toml"):
+                for cargo_toml in sorted(repo.glob(pat)):
+                    crate_dir = cargo_toml.parent
+                    if not (crate_dir / "src" / "lib.rs").is_file():
+                        continue
+                    try:
+                        rel_str = osPathRelpath(str(crate_dir.resolve()), str(workspace_dest.resolve()))
+                    except ValueError:
+                        continue
+                    rel_posix = pathPath(rel_str).as_posix()
+                    if rel_posix not in seen_paths:
+                        seen_paths.add(rel_posix)
+                        discovered_paths.append(rel_posix)
+
+    _scan_root_for_crates(workspace_dest)
+    if core_workspace_root.resolve() != workspace_dest.resolve():
+        _scan_root_for_crates(core_workspace_root)
+
+    paths_block = "paths = [\n" + "".join(f'    "{p}",\n' for p in discovered_paths) + "]\n"
+    cargo_config_content = (
+        "# =============================================================================\n"
+        "# ESSENTIAL PROCESS: Workspace-level Cargo local dependency override configuration (Rust equivalent of go.work).\n"
+        "#\n"
+        "# DATA FLOW:\n"
+        f"#   1. Discovered automatically by Cargo when compiling any Rust crate inside {workspace_dest.name}.\n"
+        "#   2. Overrides remote GitHub dependencies with local domain or core workspace crate sources.\n"
+        "#   3. Ignored automatically in standalone CI / Docker builds where this workspace root file is absent.\n"
+        "#\n"
+        "# KEY PARAMETERS:\n"
+        "#   - paths: Workspace-relative paths to local Rust library crates (domain + core SDKs).\n"
+        "# =============================================================================\n\n"
+        + paths_block
+    )
+    create_file(workspace_dest / ".cargo" / "config.toml", cargo_config_content, dry_run)
+
+# -----------------------------------------------------------------------------------------------
+
 def scaffold_workspace(
     target_name: str,
     workspace_dest: pathPath,
@@ -723,6 +785,7 @@ fs_temp/
 *.log
 """
     create_file(workspace_dest / ".gitignore", workspace_gitignore, dry_run)
+    _seed_workspace_cargo_config(workspace_dest, vault_root.parent, dry_run)
 
     # Concrete self-contained standalone.yaml (NO cross-workspace symlink!)
     standalone_yaml_text = generate_sandbox_standalone_yaml(
@@ -768,9 +831,13 @@ tags:
    - Resolve version strictly via `AppConfig` (`GetVersion()` / `get_version()`); never read `APP_VERSION` or `SERVICE_VERSION` env overrides.
 4. **Canonical 12 Log Levels (`flexible-logger` / `UniLog`)**:
    - Only `NOTSET` (0), `DEBUG` (1), `STREAM` (2), `INFO` (3), `LOGON` (4), `LOGOUT` (5), `TRADE` (6), `SCHEDULE` (7), `REPORT` (8), `WARNING` (9), `ERROR` (10), `CRITICAL` (11). Never use `WARN`, `CRIT`, `FATAL`, or `PANIC`.
-5. **Always Use Standard `microservice-toolbox` Modules**:
+5. **Always Use Standard `microservice-toolbox` Modules & Polyglot Local-First Workspace Resolution**:
    - Bootstrap with `BootstrapService` (Go) / `bootstrap_microservice` (Python) / `load_config` (Rust/C++), publish specs via `PublishWithLifecycle`, and expose `/api/v1/contracts`.
-   - External repos import `github.com/Bastien-Antigravity/microservice-toolbox` and `universal-logger` via GitHub module/package references (`v0.0.1` / `develop`), never local relative `replace` directives.
+   - Service manifests MUST stay 100% CI/Docker-portable (zero local filesystem path pollution):
+     - **Go (`go.work`)**: Declare canonical `github.com/Bastien-Antigravity/...` modules in `go.mod` (NEVER commit local `replace => ../...`). Local workspace development resolves sibling modules and new `*-toolbox` Go packages via workspace root `go.work`.
+     - **Rust (`.cargo/config.toml`)**: Declare canonical `git = "https://github.com/Bastien-Antigravity/..."` dependencies in `Cargo.toml` (NEVER local `path = "../..."` or local `[patch]`). Workspace root `.cargo/config.toml` `paths = [...]` resolves local domain and core Rust crates automatically.
+     - **Python (`bootstrap_microservice` & `_bastien_workspace.pth`)**: Declare canonical `git+https://github.com/Bastien-Antigravity/...` URLs in `requirements.txt` / `pyproject.toml` (NEVER `-e ../...` or `file://`). `bootstrap_microservice` and `.venv` `_bastien_workspace.pth` auto-discover local workspace `*-toolbox/python` and sibling SDK packages at runtime.
+     - **C/C++ (`CMakeLists.txt` `FETCHCONTENT_SOURCE_DIR_*`)**: Declare `FetchContent_Declare(... GIT_REPOSITORY ...)` fallback in `CMakeLists.txt` (NEVER unconditional `add_subdirectory(../...)` or `/Users/...` paths). Before `FetchContent_MakeAvailable`, probe `$ENV{{BASTIEN_CORE_ROOT}}`, `$ENV{{BASTIEN_WORKSPACE_ROOT}}`, and parent directories to set `FETCHCONTENT_SOURCE_DIR_MICROSERVICE_TOOLBOX` and auto-discover any sibling `*-toolbox/cpp/CMakeLists.txt` (`FETCHCONTENT_SOURCE_DIR_<UPPER_NAME>`), adding local `libdistconf`/`libunilog`/`libnotif` `HINTS` automatically.
 6. **Bastien Formatting & Language Standards**:
    - **Triple-Block Header** (`ESSENTIAL PROCESS`, `DATA FLOW`, `KEY PARAMETERS`) on all non-test source files + horizontal dividers (`77` dashes for Go/C++/SQL, `95` dashes for Python/Rust).
    - **Python**: Shebang + `# coding:utf-8`, granular camelCase stdlib/external aliases (`from os.path import join as osPathJoin`), single-line combined module imports, NO aliasing of local `src.*` imports, One-Class Rule, keyword-only `*` on >1 arg methods, and `self.logger.info(f"{{self.Name}} : {{msg}}")`.
@@ -803,7 +870,15 @@ tags:
   - `11-Code-Doc/`: Anti-drift architectural documentation mirror
 - `./<service-name>/`: Domain L3/L4/L5 microservice repositories (siblings of `./{target_name}/`), each symlinking `./standalone.yaml -> ../standalone.yaml`
 - `./standalone.yaml`: Self-contained fleet endpoint profile for connecting to the central `Bastien-Antigravity` L1/L2 base fleet
+- `./.cargo/config.toml`: Workspace-level Cargo `paths = [...]` local crate overrides (Rust equivalent of `go.work`, ignored in standalone CI/Docker)
 - `./.agents/skills/`: Merged Antigravity IDE skills (central `Bastien-Antigravity` engineering skills + `{target_name}` domain personas)
+
+## Polyglot Local-First Workspace Resolution (Zero Manifest Path Pollution)
+Every service manifest (`go.mod`, `Cargo.toml`, `requirements.txt`/`pyproject.toml`, `CMakeLists.txt`) uses canonical GitHub references so standalone CI/Docker builds always succeed, while local workspace builds resolve sibling SDKs and newly added `*-toolbox` repositories automatically:
+- **Go**: Workspace root `go.work` overrides `go.mod` module paths locally.
+- **Rust**: Workspace root `.cargo/config.toml` `paths = [...]` overrides Git dependencies with local domain/core crates.
+- **Python**: `bootstrap_microservice` and `.venv` `_bastien_workspace.pth` auto-discover local `*-toolbox/python` and sibling SDK directories before falling back to installed `git+https://` packages.
+- **C/C++**: Generated `CMakeLists.txt` probes `$ENV{{BASTIEN_CORE_ROOT}}`, `$ENV{{BASTIEN_WORKSPACE_ROOT}}`, and parent folders to set `FETCHCONTENT_SOURCE_DIR_MICROSERVICE_TOOLBOX`, auto-discovers any sibling `*-toolbox/cpp/CMakeLists.txt` via `FETCHCONTENT_SOURCE_DIR_<UPPER_NAME>`, and falls back to GitHub `FetchContent_MakeAvailable` in CI/Docker.
 
 ## Base Fleet Endpoint Modes
 Switch `./standalone.yaml` dynamically between native and Dockerized base L1/L2 fleets:

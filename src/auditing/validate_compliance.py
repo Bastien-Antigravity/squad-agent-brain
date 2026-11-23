@@ -15,10 +15,12 @@ Scans source code files across the Bastien-Antigravity fleet to verify strict ad
   8. Path Sovereignty Invariant (Zero legacy manual sys.path climbing)
   9. SSoT Configuration Invariant (No direct parsing of standalone.yaml)
   10. Dynamic Versioning Invariant (No manual directory loops for VERSION.txt)
+  11. Platform Schema SSoT Invariant (logger.capnp & notifier.capnp exclusively in microservice-toolbox; no legacy local schema imports)
+  12. Polyglot Local-First Workspace Resolution (Zero local filesystem path overrides in go.mod, Cargo.toml, pyproject.toml, requirements*.txt, or CMakeLists.txt)
 
 DATA FLOW:
 1. Receives file path or directory path (or reads git staged files).
-2. Identifies file language (Go, Python, Rust, C++).
+2. Identifies file language (Go, Python, Rust, C++) or manifest (go.mod, Cargo.toml, pyproject.toml, requirements*.txt, CMakeLists.txt).
 3. Evaluates compliance checks based on file type and production vs test status.
 4. Generates structured violation reports with line numbers and corrective guidance.
 5. Returns exit status (0 = COMPLIANT, 1 = VIOLATIONS_DETECTED) and diagnostic report.
@@ -28,14 +30,37 @@ KEY PARAMETERS:
 - strict_headers: If True, requires all 3 header sections in all non-test source files.
 """
 
-import ast
-import os
-import sys
-import re
-import json
-import subprocess
+from ast import (
+    AsyncFunctionDef as astAsyncFunctionDef,
+    ClassDef as astClassDef,
+    Constant as astConstant,
+    Expr as astExpr,
+    FunctionDef as astFunctionDef,
+    Import as astImport,
+    ImportFrom as astImportFrom,
+    Module as astModule,
+    parse as astParse,
+    walk as astWalk,
+)
+from json import dumps as jsonDumps
+from os import walk as osWalk
 from pathlib import Path
-from typing import Dict, Any, List, Tuple, Optional
+from re import (
+    IGNORECASE as reIgnoreCase,
+    compile as reCompile,
+    match as reMatch,
+    search as reSearch,
+    split as reSplit,
+    sub as reSub,
+)
+from subprocess import run as subprocessRun
+from sys import exit as sysExit
+from typing import (
+    Any as typeAny,
+    Dict as typeDict,
+    List as typeList,
+    Optional as typeOptional,
+)
 
 # -----------------------------------------------------------------------------
 
@@ -78,15 +103,15 @@ PLATFORM_EXCLUSIVE_OS_SYMBOLS = {
 class ComplianceAuditor:
     """Mechanical compliance scanner for code files."""
 
-    def __init__(self, workspace_root: Optional[Path] = None):
+    def __init__(self, workspace_root: typeOptional[Path] = None):
         if workspace_root:
             self.workspace_root = workspace_root
         else:
             self.workspace_root = Path(__file__).resolve().parent.parent.parent.parent
 
-    # -----------------------------------------------------------------------------
+    # -----------------------------------------------------------------------------------------------
 
-    def audit_python_imports(self, file_path: Path, content: Optional[str] = None) -> List[Dict[str, Any]]:
+    def audit_python_imports(self, file_path: Path, content: typeOptional[str] = None) -> typeList[typeDict[str, typeAny]]:
         """
         Audits a Python source file for strict adherence to the Bastien Granular Functional Import
         and camelCase Aliasing rules:
@@ -96,7 +121,7 @@ class ComplianceAuditor:
           4. Local/internal project imports must NOT be aliased.
           5. Wildcard imports (`from <pkg> import *`) are strictly prohibited.
         """
-        violations: List[Dict[str, Any]] = []
+        violations: typeList[typeDict[str, typeAny]] = []
         if file_path.suffix.lower() != ".py":
             return violations
 
@@ -107,7 +132,7 @@ class ComplianceAuditor:
                 return violations
 
         try:
-            tree = ast.parse(content, filename=str(file_path))
+            tree = astParse(content, filename=str(file_path))
         except SyntaxError:
             return violations
 
@@ -120,10 +145,10 @@ class ComplianceAuditor:
             if any(k in l for k in ("bootstrap_microservice(", "ensure_import_paths(", "import src.bootstrap as bootstrap")):
                 bootstrap_end_line = idx
 
-        seen_from_modules: Dict[str, int] = {}
+        seen_from_modules: typeDict[str, int] = {}
 
         for node in tree.body:
-            if isinstance(node, ast.Import):
+            if isinstance(node, astImport):
                 # Allow `import os`, `import sys` inside entrypoint bootstrap block or `import src.bootstrap as bootstrap`
                 if node.lineno <= bootstrap_end_line:
                     continue
@@ -140,7 +165,7 @@ class ComplianceAuditor:
                             f"Use granular functional import with camelCase alias (e.g., 'from {alias.name} import func as {suggested_prefix}')."
                         ),
                     })
-            elif isinstance(node, ast.ImportFrom):
+            elif isinstance(node, astImportFrom):
                 if node.lineno <= bootstrap_end_line:
                     continue
                 mod_name = node.module or ""
@@ -208,10 +233,10 @@ class ComplianceAuditor:
         file_path: Path,
         ext: str,
         content: str,
-        lines: List[str],
-    ) -> List[Dict[str, Any]]:
+        lines: typeList[str],
+    ) -> typeList[typeDict[str, typeAny]]:
         """Flags literal '/.dockerenv' references outside comments and docstrings."""
-        violations: List[Dict[str, Any]] = []
+        violations: typeList[typeDict[str, typeAny]] = []
         target_literal = "/." + "dockerenv"
         rule_msg = (
             "Literal reference to '/.dockerenv' is prohibited. "
@@ -223,18 +248,18 @@ class ComplianceAuditor:
 
         if ext == ".py":
             try:
-                tree = ast.parse(content, filename=str(file_path))
+                tree = astParse(content, filename=str(file_path))
                 docstring_node_ids = set()
-                for parent in ast.walk(tree):
-                    if isinstance(parent, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
-                        if parent.body and isinstance(parent.body[0], ast.Expr):
+                for parent in astWalk(tree):
+                    if isinstance(parent, (astModule, astClassDef, astFunctionDef, astAsyncFunctionDef)):
+                        if parent.body and isinstance(parent.body[0], astExpr):
                             val = parent.body[0].value
-                            if isinstance(val, ast.Constant) and isinstance(val.value, str):
+                            if isinstance(val, astConstant) and isinstance(val.value, str):
                                 docstring_node_ids.add(id(val))
 
-                for node in ast.walk(tree):
+                for node in astWalk(tree):
                     if (
-                        isinstance(node, ast.Constant)
+                        isinstance(node, astConstant)
                         and isinstance(node.value, str)
                         and id(node) not in docstring_node_ids
                         and target_literal in node.value
@@ -255,7 +280,7 @@ class ComplianceAuditor:
             if ext in (".py", ".sh"):
                 if stripped.startswith("#"):
                     continue
-                code_part = re.split(r"(?:^|\s)#", line, maxsplit=1)[0]
+                code_part = reSplit(r"(?:^|\s)#", line, maxsplit=1)[0]
                 if target_literal in code_part:
                     violations.append({
                         "file": str(file_path),
@@ -273,11 +298,11 @@ class ComplianceAuditor:
                     in_block_comment = False
                 else:
                     continue
-            work = re.sub(r"/\*.*?\*/", "", work)
+            work = reSub(r"/\*.*?\*/", "", work)
             if "/*" in work:
                 work = work.split("/*", 1)[0]
                 in_block_comment = True
-            work = re.sub(r"(?<!:)//.*$", "", work)
+            work = reSub(r"(?<!:)//.*$", "", work)
             if target_literal in work:
                 violations.append({
                     "file": str(file_path),
@@ -288,23 +313,23 @@ class ComplianceAuditor:
 
         return violations
 
-    # -----------------------------------------------------------------------------
+    # -----------------------------------------------------------------------------------------------
 
     def _audit_cross_os_top_level_imports(
         self,
         *,
         file_path: Path,
         content: str,
-    ) -> List[Dict[str, Any]]:
+    ) -> typeList[typeDict[str, typeAny]]:
         """Bans platform-exclusive stdlib imports at module top-level (tree.body)."""
-        violations: List[Dict[str, Any]] = []
+        violations: typeList[typeDict[str, typeAny]] = []
         try:
-            tree = ast.parse(content, filename=str(file_path))
+            tree = astParse(content, filename=str(file_path))
         except SyntaxError:
             return violations
 
         for node in tree.body:
-            if isinstance(node, ast.Import):
+            if isinstance(node, astImport):
                 for alias in node.names:
                     parts = alias.name.split(".")
                     root_mod = parts[0]
@@ -320,7 +345,7 @@ class ComplianceAuditor:
                                 f"Defer import inside a platform guard (e.g., if sysPlatform == 'win32':) or function scope."
                             ),
                         })
-            elif isinstance(node, ast.ImportFrom):
+            elif isinstance(node, astImportFrom):
                 if (node.level or 0) > 0:
                     continue
                 mod_name = node.module or ""
@@ -357,15 +382,15 @@ class ComplianceAuditor:
         *,
         file_path: Path,
         content: str,
-        lines: List[str],
-    ) -> List[Dict[str, Any]]:
+        lines: typeList[str],
+    ) -> typeList[typeDict[str, typeAny]]:
         """
         Audits a go.mod file for local filesystem replace directives.
         In Go multi-repo architectures, local sibling dependencies must be resolved via
         workspace root go.work, never committed as relative replace directives which break
         standalone CI, Docker builds, and external consumer packages.
         """
-        violations: List[Dict[str, Any]] = []
+        violations: typeList[typeDict[str, typeAny]] = []
         in_replace_block = False
 
         for idx, line in enumerate(lines, 1):
@@ -414,7 +439,214 @@ class ComplianceAuditor:
 
         return violations
 
-    # -----------------------------------------------------------------------------
+    # -----------------------------------------------------------------------------------------------
+
+    @staticmethod
+    def _is_external_local_path(dep_path: str) -> bool:
+        """Returns True if a manifest path escapes the repository root or uses an absolute/Windows path."""
+        cleaned = dep_path.strip()
+        return (
+            cleaned.startswith("..")
+            or cleaned.startswith("/")
+            or cleaned.startswith("~")
+            or "\\" in cleaned
+            or "/../" in cleaned
+            or cleaned.startswith("./..")
+        )
+
+    # -----------------------------------------------------------------------------------------------
+
+    def audit_cargo_toml(self, file_path: Path) -> typeList[typeDict[str, typeAny]]:
+        """
+        Audits a Cargo.toml file for local filesystem path dependencies in dependency or [patch] sections.
+        Ignores non-dependency sections such as [[bin]], [[example]], [lib], and [package].
+        """
+        violations: typeList[typeDict[str, typeAny]] = []
+        try:
+            content = file_path.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            return violations
+
+        current_section = ""
+        in_dep_section = False
+
+        for idx, line in enumerate(content.splitlines(), 1):
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+
+            section_match = reMatch(r"^(\[\[?)\s*(.+?)\s*(\]\]?)\s*(?:#.*)?$", stripped)
+            if section_match:
+                brackets = section_match.group(1)
+                current_section = section_match.group(2).strip()
+                sec_lower = current_section.lower()
+                if brackets == "[[":
+                    in_dep_section = False
+                else:
+                    in_dep_section = (
+                        sec_lower in ("dependencies", "dev-dependencies", "build-dependencies", "workspace.dependencies", "patch")
+                        or sec_lower.startswith(("patch.", "dependencies.", "dev-dependencies.", "build-dependencies.", "workspace.dependencies."))
+                        or sec_lower.endswith((".dependencies", ".dev-dependencies", ".build-dependencies"))
+                        or any(tok in sec_lower for tok in (".dependencies.", ".dev-dependencies.", ".build-dependencies."))
+                    )
+                continue
+
+            if not in_dep_section:
+                continue
+
+            path_match = reSearch(r"""(?<![a-zA-Z0-9_])path\s*=\s*(["'])([^"']+)\1""", stripped)
+            if path_match:
+                dep_path = path_match.group(2).strip()
+                if self._is_external_local_path(dep_path):
+                    violations.append({
+                        "file": str(file_path),
+                        "line": idx,
+                        "rule": "RUST_LOCAL_PATH_POLLUTION",
+                        "message": (
+                            f"Local filesystem path dependency detected in Cargo.toml ('{dep_path}' in [{current_section}]). "
+                            f"Pushing this to GitHub breaks standalone CI/Docker builds. "
+                            f"Use canonical git = 'https://github.com/Bastien-Antigravity/...' in Cargo.toml and rely on workspace root .cargo/config.toml paths override for local resolution."
+                        ),
+                    })
+
+        return violations
+
+    # -----------------------------------------------------------------------------------------------
+
+    def audit_python_manifest(self, file_path: Path) -> typeList[typeDict[str, typeAny]]:
+        """
+        Audits pyproject.toml and requirements*.txt manifests for local filesystem dependency paths
+        that would break standalone CI or Docker builds.
+        """
+        violations: typeList[typeDict[str, typeAny]] = []
+        try:
+            content = file_path.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            return violations
+
+        filename = file_path.name
+        is_requirements = filename.startswith("requirements") and filename.endswith(".txt")
+        is_pyproject = filename == "pyproject.toml"
+        if not (is_requirements or is_pyproject):
+            return violations
+
+        current_section = ""
+        for idx, line in enumerate(content.splitlines(), 1):
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+
+            if is_requirements:
+                code_part = reSplit(r"(?:^|\s)#", stripped, maxsplit=1)[0].strip()
+                if not code_part:
+                    continue
+                has_local_editable = bool(reSearch(r"(?:^|\s)(?:-e|--editable)(?:\s*=|\s+)(?:\.\.(?:[/\\]|$)|[/~]|file://)", code_part))
+                has_file_uri = "file://" in code_part
+                has_local_at_ref = bool(reSearch(r"@\s*(?:\.\.(?:[/\\]|$)|[/~]|file://)", code_part))
+                starts_with_local_path = code_part.startswith(("../", "..\\", "/Users/", "/", "~/", "~\\"))
+                if has_local_editable or has_file_uri or has_local_at_ref or starts_with_local_path:
+                    violations.append({
+                        "file": str(file_path),
+                        "line": idx,
+                        "rule": "PYTHON_LOCAL_PATH_POLLUTION",
+                        "message": (
+                            f"Local filesystem dependency path detected in Python manifest ('{code_part}'). "
+                            f"Pushing this to GitHub breaks standalone CI/Docker builds. "
+                            f"Use canonical 'git+https://github.com/Bastien-Antigravity/...' URLs and rely on bootstrap_microservice / _bastien_workspace.pth for local workspace resolution."
+                        ),
+                    })
+                continue
+
+            # pyproject.toml checks
+            section_match = reMatch(r"^(\[\[?)\s*(.+?)\s*(\]\]?)\s*(?:#.*)?$", stripped)
+            if section_match:
+                current_section = section_match.group(2).strip().lower()
+                continue
+
+            has_file_uri = "file://" in stripped
+            has_local_at_ref = bool(reSearch(r"@\s*(?:\.\.(?:[/\\]|$)|[/~])", stripped))
+            path_match = reSearch(r"""(?<![a-zA-Z0-9_])path\s*=\s*(["'])([^"']+)\1""", stripped)
+            has_external_path = bool(path_match and self._is_external_local_path(path_match.group(2)))
+            if has_file_uri or has_local_at_ref or has_external_path:
+                detail = path_match.group(2).strip() if has_external_path else stripped
+                section_note = f" in [{current_section}]" if current_section else ""
+                violations.append({
+                    "file": str(file_path),
+                    "line": idx,
+                    "rule": "PYTHON_LOCAL_PATH_POLLUTION",
+                    "message": (
+                        f"Local filesystem dependency path detected in Python manifest ('{detail}'{section_note}). "
+                        f"Pushing this to GitHub breaks standalone CI/Docker builds. "
+                        f"Use canonical 'git+https://github.com/Bastien-Antigravity/...' URLs and rely on bootstrap_microservice / _bastien_workspace.pth for local workspace resolution."
+                    ),
+                })
+
+        return violations
+
+    # -----------------------------------------------------------------------------------------------
+
+    def audit_cmake_lists(self, file_path: Path) -> typeList[typeDict[str, typeAny]]:
+        """
+        Audits a service CMakeLists.txt for local path pollution that breaks standalone CI/Docker builds.
+        Exempts microservice-toolbox/cpp/CMakeLists.txt itself where relative library hints are fallbacks.
+        """
+        violations: typeList[typeDict[str, typeAny]] = []
+        parts = file_path.parts
+        if len(parts) >= 3 and parts[-3:] == ("microservice-toolbox", "cpp", "CMakeLists.txt"):
+            return violations
+
+        try:
+            content = file_path.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            return violations
+
+        has_fetchcontent = "FetchContent_Declare" in content and "GIT_REPOSITORY" in content
+        if_depth = 0
+
+        for idx, line in enumerate(content.splitlines(), 1):
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+
+            code_part = reSplit(r"(?:^|\s)#", line, maxsplit=1)[0].strip()
+            if not code_part:
+                continue
+
+            if reMatch(r"^\s*if\s*\(", code_part, flags=reIgnoreCase):
+                if_depth += 1
+                continue
+            if reMatch(r"^\s*endif\s*\(", code_part, flags=reIgnoreCase):
+                if_depth = max(0, if_depth - 1)
+                continue
+
+            has_local_subdir = bool(reSearch(r"\badd_subdirectory\s*\(\s*[\"']?(?:\.\.[/\\]|/)", code_part, flags=reIgnoreCase))
+            if has_local_subdir and (if_depth == 0 or not has_fetchcontent):
+                violations.append({
+                    "file": str(file_path),
+                    "line": idx,
+                    "rule": "CPP_LOCAL_PATH_POLLUTION",
+                    "message": (
+                        f"Unconditional local add_subdirectory detected in CMakeLists.txt ('{code_part}'). "
+                        f"Pushing this to GitHub breaks standalone CI/Docker builds. "
+                        f"Use local-first FETCHCONTENT_SOURCE_DIR_* discovery with FetchContent_Declare GitHub fallback."
+                    ),
+                })
+                continue
+
+            if "/Users/" in code_part:
+                violations.append({
+                    "file": str(file_path),
+                    "line": idx,
+                    "rule": "CPP_LOCAL_PATH_POLLUTION",
+                    "message": (
+                        f"Hardcoded machine-specific '/Users/' path detected in CMakeLists.txt ('{code_part}'). "
+                        f"Use local-first FETCHCONTENT_SOURCE_DIR_* discovery and HINTS with FetchContent_Declare GitHub fallback."
+                    ),
+                })
+
+        return violations
+
+    # -----------------------------------------------------------------------------------------------
 
     def fix_go_mod(self, file_path: Path) -> bool:
         """
@@ -428,10 +660,10 @@ class ComplianceAuditor:
             return False
 
         lines = content.splitlines()
-        new_lines: List[str] = []
+        new_lines: typeList[str] = []
         modified = False
         in_replace_block = False
-        replace_block_lines: List[str] = []
+        replace_block_lines: typeList[str] = []
 
         for line in lines:
             stripped = line.strip()
@@ -482,7 +714,7 @@ class ComplianceAuditor:
 
     # -----------------------------------------------------------------------------
 
-    def audit_file(self, file_path: Path, strict_imports: bool = False, strict_lean: bool = False) -> List[Dict[str, Any]]:
+    def audit_file(self, file_path: Path, strict_imports: bool = False, strict_lean: bool = False) -> typeList[typeDict[str, typeAny]]:
         """Audits a single source file and returns a list of detected violations."""
         violations = []
         if not file_path.is_file():
@@ -490,7 +722,30 @@ class ComplianceAuditor:
 
         ext = file_path.suffix.lower()
         filename = file_path.name
-        if ext not in (".go", ".py", ".rs", ".cpp", ".c", ".h", ".hpp", ".sh") and filename != "go.mod" and not filename.endswith(".mod"):
+        is_python_manifest = filename == "pyproject.toml" or (filename.startswith("requirements") and filename.endswith(".txt"))
+        if (
+            ext not in (".go", ".py", ".rs", ".cpp", ".c", ".h", ".hpp", ".sh", ".capnp")
+            and filename != "go.mod"
+            and not filename.endswith(".mod")
+            and filename != "Cargo.toml"
+            and filename != "CMakeLists.txt"
+            and not is_python_manifest
+        ):
+            return violations
+
+        # Rule PlatformSchemaSSoT: logger.capnp and notifier.capnp must live exclusively in microservice-toolbox
+        if ext == ".capnp":
+            if filename in ("logger.capnp", "notifier.capnp") and "microservice-toolbox" not in file_path.parts:
+                violations.append({
+                    "file": str(file_path),
+                    "line": 1,
+                    "rule": "DUPLICATE_PLATFORM_SCHEMA",
+                    "message": (
+                        f"Duplicate platform schema '{filename}' detected outside microservice-toolbox. "
+                        f"Platform schemas (logger.capnp, notifier.capnp) must reside exclusively in "
+                        f"microservice-toolbox (go/pkg/schemas/{{logger,notifier}} and schemas/platform/)."
+                    ),
+                })
             return violations
 
         is_test_file = (
@@ -531,6 +786,18 @@ class ComplianceAuditor:
         # Rule GoMod: Check for local replace directives in go.mod files
         if filename == "go.mod" or filename.endswith(".mod"):
             return self._audit_go_mod(file_path=file_path, content=content, lines=lines)
+
+        # Rule CargoToml: Check for local path dependencies in Cargo.toml files
+        if filename == "Cargo.toml":
+            return self.audit_cargo_toml(file_path)
+
+        # Rule PythonManifest: Check for local path dependencies in pyproject.toml / requirements*.txt
+        if is_python_manifest:
+            return self.audit_python_manifest(file_path)
+
+        # Rule CMakeLists: Check for local path pollution in service CMakeLists.txt
+        if filename == "CMakeLists.txt":
+            return self.audit_cmake_lists(file_path)
 
         # Rule A: /.dockerenv is strictly prohibited in non-test source files
         if not is_test_file:
@@ -616,7 +883,7 @@ class ComplianceAuditor:
 
         # 2. Section Divider Check (Non-test files with > 50 lines)
         if not is_test_file and total_lines > 50:
-            divider_pattern = re.compile(r'(//|#)\s*-{25,}')
+            divider_pattern = reCompile(r'(//|#)\s*-{25,}')
             has_divider = any(divider_pattern.search(l) for l in lines)
             if not has_divider:
                 violations.append({
@@ -632,6 +899,30 @@ class ComplianceAuditor:
             # Skip pure comment lines for code checks
             if stripped.startswith("//") or stripped.startswith("#") or stripped.startswith("*"):
                 continue
+
+            # 2b. Platform Schema SSoT Invariant: Ban legacy local schema imports/embeds in non-test code
+            if not is_test_file and ext in (".go", ".rs", ".py"):
+                if ext == ".py":
+                    code_part = reSplit(r"(?:^|\s)#", line, maxsplit=1)[0]
+                else:
+                    code_part = reSub(r"(?<!:)//.*$", "", line)
+                legacy_schema_patterns = (
+                    "github.com/Bastien-Antigravity/flexible-logger/src/schemas/capnp",
+                    "github.com/Bastien-Antigravity/notif-server/src/schemas/capnp",
+                    'include_str!("../schema/capnp/logger.capnp")',
+                    'include_str!("../schema/capnp/notifier.capnp")',
+                )
+                if any(pat in code_part for pat in legacy_schema_patterns):
+                    violations.append({
+                        "file": str(file_path),
+                        "line": idx,
+                        "rule": "LEGACY_LOCAL_SCHEMA_IMPORT",
+                        "message": (
+                            "Legacy local platform schema import/embed detected. "
+                            "Import the canonical SSoT from microservice-toolbox/go/pkg/schemas/{logger,notifier} "
+                            "or microservice_toolbox::contracts::{LOGGER_CAPNP_SCHEMA, NOTIFIER_CAPNP_SCHEMA}."
+                        ),
+                    })
 
             # 3. Dynamic Port Invariant: Flag hardcoded canonical ports in production code
             if not is_test_file:
@@ -714,7 +1005,7 @@ class ComplianceAuditor:
                                 "message": "Bare println!/eprintln! detected in production Rust code. Output must route via universal-logger / tracing."
                             })
                     elif ext == ".py":
-                        if re.search(r'(?<![a-zA-Z0-9_])print\s*\(', stripped):
+                        if reSearch(r'(?<![a-zA-Z0-9_])print\s*\(', stripped):
                             violations.append({
                                 "file": str(file_path),
                                 "line": idx,
@@ -786,13 +1077,13 @@ class ComplianceAuditor:
 
     # -----------------------------------------------------------------------------
 
-    def audit_path(self, target_path: Path, strict_imports: bool = False, strict_lean: bool = False) -> List[Dict[str, Any]]:
+    def audit_path(self, target_path: Path, strict_imports: bool = False, strict_lean: bool = False) -> typeList[typeDict[str, typeAny]]:
         """Audits a path (file or recursive directory)."""
         all_violations = []
         if target_path.is_file():
             return self.audit_file(target_path, strict_imports=strict_imports, strict_lean=strict_lean)
 
-        for root, dirs, files in os.walk(target_path):
+        for root, dirs, files in osWalk(target_path):
             dirs[:] = [d for d in dirs if d not in EXCLUDED_DIRS and not d.startswith(".")]
             for f in sorted(files):
                 file_path = Path(root) / f
@@ -800,9 +1091,9 @@ class ComplianceAuditor:
 
         return all_violations
 
-    # -----------------------------------------------------------------------------
+    # -----------------------------------------------------------------------------------------------
 
-    def format_report(self, violations: List[Dict[str, Any]]) -> str:
+    def format_report(self, violations: typeList[typeDict[str, typeAny]]) -> str:
         """Formats violations list into human and agent readable report."""
         if not violations:
             return "✅ Code Compliance Audit: ALL CLEAR (100% compliant with ecosystem standards)."
@@ -811,7 +1102,7 @@ class ComplianceAuditor:
             f"❌ Code Compliance Audit: {len(violations)} violation(s) detected across target files:\n"
         ]
         # Group by file
-        by_file: Dict[str, List[Dict[str, Any]]] = {}
+        by_file: typeDict[str, typeList[typeDict[str, typeAny]]] = {}
         for v in violations:
             by_file.setdefault(v["file"], []).append(v)
 
@@ -837,16 +1128,17 @@ class ComplianceAuditor:
         output.append("  7. Use bootstrap_microservice instead of legacy manual sys.path climbing.")
         output.append("  8. Load configuration via microservice-toolbox / distributed-config instead of direct YAML parsing.")
         output.append("  9. Resolve dynamic version via the dedicated AppConfig method (appConfig.GetVersion() / app_config.get_version()).")
-        output.append("  10. Rely on root go.work for Go local workspace resolution instead of committing local relative replace directives to go.mod.")
+        output.append("  10. Use polyglot local-first workspace resolution instead of committing local path overrides: Go (root go.work, never replace => ../ in go.mod), Rust (root .cargo/config.toml paths, never path = '../' in Cargo.toml), Python (bootstrap_microservice / _bastien_workspace.pth, never -e ../ or file:// in manifests), C/C++ (FETCHCONTENT_SOURCE_DIR_* + GitHub FetchContent fallback, never unconditional add_subdirectory(../) or /Users/).")
+        output.append("  11. Centralize platform Cap'n Proto schemas (logger.capnp, notifier.capnp) in microservice-toolbox (go/pkg/schemas/{logger,notifier} & schemas/platform/); never duplicate locally or import legacy local schema paths.")
         return "\n".join(output)
 
-    # -----------------------------------------------------------------------------
+    # -----------------------------------------------------------------------------------------------
 
-    def audit_staged(self) -> List[Dict[str, Any]]:
+    def audit_staged(self) -> typeList[typeDict[str, typeAny]]:
         """Audits git staged files in the current repository / workspace."""
         all_violations = []
         try:
-            res = subprocess.run(
+            res = subprocessRun(
                 ["git", "diff", "--cached", "--name-only", "--diff-filter=ACM"],
                 capture_output=True, text=True, check=True
             )
@@ -864,12 +1156,12 @@ class ComplianceAuditor:
             })
         return all_violations
 
-# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------------------
 
 def main():
     """CLI runner for standalone audit execution."""
-    import argparse
-    parser = argparse.ArgumentParser(description="Mechanical Code Compliance Auditor")
+    from argparse import ArgumentParser as argparseArgumentParser
+    parser = argparseArgumentParser(description="Mechanical Code Compliance Auditor")
     parser.add_argument("path", nargs="?", default=".", help="Target file or directory path to audit (defaults to current dir)")
     parser.add_argument("--staged", action="store_true", help="Audit only Git staged files (pre-commit mode)")
     parser.add_argument("--strict-imports", action="store_true", help="Enforce strict Python granular imports and camelCase aliasing")
@@ -908,11 +1200,11 @@ def main():
         violations = auditor.audit_path(target, strict_imports=args.strict_imports, strict_lean=args.strict_lean)
 
     if args.json:
-        print(json.dumps(violations, indent=2))
+        print(jsonDumps(violations, indent=2))
     else:
         print(auditor.format_report(violations))
 
-    sys.exit(0 if len(violations) == 0 else 1)
+    sysExit(0 if len(violations) == 0 else 1)
 
 if __name__ == "__main__":
     main()

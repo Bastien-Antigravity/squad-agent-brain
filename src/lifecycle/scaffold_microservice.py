@@ -26,13 +26,14 @@ from json import dumps as jsonDumps, loads as jsonLoads
 from os import environ as osEnviron, symlink as osSymlink
 from os.path import relpath as osPathRelpath
 from pathlib import Path as pathPath
+from re import DOTALL as reDotAll, findall as reFindall, search as reSearch, sub as reSub
 from sys import exit as sysExit
-from typing import Optional as typeOptional
+from typing import List as typeList, Optional as typeOptional, Set as typeSet
 
 # -----------------------------------------------------------------------------
 
 def resolve_workspace_root() -> pathPath:
-    """Resolves the Bastien-Antigravity workspace root dynamically."""
+    """Resolves the active workspace root dynamically without hardcoded folder names."""
     def _is_valid_workspace(candidate: pathPath) -> bool:
         return (
             (candidate / "docker-deployment" / "modes" / "local" / "config" / "native.yaml").is_file()
@@ -51,8 +52,6 @@ def resolve_workspace_root() -> pathPath:
     for parent in ancestors:
         if _is_valid_workspace(parent):
             return parent
-        if _is_valid_workspace(parent / "Bastien-Antigravity"):
-            return parent / "Bastien-Antigravity"
 
     for parent in ancestors:
         try:
@@ -62,6 +61,14 @@ def resolve_workspace_root() -> pathPath:
         for s in subdirs:
             if s.is_dir() and _is_valid_workspace(s):
                 return s
+
+    for parent in ancestors:
+        try:
+            if any(parent.glob("*.code-workspace")):
+                return parent
+        except OSError:
+            continue
+
     return pathPath.cwd()
 
 # -----------------------------------------------------------------------------
@@ -129,6 +136,114 @@ def _register_in_go_work(workspace_root: pathPath, target_dir: pathPath) -> None
                 print(f"  🔗 Registered in {go_work_path.name}: {entry}")
     except Exception as e:
         print(f"  ⚠️ Warning: Could not register in go.work: {e}")
+
+# -----------------------------------------------------------------------------------------------
+
+def _discover_rust_library_crates(workspace_root: pathPath) -> typeList[str]:
+    """Scans workspace_root for local Rust library crates (Cargo.toml + src/lib.rs)."""
+    ignored_dirs = {".git", ".cargo", ".venv", "venv", "target", "node_modules", "04-Rapid-Prototyping"}
+    crates: typeList[str] = []
+    seen: typeSet[str] = set()
+    resolved_ws = workspace_root.resolve()
+    try:
+        repos = sorted(resolved_ws.iterdir())
+    except OSError:
+        return crates
+
+    for repo in repos:
+        if not repo.is_dir() or repo.name.startswith(".") or repo.name in ignored_dirs:
+            continue
+        for pat in ("Cargo.toml", "rust/Cargo.toml", "*/rust/Cargo.toml"):
+            for cargo_toml in sorted(repo.glob(pat)):
+                crate_dir = cargo_toml.parent
+                if (crate_dir / "src" / "lib.rs").is_file():
+                    rel_posix = crate_dir.resolve().relative_to(resolved_ws).as_posix()
+                    if rel_posix not in seen:
+                        seen.add(rel_posix)
+                        crates.append(rel_posix)
+    return crates
+
+# -----------------------------------------------------------------------------------------------
+
+def _register_in_cargo_config(workspace_root: pathPath, target_dir: pathPath) -> None:
+    """
+    Scans workspace_root for local Rust library crates (<repo>/Cargo.toml, <repo>/rust/Cargo.toml,
+    <repo>/*/rust/Cargo.toml where src/lib.rs exists) and ensures they are registered in
+    workspace_root / '.cargo' / 'config.toml'.
+    """
+    cargo_config_path = workspace_root / ".cargo" / "config.toml"
+    discovered = _discover_rust_library_crates(workspace_root)
+
+    try:
+        resolved_target = target_dir.resolve()
+        resolved_ws = workspace_root.resolve()
+        if (
+            resolved_target.is_relative_to(resolved_ws)
+            and (resolved_target / "Cargo.toml").is_file()
+            and (resolved_target / "src" / "lib.rs").is_file()
+        ):
+            target_rel = resolved_target.relative_to(resolved_ws).as_posix()
+            if target_rel not in discovered:
+                discovered.append(target_rel)
+    except (OSError, ValueError) as exc:
+        print(f"  ⚠️ Warning: Skipping target crate path resolution for .cargo/config.toml: {exc}")
+
+    existing_paths: typeList[str] = []
+    existing_content = ""
+    if cargo_config_path.is_file():
+        try:
+            existing_content = cargo_config_path.read_text(encoding="utf-8")
+            paths_match = reSearch(r"(?m)^\s*paths\s*=\s*\[(.*?)\]", existing_content, flags=reDotAll)
+            if paths_match:
+                existing_paths = reFindall(r'["\']([^"\']+)["\']', paths_match.group(1))
+        except Exception as e:
+            print(f"  ⚠️ Warning: Could not read .cargo/config.toml: {e}")
+            return
+    elif not discovered:
+        return
+
+    merged_paths: typeList[str] = []
+    normalized_seen: typeSet[str] = set()
+    for p in existing_paths + discovered:
+        norm = p.lstrip("./")
+        if norm not in normalized_seen:
+            normalized_seen.add(norm)
+            merged_paths.append(p)
+
+    if cargo_config_path.is_file() and len(merged_paths) == len(existing_paths):
+        return
+
+    paths_block = "paths = [\n" + "".join(f'    "{p}",\n' for p in merged_paths) + "]"
+    try:
+        if cargo_config_path.is_file() and reSearch(r"(?m)^\s*paths\s*=\s*\[.*?\]", existing_content, flags=reDotAll):
+            updated_content = reSub(
+                r"(?m)^\s*paths\s*=\s*\[.*?\]",
+                paths_block,
+                existing_content,
+                count=1,
+                flags=reDotAll,
+            )
+        else:
+            header = (
+                "# =============================================================================\n"
+                "# ESSENTIAL PROCESS: Workspace-level Cargo local dependency override configuration (Rust equivalent of go.work).\n"
+                "#\n"
+                "# DATA FLOW:\n"
+                "#   1. Discovered automatically by Cargo when compiling any crate inside the workspace.\n"
+                "#   2. Overrides remote GitHub dependencies with local sibling crate source code.\n"
+                "#   3. Ignored automatically in standalone CI / Docker builds where this workspace root file is absent.\n"
+                "#\n"
+                "# KEY PARAMETERS:\n"
+                "#   - paths: Workspace-relative paths to local Rust library crates.\n"
+                "# =============================================================================\n\n"
+            )
+            updated_content = (existing_content.rstrip() + "\n\n" + paths_block + "\n") if existing_content.strip() else (header + paths_block + "\n")
+
+        cargo_config_path.parent.mkdir(parents=True, exist_ok=True)
+        cargo_config_path.write_text(updated_content, encoding="utf-8")
+        print(f"  🔗 Registered local Rust crates in .cargo/config.toml ({len(merged_paths)} path(s))")
+    except Exception as e:
+        print(f"  ⚠️ Warning: Could not update .cargo/config.toml: {e}")
 
 # -----------------------------------------------------------------------------------------------
 
@@ -1107,6 +1222,17 @@ async fn test_scaffold_initialization() {{
 }}
 """
     create_file(target_dir / "tests/test_basic.rs", test_rs, dry_run)
+
+    # Register local Rust library crates in workspace root .cargo/config.toml
+    if not dry_run:
+        ws_root = resolve_workspace_root()
+        if _is_core_workspace(target_dir, ws_root) or (
+            (ws_root / ".cargo" / "config.toml").is_file()
+            and target_dir.resolve().is_relative_to(ws_root.resolve())
+        ):
+            _register_in_cargo_config(ws_root, target_dir)
+        elif (target_dir.parent / ".cargo" / "config.toml").is_file() or (target_dir.parent / "standalone.yaml").is_file():
+            _register_in_cargo_config(target_dir.parent, target_dir)
 
 # -----------------------------------------------------------------------------
 
@@ -2243,6 +2369,70 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# -----------------------------------------------------------------------------
+# Local-First Workspace Resolution with GitHub FetchContent Fallback
+# -----------------------------------------------------------------------------
+set(_BASTIEN_TOOLBOX_CANDIDATES)
+if(DEFINED ENV{{BASTIEN_CORE_ROOT}} AND NOT "$ENV{{BASTIEN_CORE_ROOT}}" STREQUAL "")
+    list(APPEND _BASTIEN_TOOLBOX_CANDIDATES "$ENV{{BASTIEN_CORE_ROOT}}/microservice-toolbox/cpp")
+endif()
+if(DEFINED ENV{{BASTIEN_WORKSPACE_ROOT}} AND NOT "$ENV{{BASTIEN_WORKSPACE_ROOT}}" STREQUAL "")
+    list(APPEND _BASTIEN_TOOLBOX_CANDIDATES "$ENV{{BASTIEN_WORKSPACE_ROOT}}/microservice-toolbox/cpp")
+endif()
+list(APPEND _BASTIEN_TOOLBOX_CANDIDATES
+    "${{CMAKE_CURRENT_SOURCE_DIR}}/../microservice-toolbox/cpp"
+    "${{CMAKE_CURRENT_SOURCE_DIR}}/../../microservice-toolbox/cpp"
+    "${{CMAKE_CURRENT_SOURCE_DIR}}/../../../microservice-toolbox/cpp"
+)
+
+set(_CANDIDATE_TOOLBOX_CPP "")
+foreach(_cand IN LISTS _BASTIEN_TOOLBOX_CANDIDATES)
+    if(EXISTS "${{_cand}}/CMakeLists.txt")
+        get_filename_component(_CANDIDATE_TOOLBOX_CPP "${{_cand}}" ABSOLUTE)
+        break()
+    endif()
+endforeach()
+
+set(_WORKSPACE_ROOT "")
+set(_LOCAL_DISTCONF_HINTS)
+if(EXISTS "${{_CANDIDATE_TOOLBOX_CPP}}/CMakeLists.txt")
+    set(FETCHCONTENT_SOURCE_DIR_MICROSERVICE_TOOLBOX "${{_CANDIDATE_TOOLBOX_CPP}}" CACHE PATH "Local workspace microservice-toolbox/cpp override" FORCE)
+    get_filename_component(_TOOLBOX_REPO_DIR "${{_CANDIDATE_TOOLBOX_CPP}}" DIRECTORY)
+    get_filename_component(_WORKSPACE_ROOT "${{_TOOLBOX_REPO_DIR}}" DIRECTORY)
+    list(APPEND _LOCAL_DISTCONF_HINTS
+        "${{_WORKSPACE_ROOT}}/distributed-config/distconf/libdistconf"
+        "${{_WORKSPACE_ROOT}}/universal-logger/libunilog"
+        "${{_WORKSPACE_ROOT}}/notif-server/notif/libnotif"
+    )
+    message(STATUS "{name}: using local workspace microservice-toolbox at ${{_CANDIDATE_TOOLBOX_CPP}}")
+endif()
+
+# Auto-discover sibling custom *-toolbox/cpp/CMakeLists.txt in local workspace(s)
+get_filename_component(_PARENT_WS_DIR "${{CMAKE_CURRENT_SOURCE_DIR}}/.." ABSOLUTE)
+set(_TOOLBOX_SCAN_ROOTS "${{_PARENT_WS_DIR}}")
+if(_WORKSPACE_ROOT)
+    list(APPEND _TOOLBOX_SCAN_ROOTS "${{_WORKSPACE_ROOT}}")
+endif()
+if(DEFINED ENV{{BASTIEN_WORKSPACE_ROOT}} AND NOT "$ENV{{BASTIEN_WORKSPACE_ROOT}}" STREQUAL "")
+    list(APPEND _TOOLBOX_SCAN_ROOTS "$ENV{{BASTIEN_WORKSPACE_ROOT}}")
+endif()
+list(REMOVE_DUPLICATES _TOOLBOX_SCAN_ROOTS)
+
+foreach(_scan_root IN LISTS _TOOLBOX_SCAN_ROOTS)
+    file(GLOB _SIBLING_TOOLBOXES LIST_DIRECTORIES true "${{_scan_root}}/*-toolbox/cpp")
+    foreach(_tb_cpp IN LISTS _SIBLING_TOOLBOXES)
+        if(EXISTS "${{_tb_cpp}}/CMakeLists.txt")
+            get_filename_component(_tb_repo "${{_tb_cpp}}" DIRECTORY)
+            get_filename_component(_tb_name "${{_tb_repo}}" NAME)
+            string(TOUPPER "${{_tb_name}}" _tb_upper)
+            string(REPLACE "-" "_" _tb_upper "${{_tb_upper}}")
+            if(NOT DEFINED FETCHCONTENT_SOURCE_DIR_${{_tb_upper}})
+                set(FETCHCONTENT_SOURCE_DIR_${{_tb_upper}} "${{_tb_cpp}}" CACHE PATH "Local workspace ${{_tb_name}}/cpp override" FORCE)
+            endif()
+        endif()
+    endforeach()
+endforeach()
+
 include(FetchContent)
 FetchContent_Declare(
     microservice_toolbox
@@ -2257,6 +2447,7 @@ find_library(DISTCONF_LIB
     HINTS
         "${{LIBDISTCONF_PATH}}"
         "$ENV{{LIBDISTCONF_PATH}}"
+        ${{_LOCAL_DISTCONF_HINTS}}
         "$ENV{{HOME}}/.bastien/lib"
         "/usr/local/lib"
 )
@@ -2265,6 +2456,7 @@ find_path(DISTCONF_INCLUDE_DIR
     HINTS
         "${{LIBDISTCONF_PATH}}"
         "$ENV{{LIBDISTCONF_PATH}}"
+        ${{_LOCAL_DISTCONF_HINTS}}
         "$ENV{{HOME}}/.bastien/include"
         "$ENV{{HOME}}/.bastien/lib"
         "/usr/local/include"
