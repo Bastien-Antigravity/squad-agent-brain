@@ -47,6 +47,7 @@ COMMANDS_MAP = {
     "convert-agents": "fleet.convert_agents",
     "debloat-audit": "auditing.debloat_audit",
     "ensure-frontmatter": "auditing.ensure_frontmatter",
+    "eval-agent": "auditing.eval_agent",
     "fleet-commander": "fleet.fleet_commander",
     "install-git-hooks": "lifecycle.install_git_hooks",
     "knowledge-compressor": "maintenance.knowledge_compressor",

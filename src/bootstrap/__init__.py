@@ -80,18 +80,52 @@ if not _profile:
 config = toolboxLoadConfig(_profile, input_args=[])
 config_data = config.data
 
-# Setup UniLog exactly once
-_lvl = "debug" if ("-v" in sys.argv or "--verbose" in sys.argv) else "info"
-_config_handle = getattr(config, "_handle", 0) or 0
-_logger_profile = osEnviron.get("APP_LOGGER_PROFILE", osEnviron.get("LOGGER_PROFILE", "standard"))
+_OFFLINE_CLI_COMMANDS = frozenset({
+    "audit_ports",
+    "brain_health_audit",
+    "validate_compliance",
+    "build_inventory",
+    "fleet_init_update",
+    "hardening_yaml",
+    "joint_audit_purger",
+    "preflight_check",
+    "close_mission",
+    "convert_agents",
+    "debloat_audit",
+    "ensure_frontmatter",
+    "eval_agent",
+    "mission_help",
+    "persona_extractor",
+    "check_coherence",
+    "map_feats",
+    "fix_feats",
+    "fleet_version",
+    "bump_version",
+    "checkpoint",
+    "format_compliance",
+})
 
 # Determine app_name matching the command name argument
 _app_name = "squad_agent"
+_cmd_slug = ""
 if len(sys.argv) >= 2:
     # First argument is the subcommand when routing through main.py
     cmd_arg = sys.argv[1].replace("-", "_").lower()
-    if cmd_arg != "main.py":
+    if cmd_arg != "main.py" and not cmd_arg.startswith("_"):
+        _cmd_slug = cmd_arg
         _app_name = f"squad_agent_{cmd_arg}"
+
+# Setup UniLog exactly once (offline CLI commands default to 'minimal' to avoid socket stalls)
+_lvl = "debug" if ("-v" in sys.argv or "--verbose" in sys.argv) else "info"
+_config_handle = getattr(config, "_handle", 0) or 0
+_explicit_logger_profile = osEnviron.get("APP_LOGGER_PROFILE") or osEnviron.get("LOGGER_PROFILE")
+if _explicit_logger_profile:
+    _logger_profile = _explicit_logger_profile
+elif _cmd_slug in _OFFLINE_CLI_COMMANDS:
+    _logger_profile = "minimal"
+    osEnviron.setdefault("LOGGER_PROFILE", "minimal")
+else:
+    _logger_profile = "standard"
 
 logger = toolboxUniLog(
     app_name=_app_name,

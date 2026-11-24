@@ -17,11 +17,11 @@ KEY PARAMETERS:
 - event_bus: SquadEventBus pub/sub provider.
 """
 
-from typing import Any
+from typing import Any as typeAny
 from src.interfaces import SquadEventBus
-from src.agents.base_agent import BaseAgent, query_rag_engine, read_workspace_file, write_workspace_file
+from src.agents.base_agent import BaseAgent, list_workspace_files, query_rag_engine, read_workspace_file
 
-# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------------------
 
 class ArchitectAgent(BaseAgent):
     """
@@ -29,9 +29,9 @@ class ArchitectAgent(BaseAgent):
     design patterns, and referencing architectural specifications (ADRs).
     """
 
-    # -----------------------------------------------------------------------------
+    # -------------------------------------------------------------------------------------------
 
-    def __init__(self, *, config: Any, logger: Any, pg_pool: Any, event_bus: SquadEventBus):
+    def __init__(self, *, config: typeAny, logger: typeAny, pg_pool: typeAny, event_bus: SquadEventBus):
         super().__init__(
             role_name="architect",
             prompt_file="02-Architect/Prompt-Architect.md",
@@ -40,4 +40,4 @@ class ArchitectAgent(BaseAgent):
             pg_pool=pg_pool,
             event_bus=event_bus
         )
-        self.tools = [query_rag_engine, read_workspace_file, write_workspace_file]
+        self.tools = [query_rag_engine, list_workspace_files, read_workspace_file]

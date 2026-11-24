@@ -26,7 +26,7 @@ KEY PARAMETERS:
 from ast import AsyncFunctionDef as astAsyncFunctionDef, FunctionDef as astFunctionDef, parse as astParse, walk as astWalk
 from asyncio import get_running_loop as asyncioGetRunningLoop, sleep as asyncioSleep, to_thread as asyncioToThread
 from json import dumps as jsonDumps
-from os import environ as osEnviron, getenv as osGetenv
+from os import environ as osEnviron, getenv as osGetenv, walk as osWalk
 from pathlib import Path as pathPath
 from re import findall as reFindall, search as reSearch, split as reSplit, sub as reSub
 from subprocess import TimeoutExpired as subprocessTimeoutExpired, run as subprocessRun
@@ -60,6 +60,42 @@ _BLOCKED_WORKSPACE_ROOTS = frozenset({
 
 _RESERVED_PRIMARY_BRAINS = frozenset({"obsidian-brain", "root", "main"})
 
+_READ_ONLY_ROLES = frozenset({
+    "orchestrator",
+    "architect",
+    "patternsentinel",
+    "debloatsentinel",
+    "sentinel",
+    "oracle",
+    "codeindexer",
+    "docindexer",
+})
+
+_MUTATING_TOOL_NAMES = frozenset({
+    "write_workspace_file",
+    "execute_shell_command",
+    "scaffold_microservice",
+    "generate_safe_by_design_spec",
+    "sync_code_documentation",
+    "index_brain_document",
+    "purge_brain_index",
+    "record_strategic_milestone",
+})
+
+_LIST_EXCLUDED_DIRS = frozenset({
+    ".git",
+    ".venv",
+    "venv",
+    "node_modules",
+    "target",
+    "bin",
+    "__pycache__",
+    ".pytest_cache",
+    ".ruff_cache",
+})
+
+_MAX_LISTED_FILES = 500
+
 # -----------------------------------------------------------------------------------------------
 
 
@@ -78,13 +114,27 @@ def query_rag_engine(query: str, brain_id: str = "") -> str:
 # -----------------------------------------------------------------------------------------------
 
 
-def read_workspace_file(path: str, fold_bodies: bool = True) -> str:
+def list_workspace_files(path: str = ".") -> str:
+    """
+    Lists relative file paths inside a directory of the active workspace so the agent
+    can discover exact filenames without guessing paths.
+
+    Args:
+        path: Relative directory path from workspace root (e.g. '.' or 'notif-server').
+    """
+    return ""
+
+
+# -----------------------------------------------------------------------------------------------
+
+
+def read_workspace_file(path: str, fold_bodies: bool = False) -> str:
     """
     Reads the contents of a file in the active workspace directory.
 
     Args:
         path: Relative path to the file from workspace root (e.g. 'src/core/controller.py').
-        fold_bodies: Whether to collapse large function and class bodies to save tokens (default True).
+        fold_bodies: Whether to collapse large function and class bodies to save tokens (default False).
     """
     return ""
 
@@ -376,6 +426,7 @@ class BaseAgent:
         target_brain_id: typeOptional[str] = None,
         domain_vault_root: typeOptional[pathPath] = None,
         domain_workspace_root: typeOptional[pathPath] = None,
+        read_only: typeOptional[bool] = None,
     ):
         self.Name = self.__class__.__name__
         self.role_name = role_name
@@ -436,8 +487,39 @@ class BaseAgent:
         # Load tiered system instruction
         self.system_instruction = self._load_system_prompt()
 
-        # Subclass overrides or appends to tools
-        self.tools = [query_rag_engine, read_workspace_file, write_workspace_file, execute_shell_command]
+        # Role-scoped read-only boundary (auditors/indexers default to read-only)
+        self.read_only: bool = (
+            bool(read_only)
+            if read_only is not None
+            else (self.role_name in _READ_ONLY_ROLES)
+        )
+        if self.read_only:
+            self.tools = [query_rag_engine, list_workspace_files, read_workspace_file]
+        else:
+            self.tools = [
+                query_rag_engine,
+                list_workspace_files,
+                read_workspace_file,
+                write_workspace_file,
+                execute_shell_command,
+            ]
+
+    # -----------------------------------------------------------------------------------------------
+
+    def enable_readonly_mode(self) -> None:
+        """Enforces strict read-only tool permissions on this agent instance."""
+        self.read_only = True
+        self.tools = self._get_effective_tools()
+
+    # -----------------------------------------------------------------------------------------------
+
+    def _get_effective_tools(self) -> typeList[typeAny]:
+        """Returns active LLM tools, stripping mutating tools whenever read_only is enabled."""
+        if not self.read_only:
+            return list(self.tools)
+        return [
+            t for t in self.tools if getattr(t, "__name__", "") not in _MUTATING_TOOL_NAMES
+        ]
 
     # -----------------------------------------------------------------------------------------------
 
@@ -700,6 +782,8 @@ class BaseAgent:
             reply_topic=reply_topic,
             source_brain=source_brain,
             task_context=task_context,
+            fallback_message=content,
+            fallback_sender=sender or "user",
         )
 
     # -----------------------------------------------------------------------------------------------
@@ -773,6 +857,8 @@ class BaseAgent:
         reply_topic: typeOptional[str] = None,
         source_brain: typeOptional[str] = None,
         task_context: typeOptional[typeDict[str, typeAny]] = None,
+        fallback_message: typeOptional[str] = None,
+        fallback_sender: str = "user",
     ) -> None:
         """Queries Gemini using conversation logs database history and broadcasts response."""
         self._refresh_llm_config()
@@ -788,11 +874,14 @@ class BaseAgent:
                     reply_topic=publish_topic,
                     source_brain=source_brain,
                     task_context=self.current_task_context,
+                    fallback_message=fallback_message,
                 )
                 return
 
-            # 1. Fetch chat history from postgres
+            # 1. Fetch chat history from postgres (or in-memory fallback when pg_pool is None)
             history = await self._fetch_history(session_id)
+            if not history and fallback_message:
+                history = [{"sender": fallback_sender, "content": fallback_message, "tool_calls": []}]
 
             # 2. Convert to Gemini Content types
             contents = []
@@ -812,8 +901,9 @@ class BaseAgent:
                 config_params: typeDict[str, typeAny] = {
                     "system_instruction": self._compile_active_instruction(),
                 }
-                if self.tools:
-                    config_params["tools"] = self.tools
+                effective_tools = self._get_effective_tools()
+                if effective_tools:
+                    config_params["tools"] = effective_tools
 
                 # Support Gemini Thinking models (e.g. Flash Thinking Level: HIGH)
                 if getattr(self, "thinking_level", None):
@@ -1024,6 +1114,9 @@ class BaseAgent:
 
     async def execute_tool(self, name: str, args: typeDict[str, typeAny]) -> str:
         """Dynamic tool execution handler."""
+        if self.read_only and name in _MUTATING_TOOL_NAMES:
+            return f"Error: Tool '{name}' is disabled in read-only mode for role '{self.role_name}'."
+
         if name == "query_rag_engine":
             query_arg = args.get("query", "")
             ctx = self.current_task_context or {}
@@ -1052,9 +1145,46 @@ class BaseAgent:
             formatted = [f"Context turn:\n{doc.get('content', '')}" for doc in results]
             return "\n\n---\n\n".join(formatted)
 
+        elif name == "list_workspace_files":
+            path_arg = str(args.get("path", ".") or ".").strip()
+            active_workspace_root = self._resolve_active_workspace_root()
+            target_path = (active_workspace_root / path_arg).resolve()
+
+            try:
+                target_path.relative_to(active_workspace_root)
+            except ValueError:
+                return f"Error: Access denied. Path {path_arg} is outside the workspace root."
+
+            if target_path.is_file():
+                return str(target_path.relative_to(active_workspace_root))
+            if not target_path.is_dir():
+                return f"Error: Directory {path_arg} does not exist."
+
+            rel_files: typeList[str] = []
+            truncated = False
+            for root_str, dirs, files in osWalk(str(target_path)):
+                dirs[:] = sorted(d for d in dirs if d not in _LIST_EXCLUDED_DIRS)
+                root_p = pathPath(root_str)
+                for fname in sorted(files):
+                    if fname == ".DS_Store" or fname.endswith(".pyc"):
+                        continue
+                    rel_files.append(str((root_p / fname).relative_to(active_workspace_root)))
+                    if len(rel_files) >= _MAX_LISTED_FILES:
+                        truncated = True
+                        break
+                if truncated:
+                    break
+
+            if not rel_files:
+                return f"No files found in {path_arg}."
+            listing = "\n".join(rel_files)
+            if truncated:
+                return f"{listing}\n... (truncated at {_MAX_LISTED_FILES} files; pass a narrower subdirectory)"
+            return listing
+
         elif name == "read_workspace_file":
             path_arg = args.get("path", "")
-            fold_bodies_arg = args.get("fold_bodies", True)
+            fold_bodies_arg = args.get("fold_bodies", False)
             active_workspace_root = self._resolve_active_workspace_root()
             file_path = (active_workspace_root / path_arg).resolve()
 
@@ -1078,6 +1208,11 @@ class BaseAgent:
         elif name == "write_workspace_file":
             path_arg = args.get("path", "")
             content_arg = args.get("content", "")
+            if "# ... folded ..." in content_arg or "// ... folded ..." in content_arg:
+                return (
+                    f"Error: Refusing to write {path_arg} because content contains folded-body "
+                    f"placeholders ('... folded ...'). Re-read the file with fold_bodies=False first."
+                )
             active_workspace_root = self._resolve_active_workspace_root()
             _, central_workspace_root = resolve_vault_and_workspace(__file__)
             file_path = (active_workspace_root / path_arg).resolve()
@@ -1153,6 +1288,7 @@ class BaseAgent:
         reply_topic: typeOptional[str] = None,
         source_brain: typeOptional[str] = None,
         task_context: typeOptional[typeDict[str, typeAny]] = None,
+        fallback_message: typeOptional[str] = None,
     ) -> None:
         """Generates a simulated role-specific mock response for testing offline."""
         self.current_source_brain = source_brain
@@ -1160,7 +1296,7 @@ class BaseAgent:
             self.current_task_context = dict(task_context)
 
         history = await self._fetch_history(session_id)
-        last_msg = history[-1]["content"] if history else ""
+        last_msg = history[-1]["content"] if history else (fallback_message or "")
 
         answer_text = ""
         tool_calls_data: typeList[typeDict[str, typeAny]] = []
@@ -1212,6 +1348,11 @@ class BaseAgent:
             answer_text = (
                 f"🧠 **[{self.role_name}]** Domain specialist for '{self.target_brain_id}' ready. "
                 "Preparing BDD specification handoff for @obsidian-brain:orchestrator."
+            )
+        else:
+            answer_text = (
+                f"[SCAN] Role: {self.role_name} | Source: offline-mock | State: Ready\n"
+                f"🔍 **[{self.role_name}]** Offline read-only mock response (set GEMINI_API_KEY for live LLM evaluation)."
             )
 
         if answer_text:

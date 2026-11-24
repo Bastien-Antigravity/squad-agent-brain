@@ -526,6 +526,71 @@ class BloatedWorker:
         prompt_clean = strip_sandbox_headers(strip_frontmatter(raw_prompt)).strip()
         self.assertEqual(skill_clean, prompt_clean)
 
+    def test_catches_proposal4_hardening_violations(self):
+        """Verifies mechanical detection of UNBOUNDED_NETWORK_CALL, NON_ATOMIC_STATE_WRITE, BARE_EXCEPT_PASS, and UNBOUNDED_FRAME_ALLOCATION."""
+        bad_go = self.test_dir / "unbounded_net.go"
+        bad_go.write_text("""package main
+
+/*
+ESSENTIAL PROCESS:
+Test unbounded network, non-atomic state write, and unbounded frame allocation.
+
+DATA FLOW:
+1. Net and frame.
+
+KEY PARAMETERS:
+- None.
+*/
+
+// -----------------------------------------------------------------------------
+
+import (
+	"encoding/binary"
+	"net/http"
+	"os"
+)
+
+func FetchAndPersist(header []byte) {
+	_, _ = http.Get("http://127.0.0.1:8080/health")
+	_ = os.WriteFile(".shipper_offsets.json", []byte("{}"), 0644)
+	size := binary.BigEndian.Uint32(header[:4])
+	buf := make([]byte, size)
+	_ = buf
+}
+""")
+        go_violations = self.auditor.audit_file(bad_go)
+        go_rules = [v["rule"] for v in go_violations]
+        self.assertIn("UNBOUNDED_NETWORK_CALL", go_rules)
+        self.assertIn("NON_ATOMIC_STATE_WRITE", go_rules)
+        self.assertIn("UNBOUNDED_FRAME_ALLOCATION", go_rules)
+
+        bad_py = self.test_dir / "silent_swallow.py"
+        bad_py.write_text("""#!/usr/bin/env python
+# coding:utf-8
+
+\"\"\"
+ESSENTIAL PROCESS:
+Test bare except pass.
+
+DATA FLOW:
+1. Run.
+
+KEY PARAMETERS:
+- None.
+\"\"\"
+
+# -----------------------------------------------------------------------------------------------
+
+def process_item():
+    try:
+        work()
+    except:
+        pass
+""")
+        py_violations = self.auditor.audit_file(bad_py)
+        py_rules = [v["rule"] for v in py_violations]
+        self.assertIn("BARE_EXCEPT_PASS", py_rules)
+
 
 if __name__ == "__main__":
     unittest.main()

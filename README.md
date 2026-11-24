@@ -47,6 +47,7 @@ All tools are unified under the `main.py` router (`python3 08-Squad-Agent/main.p
 | `validate-compliance` | **Mechanical Code Compliance**. Verifies shebang/encoding, Triple-Block headers, dividers, ports, and mock pollution. |
 | `format-compliance` | **Auto-Compliance Refactorer**. AST-based transformer repairing headers, dividers, and imports (`--fix`). |
 | `debloat-audit` | **Debloat & Lean Code Sentinel**. Performs mechanical AST inspections (useless mutexes, TOCTOU checks, single-impl interfaces) and flags non-mechanical over-engineering. |
+| `eval-agent` | **Single-Agent Evaluator**. Runs any squad or specialist persona independently in read-only mode on an in-memory bus with ground-truth compliance & debloat grading. |
 | `check-coherence` | **Integrity Auditor**. Ensures runtime agent skills are 100% coherent with vault role prompts across 21 personas. |
 | `ensure-frontmatter` | **Doc Taxonomist**. Enforces YAML frontmatter schema and tag taxonomy on markdown notes. |
 | `hardening-yaml` | **YAML Hardener**. Enforces folder zone taxonomy rules on YAML configurations. |

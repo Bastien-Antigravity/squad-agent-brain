@@ -47,13 +47,13 @@ name: {role_name}
 description: The {role_name} persona from the Bastien-Antigravity squad.
 ---
 """
-    scan_block = f"""
+    trailer_block = """
 # 🧭 COMPLEXITY GATE & CANONICAL TOOLBOX CONTRACT (IDE <-> SQUAD LINK)
 1. **Complexity Gate (Max 2 Files / Step)**: Before writing code, evaluate whether the request touches >2 files, >2 architectural layers, or multiple languages. If so, decompose it via `TaskDecomposer` (`08-Squad-Agent/src/lib/task_decomposer.py`) into sequential atomic micro-steps.
 2. **Canonical `microservice-toolbox` APIs ONLY**:
    - Version: `config.get_version()` / `appConfig.GetVersion()` (never scan directories for `VERSION.txt`).
    - Networking: `config.get_listen_addr(cap)`, `config.get_grpc_listen_addr(cap)`, `config.get_rest_addr(cap)` (never hardcode `127.0.0.1` or ports).
-   - Config: Read from `config.get_capability('<service>')` (never chain `os.getenv()` fallbacks in service code; `standalone.yaml` expands `${{VAR:default}}` at boot).
+   - Config: Read from `config.get_capability('<service>')` (never chain `os.getenv()` fallbacks in service code; `standalone.yaml` expands `${VAR:default}` at boot).
 3. **Zero Over-Defensive Bloat (`15-Safe-By-Design-Invariants.md`)**:
    - Never write `hasattr(self.config, ...)` or `isinstance(self.config.data, dict)` on pre-validated `AppConfig`.
    - Never use `asyncio.Lock` without an inner `await`, never wrap Go `atomic.*` in `sync.Mutex`, and never check `os.path.exists()` before `open()` (TOCTOU).
@@ -61,13 +61,15 @@ description: The {role_name} persona from the Bastien-Antigravity squad.
 
 # 💾 STATE MANAGEMENT RULE (CRITICAL)
 Before finishing any major task or concluding a session, you MUST use your available file management tools to append a summary of your actions to the local `AI-Session-State.md` file in the target repository. This acts as our Hard-Stop Context Block to prevent memory loss across sessions.
-
+"""
+    if "[SCAN]" not in clean_body:
+        trailer_block += f"""
 # 🚨 ATTENTION RESTORATION (SCAN METHOD)
 To prevent context degradation, you MUST begin EVERY single response with the following SCAN block:
 
 **[SCAN]** Role: {role_name} | Source: [Source Verification] | State: [Session Progress]
 """
-    return yaml_frontmatter + clean_body + "\n" + scan_block
+    return yaml_frontmatter + clean_body + "\n" + trailer_block
 
 # -----------------------------------------------------------------------------------------------
 

@@ -18,7 +18,8 @@ KEY PARAMETERS:
 - event_bus: SquadEventBus pub/sub provider.
 """
 
-from typing import Any, Dict
+from pathlib import Path as pathPath
+from typing import Any as typeAny, Dict as typeDict
 from src.agents.base_agent import BaseAgent
 from src.interfaces import SquadEventBus
 from src.auditing.debloat_audit import run_debloat_audit, generate_safe_by_design_markdown
@@ -71,7 +72,7 @@ class DebloatSentinelAgent(BaseAgent):
     DebloatSentinel agent daemon. Specialised in rooting out mechanical
     and cognitive over-engineering across polyglot microservices.
     """
-    def __init__(self, *, config: Any, logger: Any, pg_pool: Any, event_bus: SquadEventBus):
+    def __init__(self, *, config: typeAny, logger: typeAny, pg_pool: typeAny, event_bus: SquadEventBus):
         super().__init__(
             role_name="debloatsentinel",
             prompt_file="14-DebloatSentinel/Prompt-Debloat-Sentinel.md",
@@ -82,27 +83,37 @@ class DebloatSentinelAgent(BaseAgent):
         )
         vault_root, _ = resolve_vault_and_workspace(__file__)
         self.vault_root = vault_root
-        self.tools.extend([audit_codebase_bloat, generate_safe_by_design_spec, propose_code_simplification])
+        self.tools.extend([audit_codebase_bloat, propose_code_simplification])
+        if not self.read_only:
+            self.tools.append(generate_safe_by_design_spec)
 
-    # -----------------------------------------------------------------------------
+    # -----------------------------------------------------------------------------------------------
 
-    async def execute_tool(self, name: str, args: Dict[str, Any]) -> str:
+    async def execute_tool(self, name: str, args: typeDict[str, typeAny]) -> str:
         """Executes a function call requested by the model."""
+        if self.read_only and name == "generate_safe_by_design_spec":
+            return f"Error: Tool '{name}' is disabled in read-only mode for role '{self.role_name}'."
+
         if name == "audit_codebase_bloat":
             target = args.get("path", ".")
-            results = run_debloat_audit(target)
+            active_ws = self._resolve_active_workspace_root()
+            resolved_target = (active_ws / str(target)).resolve()
+            try:
+                resolved_target.relative_to(active_ws)
+            except ValueError:
+                return f"Error: Access denied. Path {target} is outside the workspace root."
+            results = run_debloat_audit(str(resolved_target))
             return str(results)
 
         if name == "generate_safe_by_design_spec":
-            from pathlib import Path
             target = args.get("path", ".")
             out_p = args.get("output_path", "")
             if not out_p:
-                out_p = str(Path(self.vault_root) / "03-Tech-Stack" / "02-Project-Architecture" / "15-Safe-By-Design-Invariants.md")
+                out_p = str(pathPath(self.vault_root) / "03-Tech-Stack" / "02-Project-Architecture" / "15-Safe-By-Design-Invariants.md")
             results = run_debloat_audit(target)
             md = generate_safe_by_design_markdown(results)
-            Path(out_p).parent.mkdir(parents=True, exist_ok=True)
-            Path(out_p).write_text(md, encoding="utf-8")
+            pathPath(out_p).parent.mkdir(parents=True, exist_ok=True)
+            pathPath(out_p).write_text(md, encoding="utf-8")
             return f"Successfully generated Safe-by-Design ledger at {out_p} ({results.get('total_safe_invariants', 0)} invariants cataloged)."
 
         if name == "propose_code_simplification":

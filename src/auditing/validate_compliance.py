@@ -48,6 +48,7 @@ from os import walk as osWalk
 from pathlib import Path
 from re import (
     IGNORECASE as reIgnoreCase,
+    MULTILINE as reMultiline,
     compile as reCompile,
     match as reMatch,
     search as reSearch,
@@ -1349,6 +1350,77 @@ class ComplianceAuditor:
                                     "message": "Plaintext logging of encrypted/secret parameter detected. Sensitive credentials must never be logged in plaintext; redact or mask before logging.",
                                 })
                                 break
+
+                # 8c. Explicit Failure Handling Invariant: Ban unbounded network calls in production Go code
+                if ext == ".go" and "SourceCode:" not in line and not stripped.startswith('"'):
+                    code_no_comment = reSub(r"(?<!:)//.*$", "", line)
+                    if any(tok in code_no_comment for tok in ("http.Get(", "http.Post(", "http.Head(", "net.Dial(")):
+                        violations.append({
+                            "file": str(file_path),
+                            "line": idx,
+                            "rule": "UNBOUNDED_NETWORK_CALL",
+                            "message": (
+                                "Unbounded network call (http.Get/Post/Head or net.Dial without timeout) detected in production Go code. "
+                                "Use an explicit http.Client{Timeout: ...}, context.WithTimeout, or net.DialTimeout."
+                            ),
+                        })
+
+                # 8d. Atomic Persistence Invariant: Ban direct non-atomic overwrites of checkpoint/state files
+                if ext in (".go", ".py"):
+                    has_direct_write = ("os.WriteFile(" in line) if ext == ".go" else (".write_text(" in line or ".write_bytes(" in line)
+                    if has_direct_write and any(tok in line.lower() for tok in ("offsets.json", "checkpoint_path", "state.json", "_state.yaml")):
+                        has_atomic_rename = any(k in content for k in ("os.Rename(", "osReplace(", ".replace(", ".tmp", "ftruncate"))
+                        if not has_atomic_rename:
+                            violations.append({
+                                "file": str(file_path),
+                                "line": idx,
+                                "rule": "NON_ATOMIC_STATE_WRITE",
+                                "message": (
+                                    "Direct non-atomic overwrite of persistent state/checkpoint file detected. "
+                                    "Write to a '.tmp' file, fsync, and atomically rename (os.Rename / os.replace) to prevent partial-write corruption."
+                                ),
+                            })
+
+        # 8e. Silent Error Degradation Invariant: Ban bare 'except: pass' in production Python code
+        if ext == ".py" and not is_test_file:
+            for match in reCompile(r"^\s*except\s*:\s*\n\s*pass\b", reMultiline).finditer(content):
+                line_num = content[:match.start()].count("\n") + 1
+                violations.append({
+                    "file": str(file_path),
+                    "line": line_num,
+                    "rule": "BARE_EXCEPT_PASS",
+                    "message": "Bare 'except: pass' swallows BaseException/errors silently without logging. Catch specific exceptions and log at WARNING/ERROR/CRITICAL.",
+                })
+
+        # 8f. Frame Allocation Security Invariant: Require MaxPayloadSize guard before 4-byte length frame allocation
+        if ext in (".go", ".rs") and not is_test_file:
+            decodes_u32_frame = "BigEndian.Uint32(" in content or "u32::from_be_bytes(" in content
+            allocates_frame_buf = "make([]byte," in content or "vec![0u8;" in content
+            if decodes_u32_frame and allocates_frame_buf:
+                has_payload_bound = any(
+                    k in content
+                    for k in (
+                        "MaxPayload",
+                        "MAX_PAYLOAD",
+                        "max_payload",
+                        "MaxFrame",
+                        "max_frame",
+                        "maxSize",
+                        "max_size",
+                        "10 * 1024 * 1024",
+                        "1024 * 1024",
+                    )
+                )
+                if not has_payload_bound:
+                    violations.append({
+                        "file": str(file_path),
+                        "line": 1,
+                        "rule": "UNBOUNDED_FRAME_ALLOCATION",
+                        "message": (
+                            "4-byte length-prefixed frame reader allocates a buffer without enforcing MaxPayloadSize / MAX_PAYLOAD_SIZE. "
+                            "Validate frame length against MaxPayloadSize before allocating memory."
+                        ),
+                    })
 
         # 9. Python Granular Functional Import & camelCase Aliasing Check
         if ext == ".py" and not is_test_file and (strict_imports or "# strict:imports" in content[:500]):

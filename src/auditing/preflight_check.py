@@ -494,6 +494,96 @@ def _check_ghcr_and_test_isolation() -> Tuple[str, List[str]]:
     except Exception as e:
         return "RED", [f"GHCR & workflow compliance check failed: {e}"]
 
+# -----------------------------------------------------------------------------------------------
+
+def _check_hardening_tests_docs_and_benchmarks() -> Tuple[str, List[str]]:
+    """
+    Gate 11: Mechanically enforces Proposal 4 recurring-audit safeguards across the fleet:
+      - Weakness #7: Every active code repository includes >= 1 adversarial/fault test.
+      - Weakness #9: Doc-Status & TODO.md parity (no pending TODO item claimed as [COMPLETED]/[ACTIVE] in README/ARCHITECTURE).
+      - Weakness #10: Hot-path & sandbox repositories contain reproducible Benchmark* / performance tests.
+    """
+    messages = []
+    try:
+        active_code_repos = [
+            "safe-socket",
+            "distributed-config",
+            "universal-logger",
+            "microservice-toolbox",
+            "flexible-logger",
+            "config-server",
+            "log-server",
+            "notif-server",
+            "tele-remote",
+            "watchdog-agent",
+            "web-interface",
+            "obsidian-brain/08-Squad-Agent",
+            "obsidian-brain/09-RAG-Engine",
+            "sandbox-testing",
+        ]
+        adv_re = re.compile(
+            r"(?:func\s+Test|def\s+test_|fn\s+test_)[A-Za-z0-9_]*(?:Timeout|Overflow|Saturat|Corrupt|Malformed|Invalid|Rollback|Disconnect|Offline|Drop|Throttl|Stale|Reject|Fail|Race|Error|Recovery|Broken|Unreachable|Cancel|Tamper|Limit|Exhaust)",
+            re.IGNORECASE,
+        )
+        bench_re = re.compile(
+            r"(?:func\s+Benchmark[A-Za-z0-9_]+|criterion_group!|#\[bench\]|TestLogServer_Performance)",
+            re.MULTILINE,
+        )
+        excluded_dirs = {".git", ".venv", "venv", "node_modules", "target", "bin", "obj", "dist", "build", "vendor"}
+
+        missing_adversarial = []
+        doc_conflicts = []
+        total_adv_tests = 0
+        total_benchmarks = 0
+
+        for rel_repo in active_code_repos:
+            repo_path = WORKSPACE_ROOT / rel_repo
+            if not repo_path.exists():
+                continue
+
+            adv_count = 0
+            bench_count = 0
+            for dp, dirs, files in os.walk(repo_path):
+                dirs[:] = [d for d in dirs if d not in excluded_dirs and not d.startswith(".")]
+                for f in files:
+                    if f.endswith(("_test.go", "_test.py", ".rs")) or f.startswith("test_"):
+                        txt = (Path(dp) / f).read_text(encoding="utf-8", errors="ignore")
+                        adv_count += len(adv_re.findall(txt))
+                        bench_count += len(bench_re.findall(txt))
+
+            total_adv_tests += adv_count
+            total_benchmarks += bench_count
+            if adv_count == 0:
+                missing_adversarial.append(rel_repo)
+
+            # Doc-Status & TODO.md parity check
+            todo_file = repo_path / "TODO.md"
+            if todo_file.exists():
+                todo_txt = todo_file.read_text(encoding="utf-8", errors="ignore")
+                pending_feats = set(re.findall(r"-\s*\[\s*\]\s*.*?\b(FEAT-\d{3})\b", todo_txt))
+                if pending_feats:
+                    for doc_name in ("README.md", "ARCHITECTURE.md"):
+                        doc_file = repo_path / doc_name
+                        if doc_file.exists():
+                            doc_txt = doc_file.read_text(encoding="utf-8", errors="ignore")
+                            for feat_id in sorted(pending_feats):
+                                if re.search(rf"\b{feat_id}\b.*?(?:\[COMPLETED\]|\[ACTIVE\])", doc_txt, re.IGNORECASE):
+                                    doc_conflicts.append(f"{rel_repo}/{doc_name} claims {feat_id} active while TODO.md is pending")
+
+        if missing_adversarial:
+            return "YELLOW", [f"Repositories missing adversarial/fault tests: {', '.join(missing_adversarial)}"]
+        if doc_conflicts:
+            return "YELLOW", [f"Doc/TODO parity conflicts: {'; '.join(doc_conflicts[:3])}"]
+        if total_benchmarks == 0:
+            return "YELLOW", ["No reproducible Benchmark* or performance tests detected across hot-path repositories."]
+
+        messages.append(
+            f"All {len(active_code_repos)} code repos pass adversarial test coverage ({total_adv_tests} fault tests, {total_benchmarks} benchmarks, 0 TODO/doc conflicts)."
+        )
+        return "GREEN", messages
+    except Exception as e:
+        return "RED", [f"Hardening tests, docs & benchmarks check failed: {e}"]
+
 # ### MAIN ###
 
 def run_preflight(quiet: bool = False) -> bool:
@@ -512,6 +602,7 @@ def run_preflight(quiet: bool = False) -> bool:
         ("Dynamic Versioning Integrity", _check_versioning_integrity),
         ("Ecosystem Tooling & Anti-Pattern Parity", _check_ecosystem_tooling_parity),
         ("GHCR Container & Workflow Governance", _check_ghcr_and_test_isolation),
+        ("Adversarial Tests, Doc Parity & Benchmarks", _check_hardening_tests_docs_and_benchmarks),
     ]
     
     overall = "GREEN"

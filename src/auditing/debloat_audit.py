@@ -650,14 +650,16 @@ def get_default_baseline_path() -> Path:
 
 def main():
     parser = ArgumentParser(description="Unified Debloat Sentinel & AST Pattern Engine")
-    parser.add_argument("--path", "-p", default=".", help="Target path to audit (default: .)")
+    parser.add_argument("pos_path", nargs="?", default=None, help="Optional positional target path to audit")
+    parser.add_argument("--path", "-p", default=None, help="Target path to audit (default: .)")
     parser.add_argument("--json", "-j", action="store_true", help="Emit JSON output for agents")
     parser.add_argument("--generate-safe-doc", "-s", help="Output path for Safe-By-Design markdown ledger")
     parser.add_argument("--save-baseline", "-b", nargs="?", const="DEFAULT", help="Save current findings as baseline ledger (default: 08-Squad-Agent/data/debloat_baseline.json)")
     parser.add_argument("--diff", "-d", nargs="?", const="DEFAULT", help="Only show new findings compared to baseline ledger (default: 08-Squad-Agent/data/debloat_baseline.json)")
     args = parser.parse_args()
 
-    results = run_debloat_audit(args.path)
+    target_path = args.path if args.path is not None else (args.pos_path if args.pos_path is not None else ".")
+    results = run_debloat_audit(target_path)
 
     if args.save_baseline:
         base_p = get_default_baseline_path() if args.save_baseline == "DEFAULT" else resolve_target_path(args.save_baseline)
