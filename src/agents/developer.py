@@ -30,6 +30,7 @@ from typing import Any as typeAny, Dict as typeDict, Optional as typeOptional
 from src.interfaces import SquadEventBus
 from src.agents.base_agent import (
     BaseAgent,
+    edit_workspace_file,
     execute_shell_command,
     list_workspace_files,
     query_rag_engine,
@@ -114,6 +115,7 @@ class DeveloperAgent(BaseAgent):
             query_rag_engine,
             list_workspace_files,
             read_workspace_file,
+            edit_workspace_file,
             write_workspace_file,
             execute_shell_command,
             scaffold_microservice,
@@ -125,6 +127,8 @@ class DeveloperAgent(BaseAgent):
         """Executes DeveloperAgent tools, delegating standard workspace/RAG tools to BaseAgent."""
         if self.read_only and name == "scaffold_microservice":
             return f"Error: Tool '{name}' is disabled in read-only mode for role '{self.role_name}'."
+        if self.worktree_sandbox_mode and name == "scaffold_microservice":
+            return f"Error: Tool '{name}' is disabled in isolated worktree sandbox mode."
         if name != "scaffold_microservice":
             return await super().execute_tool(name, args)
 

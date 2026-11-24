@@ -1152,7 +1152,7 @@ def scaffold_brain(
     folders = [
         "00-AI-Orchestration",
         "01-Strategic-Nexus",
-        "02-Business-BDD",
+        "02-Business-BDD/02-Behavior-Specs",
         "03-Tech-Stack",
         "04-Rapid-Prototyping",
         "05-Fleet-Operation",
@@ -1214,6 +1214,14 @@ def scaffold_brain(
             logger.info(f"   [DRY-RUN] Would copy {repo_control_src} -> {dest_repo_control}")
         else:
             shutilCopytree(repo_control_src, dest_repo_control, dirs_exist_ok=True, ignore=common_ignore)
+
+    templates_src = vault_root / "05-Fleet-Operation" / "04-Templates"
+    if templates_src.exists():
+        dest_templates = target_path / "05-Fleet-Operation" / "04-Templates"
+        if dry_run:
+            logger.info(f"   [DRY-RUN] Would copy {templates_src} -> {dest_templates}")
+        else:
+            shutilCopytree(templates_src, dest_templates, dirs_exist_ok=True, ignore=common_ignore)
 
     tech_stack_src = vault_root / "03-Tech-Stack"
     if tech_stack_src.exists():

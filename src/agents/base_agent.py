@@ -29,8 +29,9 @@ from json import dumps as jsonDumps
 from os import environ as osEnviron, getenv as osGetenv, walk as osWalk
 from pathlib import Path as pathPath
 from re import findall as reFindall, search as reSearch, split as reSplit, sub as reSub
+from shlex import split as shlexSplit
 from subprocess import TimeoutExpired as subprocessTimeoutExpired, run as subprocessRun
-from typing import Any as typeAny, Dict as typeDict, List as typeList, Optional as typeOptional
+from typing import Any as typeAny, Dict as typeDict, List as typeList, Optional as typeOptional, Set as typeSet, Tuple as typeTuple
 from google import genai as googleGenai
 from google.genai import errors as googleGenaiErrors, types as googleGenaiTypes
 from yaml import safe_load as yamlSafeLoad
@@ -72,6 +73,7 @@ _READ_ONLY_ROLES = frozenset({
 })
 
 _MUTATING_TOOL_NAMES = frozenset({
+    "edit_workspace_file",
     "write_workspace_file",
     "execute_shell_command",
     "scaffold_microservice",
@@ -81,6 +83,31 @@ _MUTATING_TOOL_NAMES = frozenset({
     "purge_brain_index",
     "record_strategic_milestone",
 })
+
+_BLOCKED_IN_WORKTREE_TOOLS = frozenset({
+    "scaffold_microservice",
+    "generate_safe_by_design_spec",
+    "sync_code_documentation",
+    "index_brain_document",
+    "purge_brain_index",
+    "record_strategic_milestone",
+    "probe_service_health",
+})
+
+_PROTECTED_SANDBOX_FILENAMES = frozenset({
+    "version.txt",
+    "standalone.yaml",
+    ".env",
+    "docker-compose.yaml",
+    "docker-compose.yml",
+})
+
+_SANDBOX_SHELL_META_CHARS = (";", "&&", "||", "|", "`", "$(", ">", "<", "\n", "\r")
+
+_SANDBOX_ALLOWED_SUBCOMMANDS: typeDict[str, typeSet[str]] = {
+    "go": {"test", "vet", "build"},
+    "cargo": {"check", "test", "clippy"},
+}
 
 _LIST_EXCLUDED_DIRS = frozenset({
     ".git",
@@ -135,6 +162,22 @@ def read_workspace_file(path: str, fold_bodies: bool = False) -> str:
     Args:
         path: Relative path to the file from workspace root (e.g. 'src/core/controller.py').
         fold_bodies: Whether to collapse large function and class bodies to save tokens (default False).
+    """
+    return ""
+
+
+# -----------------------------------------------------------------------------------------------
+
+
+def edit_workspace_file(path: str, target: str, replacement: str) -> str:
+    """
+    Replaces an exact contiguous string block inside an existing file in the active workspace.
+    Prefer this surgical tool over write_workspace_file when modifying existing files.
+
+    Args:
+        path: Relative path to the existing file from workspace root.
+        target: Exact character sequence in the file to replace (including indentation).
+        replacement: Complete drop-in replacement text for target.
     """
     return ""
 
@@ -493,6 +536,11 @@ class BaseAgent:
             if read_only is not None
             else (self.role_name in _READ_ONLY_ROLES)
         )
+        self.worktree_sandbox_mode: bool = False
+        self.max_mutated_files: int = 0
+        self.mutated_files: typeSet[str] = set()
+        self.sandbox_env: typeOptional[typeDict[str, str]] = None
+
         if self.read_only:
             self.tools = [query_rag_engine, list_workspace_files, read_workspace_file]
         else:
@@ -500,6 +548,7 @@ class BaseAgent:
                 query_rag_engine,
                 list_workspace_files,
                 read_workspace_file,
+                edit_workspace_file,
                 write_workspace_file,
                 execute_shell_command,
             ]
@@ -509,17 +558,61 @@ class BaseAgent:
     def enable_readonly_mode(self) -> None:
         """Enforces strict read-only tool permissions on this agent instance."""
         self.read_only = True
+        self.worktree_sandbox_mode = False
+        self.tools = self._get_effective_tools()
+
+    # -----------------------------------------------------------------------------------------------
+
+    def enable_worktree_sandbox_mode(
+        self,
+        *,
+        sandbox_root: pathPath,
+        max_files: int = 2,
+        sandbox_env: typeOptional[typeDict[str, str]] = None,
+    ) -> None:
+        """
+        Unlocks isolated write/test tools strictly jailed inside an ephemeral worktree directory,
+        blocking external side-effect tools, protected files, arbitrary shell chains, and >max_files edits.
+        """
+        resolved_sandbox = pathPath(sandbox_root).resolve()
+        if not resolved_sandbox.is_dir():
+            raise ValueError(f"{self.Name} : Sandbox directory '{resolved_sandbox}' does not exist.")
+
+        self.read_only = False
+        self.worktree_sandbox_mode = True
+        self.domain_workspace_root = resolved_sandbox
+        self.max_mutated_files = max(1, int(max_files))
+        self.mutated_files = set()
+        self.sandbox_env = dict(sandbox_env) if sandbox_env is not None else None
+
+        existing_names = {getattr(t, "__name__", "") for t in self.tools}
+        for core_tool in (
+            query_rag_engine,
+            list_workspace_files,
+            read_workspace_file,
+            edit_workspace_file,
+            write_workspace_file,
+            execute_shell_command,
+        ):
+            if core_tool.__name__ not in existing_names:
+                self.tools.append(core_tool)
+                existing_names.add(core_tool.__name__)
+
         self.tools = self._get_effective_tools()
 
     # -----------------------------------------------------------------------------------------------
 
     def _get_effective_tools(self) -> typeList[typeAny]:
-        """Returns active LLM tools, stripping mutating tools whenever read_only is enabled."""
-        if not self.read_only:
-            return list(self.tools)
-        return [
-            t for t in self.tools if getattr(t, "__name__", "") not in _MUTATING_TOOL_NAMES
-        ]
+        """Returns active LLM tools filtered by read_only or worktree_sandbox_mode policy."""
+        if self.read_only:
+            return [
+                t for t in self.tools if getattr(t, "__name__", "") not in _MUTATING_TOOL_NAMES
+            ]
+        if self.worktree_sandbox_mode:
+            return [
+                t for t in self.tools if getattr(t, "__name__", "") not in _BLOCKED_IN_WORKTREE_TOOLS
+            ]
+        return list(self.tools)
 
     # -----------------------------------------------------------------------------------------------
 
@@ -1112,10 +1205,139 @@ class BaseAgent:
 
     # -----------------------------------------------------------------------------------------------
 
+    def _validate_mutation_target(
+        self,
+        *,
+        path_arg: str,
+        active_workspace_root: pathPath,
+    ) -> typeTuple[typeOptional[pathPath], str]:
+        """Validates path containment, symlink safety, protected filenames, and Complexity Gate bounds."""
+        cleaned_rel = (path_arg or "").strip()
+        if not cleaned_rel:
+            return None, "Error: Non-empty relative file 'path' is required."
+
+        lexical_target = active_workspace_root / cleaned_rel
+        if self.worktree_sandbox_mode and lexical_target.is_symlink():
+            return None, f"Error: Refusing to modify symlink '{cleaned_rel}' in worktree sandbox mode."
+
+        file_path = lexical_target.resolve()
+        try:
+            rel_norm = str(file_path.relative_to(active_workspace_root))
+        except ValueError:
+            return None, f"Error: Access denied. Path {cleaned_rel} is outside the workspace root."
+
+        if ".git" in file_path.parts:
+            return None, f"Error: Access denied. Modifying Git metadata ('{cleaned_rel}') is prohibited."
+
+        if self.worktree_sandbox_mode and file_path.name.lower() in _PROTECTED_SANDBOX_FILENAMES:
+            return (
+                None,
+                f"Error: File '{file_path.name}' is protected and cannot be modified in worktree sandbox mode.",
+            )
+
+        if (
+            self.max_mutated_files > 0
+            and rel_norm not in self.mutated_files
+            and len(self.mutated_files) >= self.max_mutated_files
+        ):
+            return (
+                None,
+                f"Error: Complexity Gate exceeded (max {self.max_mutated_files} mutated file(s) per run; "
+                f"already modified: {sorted(self.mutated_files)}).",
+            )
+
+        return file_path, rel_norm
+
+    # -----------------------------------------------------------------------------------------------
+
+    def _audit_written_file(self, *, file_path: pathPath, path_arg: str, action_label: str) -> str:
+        """Runs ComplianceAuditor on newly written/edited source files and formats feedback."""
+        if file_path.suffix.lower() in (".py", ".go", ".rs", ".cpp", ".h", ".hpp"):
+            try:
+                _, central_workspace_root = resolve_vault_and_workspace(__file__)
+                from src.auditing.validate_compliance import ComplianceAuditor
+                auditor = ComplianceAuditor(workspace_root=central_workspace_root)
+                violations = auditor.audit_file(file_path, strict_imports=True, strict_lean=True)
+                if violations:
+                    v_lines = [f"  - [{v['rule']}] Line {v['line']}: {v['message']}" for v in violations[:8]]
+                    return (
+                        f"Success {action_label} file {path_arg}, BUT {len(violations)} ecosystem compliance / lean-code "
+                        f"violation(s) were detected and MUST be fixed immediately:\n" + "\n".join(v_lines)
+                    )
+            except Exception as audit_err:
+                self.logger.warning(f"{self.Name} : ComplianceAuditor check skipped on '{path_arg}': {audit_err}")
+        return f"Success {action_label} file {path_arg}"
+
+    # -----------------------------------------------------------------------------------------------
+
+    async def _execute_sandboxed_command(self, *, cmd_arg: str, active_workspace_root: pathPath) -> str:
+        """Executes strictly allowlisted test/check binaries with shell=False inside the worktree jail."""
+        raw_cmd = (cmd_arg or "").strip()
+        if not raw_cmd:
+            return "Error: Non-empty test/build command is required."
+
+        for meta in _SANDBOX_SHELL_META_CHARS:
+            if meta in raw_cmd:
+                return f"Error: Shell chaining/redirection token '{meta}' is prohibited in worktree sandbox mode."
+
+        try:
+            tokens = shlexSplit(raw_cmd)
+        except ValueError as parse_err:
+            return f"Error: Malformed command syntax: {parse_err}"
+
+        if not tokens:
+            return "Error: Non-empty command is required."
+
+        for tok in tokens[1:]:
+            if ".." in tok.split("/") or tok.startswith("/") or tok.startswith("~"):
+                return (
+                    f"Error: Argument '{tok}' escapes worktree sandbox (absolute, home, and '..' paths are prohibited)."
+                )
+            if tok.startswith("-exec") or tok == "-o":
+                return f"Error: Flag '{tok}' is prohibited in worktree sandbox mode."
+
+        binary = pathPath(tokens[0]).name
+        allowed = False
+        if binary in _SANDBOX_ALLOWED_SUBCOMMANDS:
+            allowed = len(tokens) >= 2 and tokens[1] in _SANDBOX_ALLOWED_SUBCOMMANDS[binary]
+        elif binary == "pytest":
+            allowed = True
+        elif binary in ("python", "python3"):
+            allowed = len(tokens) >= 3 and tokens[1] == "-m" and tokens[2] in ("pytest", "unittest", "py_compile")
+
+        if not allowed:
+            return (
+                f"Error: Command '{raw_cmd}' is not permitted in worktree sandbox mode. "
+                "Allowed commands: 'go test|vet|build ...', 'pytest ...', 'python3 -m pytest|unittest|py_compile ...', "
+                "and 'cargo check|test|clippy ...' (relative paths only)."
+            )
+
+        run_env = dict(self.sandbox_env) if self.sandbox_env is not None else dict(osEnviron)
+        try:
+            proc = await asyncioToThread(
+                subprocessRun,
+                tokens,
+                shell=False,
+                capture_output=True,
+                text=True,
+                cwd=str(active_workspace_root),
+                env=run_env,
+                timeout=60,
+            )
+            return f"Stdout:\n{proc.stdout}\nStderr:\n{proc.stderr}\nExit Code: {proc.returncode}"
+        except subprocessTimeoutExpired:
+            return "Error: Sandboxed command timed out after 60 seconds."
+        except Exception as exc:
+            return f"Error executing sandboxed command: {exc}"
+
+    # -----------------------------------------------------------------------------------------------
+
     async def execute_tool(self, name: str, args: typeDict[str, typeAny]) -> str:
         """Dynamic tool execution handler."""
         if self.read_only and name in _MUTATING_TOOL_NAMES:
             return f"Error: Tool '{name}' is disabled in read-only mode for role '{self.role_name}'."
+        if self.worktree_sandbox_mode and name in _BLOCKED_IN_WORKTREE_TOOLS:
+            return f"Error: Tool '{name}' is disabled in isolated worktree sandbox mode."
 
         if name == "query_rag_engine":
             query_arg = args.get("query", "")
@@ -1205,45 +1427,81 @@ class BaseAgent:
             except Exception as e:
                 return f"Error reading file {path_arg}: {e}"
 
+        elif name == "edit_workspace_file":
+            path_arg = str(args.get("path", ""))
+            target_arg = str(args.get("target", ""))
+            replacement_arg = str(args.get("replacement", ""))
+            if not target_arg:
+                return "Error: 'target' string cannot be empty for edit_workspace_file."
+            if "# ... folded ..." in replacement_arg or "// ... folded ..." in replacement_arg:
+                return (
+                    f"Error: Refusing to edit {path_arg} because replacement contains folded-body "
+                    f"placeholders ('... folded ...'). Re-read the file with fold_bodies=False first."
+                )
+
+            active_workspace_root = self._resolve_active_workspace_root()
+            file_path, rel_or_err = self._validate_mutation_target(
+                path_arg=path_arg,
+                active_workspace_root=active_workspace_root,
+            )
+            if file_path is None:
+                return rel_or_err
+
+            try:
+                existing_content = file_path.read_text(encoding="utf-8")
+            except FileNotFoundError:
+                return f"Error: File {path_arg} does not exist. Use write_workspace_file to create a new file."
+            except OSError as exc:
+                return f"Error reading file {path_arg}: {exc}"
+
+            if target_arg not in existing_content:
+                return f"Error: Target block not found in {path_arg}. Read the exact file lines before editing."
+
+            updated_content = existing_content.replace(target_arg, replacement_arg)
+            tmp_path = file_path.parent / f".{file_path.name}.squad.tmp"
+            try:
+                tmp_path.write_text(updated_content, encoding="utf-8")
+                tmp_path.replace(file_path)
+                self.mutated_files.add(rel_or_err)
+                return self._audit_written_file(file_path=file_path, path_arg=path_arg, action_label="editing")
+            except Exception as exc:
+                return f"Error editing file {path_arg}: {exc}"
+
         elif name == "write_workspace_file":
-            path_arg = args.get("path", "")
-            content_arg = args.get("content", "")
+            path_arg = str(args.get("path", ""))
+            content_arg = str(args.get("content", ""))
             if "# ... folded ..." in content_arg or "// ... folded ..." in content_arg:
                 return (
                     f"Error: Refusing to write {path_arg} because content contains folded-body "
                     f"placeholders ('... folded ...'). Re-read the file with fold_bodies=False first."
                 )
             active_workspace_root = self._resolve_active_workspace_root()
-            _, central_workspace_root = resolve_vault_and_workspace(__file__)
-            file_path = (active_workspace_root / path_arg).resolve()
-
-            try:
-                file_path.relative_to(active_workspace_root)
-            except ValueError:
-                return f"Error: Access denied. Path {path_arg} is outside the workspace root."
+            file_path, rel_or_err = self._validate_mutation_target(
+                path_arg=path_arg,
+                active_workspace_root=active_workspace_root,
+            )
+            if file_path is None:
+                return rel_or_err
 
             try:
                 file_path.parent.mkdir(parents=True, exist_ok=True)
-                file_path.write_text(content_arg, encoding="utf-8")
-                if file_path.suffix.lower() in (".py", ".go", ".rs", ".cpp", ".h", ".hpp"):
-                    try:
-                        from src.auditing.validate_compliance import ComplianceAuditor
-                        auditor = ComplianceAuditor(workspace_root=central_workspace_root)
-                        violations = auditor.audit_file(file_path, strict_imports=True, strict_lean=True)
-                        if violations:
-                            v_lines = [f"  - [{v['rule']}] Line {v['line']}: {v['message']}" for v in violations[:8]]
-                            return (
-                                f"Success writing to file {path_arg}, BUT {len(violations)} ecosystem compliance / lean-code violation(s) "
-                                f"were detected and MUST be fixed immediately:\n" + "\n".join(v_lines)
-                            )
-                    except Exception as audit_err:
-                        self.logger.warning(f"{self.Name} : ComplianceAuditor check skipped on '{path_arg}': {audit_err}")
-                return f"Success writing to file {path_arg}"
+                tmp_path = file_path.parent / f".{file_path.name}.squad.tmp"
+                tmp_path.write_text(content_arg, encoding="utf-8")
+                tmp_path.replace(file_path)
+                self.mutated_files.add(rel_or_err)
+                return self._audit_written_file(file_path=file_path, path_arg=path_arg, action_label="writing to")
             except Exception as e:
                 return f"Error writing file {path_arg}: {e}"
 
         elif name == "execute_shell_command":
-            cmd_arg = args.get("command", "")
+            cmd_arg = str(args.get("command", ""))
+            active_workspace_root = self._resolve_active_workspace_root()
+            if self.worktree_sandbox_mode:
+                return await self._execute_sandboxed_command(
+                    cmd_arg=cmd_arg,
+                    active_workspace_root=active_workspace_root,
+                )
+
             blocked_commands = [
                 "rm", "rmdir", "chmod", "chown", "sudo", "su", "curl", "wget",
                 "scp", "ssh", "sftp", "ftp", "/etc/", "/var/", "mv", "dd",
@@ -1261,7 +1519,6 @@ class BaseAgent:
                         if reSearch(r"\b" + kw + r"\b", part_strip):
                             return f"Error: Command execution blocked for safety. Command '{kw}' is prohibited."
 
-            active_workspace_root = self._resolve_active_workspace_root()
             try:
                 proc = await asyncioToThread(
                     subprocessRun,

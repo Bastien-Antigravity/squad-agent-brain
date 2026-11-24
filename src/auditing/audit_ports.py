@@ -185,11 +185,27 @@ def load_registry_ports(vault_root: Path) -> Tuple[Path, Dict[str, Any], Dict[st
         data = json.load(f)
         
     ports_map = {}
-    for item in data.get("services", {}).get("infrastructure", []):
+    services_node = data.get("services", {})
+    if isinstance(services_node, list):
+        for item in services_node:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name")
+            if not name:
+                continue
+            m = {"default_port": item.get("default_port", 0)}
+            if "grpc_port" in item:
+                m["grpc_port"] = item["grpc_port"]
+            if "rest_port" in item:
+                m["rest_port"] = item["rest_port"]
+            ports_map[name] = m
+        return registry_path, data, ports_map
+
+    for item in services_node.get("infrastructure", []):
         name = item.get("name")
         ports_map[name] = {"default_port": item.get("default_port", 0)}
         
-    for item in data.get("services", {}).get("application", []):
+    for item in services_node.get("application", []):
         name = item.get("name")
         m = {"default_port": item.get("default_port", 0)}
         if "grpc_port" in item:
@@ -243,6 +259,45 @@ def audit_ports(
     messages = []
     has_critical_drift = False
     has_warning = False
+
+    # Check if operating inside an isolated sandbox brain or external domain workspace
+    inv_path = v_root / "05-Fleet-Operation" / "00-Repo-Control" / "inventory.json"
+    is_isolated_or_domain = False
+    if inv_path.exists():
+        try:
+            inv_data = json.loads(inv_path.read_text(encoding="utf-8"))
+            is_isolated_or_domain = bool(inv_data.get("isolated_sandbox") or inv_data.get("domain_workspace"))
+        except Exception:
+            pass
+
+    native_yaml_exists = (ws_root / "docker-deployment" / "modes" / "local" / "config" / "native.yaml").exists()
+    if is_isolated_or_domain or not native_yaml_exists:
+        standalone_candidates = [
+            v_root / "standalone.yaml",
+            ws_root / "standalone.yaml",
+            v_root.parent / "standalone.yaml",
+        ]
+        active_yaml = next((c for c in standalone_candidates if c.exists()), None)
+        if active_yaml is None:
+            return "RED", [f"No standalone.yaml or native.yaml found for vault {v_root}"]
+        try:
+            yaml_caps = load_yaml_capabilities(active_yaml)
+            collision_msgs = check_intra_service_port_uniqueness(active_yaml.name, yaml_caps)
+            if collision_msgs:
+                return "RED", collision_msgs
+            _, _, registry = load_registry_ports(v_root)
+            for svc_name, reg_ports in registry.items():
+                cap_key = svc_name.replace("-", "_")
+                if cap_key in yaml_caps:
+                    yaml_p = yaml_caps[cap_key].get("port", 0)
+                    reg_p = reg_ports.get("default_port", 0)
+                    if yaml_p and reg_p and yaml_p != reg_p:
+                        return "RED", [f"DRIFT: {svc_name} default_port ({reg_p}) != {active_yaml.name} ({yaml_p})"]
+            return "GREEN", [
+                f"Zero port drift detected in isolated/domain profile ({active_yaml.name}, {len(yaml_caps)} capabilities)."
+            ]
+        except Exception as e:
+            return "RED", [f"Isolated/domain port audit failed: {e}"]
 
     try:
         ssot = load_ssot_capabilities(ws_root)

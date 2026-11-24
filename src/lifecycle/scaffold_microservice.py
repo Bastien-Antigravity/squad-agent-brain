@@ -655,6 +655,9 @@ func (c *Controller) OnLiveConfigUpdate(update map[string]interface{{}}) {{
 //
 // DATA FLOW:
 // Contract definitions consumed by concrete providers.
+//
+// KEY PARAMETERS:
+// - ctx: Execution context enforcing bounded cancellation and deadlines.
 // =============================================================================
 
 import "context"
@@ -678,6 +681,13 @@ type Service interface {{
 //
 // ESSENTIAL PROCESS:
 // Data structures and schemas for {name}.
+//
+// DATA FLOW:
+// 1. Populated by core domain controllers and REST handlers.
+// 2. Serialized into JSON telemetry payloads.
+//
+// KEY PARAMETERS:
+// - ServiceName: Canonical identifier of the reporting microservice.
 // =============================================================================
 
 // StatusPayload represents the operational health telemetry of {name}.
@@ -767,6 +777,34 @@ func TestController_Lifecycle(t *testing.T) {{
 
 	if err := ctrl.Stop(context.Background()); err != nil {{
 		t.Fatalf("unexpected Stop error: %v", err)
+	}}
+}}
+
+func TestController_CancelAndHotReloadRecovery(t *testing.T) {{
+	cfg := &toolbox_config.AppConfig{{Profile: "test"}}
+	logger := &mockLogger{{}}
+	ctrl := NewController(cfg, logger)
+
+	ctrl.OnLiveConfigUpdate(map[string]interface{{}}{{"log_level": "DEBUG"}})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := ctrl.Stop(ctx); err != nil {{
+		t.Fatalf("expected clean Stop on cancelled context, got: %v", err)
+	}}
+}}
+
+func BenchmarkController_StartStop(b *testing.B) {{
+	cfg := &toolbox_config.AppConfig{{Profile: "test"}}
+	logger := &mockLogger{{}}
+	ctrl := NewController(cfg, logger)
+	ctx := context.Background()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {{
+		_ = ctrl.Start("127.0.0.1:{port}")
+		_ = ctrl.Stop(ctx)
 	}}
 }}
 """
@@ -1073,10 +1111,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {{
     let ac = load_config("standalone")?;
     let listen_addr = ac.get_listen_addr("{cap_name}")?;
     let version = ac.get_version();
-    println!("Starting {name} (version {{}})...", version);
+    ac.logger.info(&format!("Starting {name} (version {{}})...", version));
 
     // 1. Initialize Controller & Exchange Contracts
-    let ctrl = core::Controller::new("{name}");
+    let ctrl = core::Controller::new("{name}", ac.logger.clone());
     ctrl.start(&listen_addr).await?;
     let _contracts = contracts::build_exchange_contracts(&listen_addr);
 
@@ -1102,7 +1140,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {{
 
     // Await termination signal
     tokio::signal::ctrl_c().await?;
-    println!("Termination signal received, shutting down {name}...");
+    ac.logger.info("Termination signal received, shutting down {name}...");
 
     ctrl.stop().await?;
     Ok(())
@@ -1172,34 +1210,41 @@ pub fn build_exchange_contracts(listen_addr: &str) -> Vec<ExchangeContract> {{
 // Coordinates background tasks and handles health checks.
 //
 // KEY PARAMETERS:
-// - None
+// - logger: Shared universal-logger instance from AppConfig.
 // =============================================================================
+
+use microservice_toolbox::logger::Logger;
 
 pub struct Controller {{
     pub name: String,
+    logger: Logger,
 }}
 
 // -----------------------------------------------------------------------------
 
 impl Controller {{
-    pub fn new(name: &str) -> Self {{
+    pub fn new(name: &str, logger: Logger) -> Self {{
         Self {{
             name: name.to_string(),
+            logger,
         }}
     }}
 
     pub async fn start(&self, addr: &str) -> Result<(), Box<dyn std::error::Error>> {{
-        println!("{{}} controller running on {{}}", self.name, addr);
+        self.logger.info(&format!("{{}} controller running on {{}}", self.name, addr));
         Ok(())
     }}
 
     pub async fn stop(&self) -> Result<(), Box<dyn std::error::Error>> {{
-        println!("{{}} controller shutdown complete", self.name);
+        self.logger.info(&format!("{{}} controller shutdown complete", self.name));
         Ok(())
     }}
 
     pub fn on_live_config_update(&self) {{
-        println!("{{}} controller: applying dynamic configuration update without restart", self.name);
+        self.logger.info(&format!(
+            "{{}} controller: applying dynamic configuration update without restart",
+            self.name
+        ));
     }}
 }}
 """
@@ -1219,6 +1264,13 @@ async fn test_scaffold_initialization() {{
     let built = contracts::build_exchange_contracts("127.0.0.1:{port}");
     assert!(!built.is_empty(), "expected at least one ExchangeContract");
     assert_eq!(built[0].id, "primary-transport");
+}}
+
+#[tokio::test]
+async fn test_invalid_address_fallback_contract() {{
+    let built = contracts::build_exchange_contracts("");
+    assert_eq!(built.len(), 1);
+    assert_eq!(built[0].port, {port});
 }}
 """
     create_file(target_dir / "tests/test_basic.rs", test_rs, dry_run)
@@ -1299,6 +1351,8 @@ from microservice_toolbox import publish_with_lifecycle, ServiceSpec
 from microservice_toolbox.wiretap import configure_from_config
 from src.core.controller import Controller
 from src.rest.contracts import build_service_contracts
+
+# -----------------------------------------------------------------------------------------------
 
 def main():
     # Load layered configuration (CLI > local YAML > native.yaml > ENV)
@@ -1382,7 +1436,9 @@ KEY PARAMETERS:
 - logger: Unified logger instance.
 \"\"\"
 
-from typing import Any, Optional
+from typing import Any as typeAny, Optional as typeOptional
+
+# -----------------------------------------------------------------------------------------------
 
 class Controller:
     \"\"\"
@@ -1390,7 +1446,7 @@ class Controller:
     Replace this with your actual microservice controller implementation.
     \"\"\"
 
-    def __init__(self, *, config: Any, logger: Any, name: Optional[str] = None):
+    def __init__(self, *, config: typeAny, logger: typeAny, name: typeOptional[str] = None):
         self.config = config
         self.logger = logger
         self.Name = name or self.__class__.__name__
@@ -1470,15 +1526,17 @@ KEY PARAMETERS:
 - StatusPayload: Example health telemetry dataclass.
 \"\"\"
 
-from dataclasses import dataclass
-import time
+from dataclasses import dataclass as dataclassesDataclass
+from time import time as timeTime
 
-@dataclass
+# -----------------------------------------------------------------------------------------------
+
+@dataclassesDataclass
 class StatusPayload:
     \"\"\"Example dummy status payload model.\"\"\"
     service_name: str
     status: str
-    timestamp: float = time.time()
+    timestamp: float = timeTime()
 """
     create_file(target_dir / "src/models/status.py", status_py, dry_run)
 
@@ -1652,6 +1710,13 @@ def test_scaffold_initialization():
     assert envelope["reliable"] is True
     assert envelope["exhaustive"] is True
     assert len(envelope["contracts"]) >= 1
+
+
+def test_invalid_config_fallback_contracts():
+    \"\"\"Verify contract builder recovers gracefully when config or app is None.\"\"\"
+    envelope = build_service_contracts(app=None, config=None, version="0.0.1")
+    assert envelope["version"] == "0.0.1"
+    assert envelope["contracts"][0]["port"] == {port}
 """
     create_file(target_dir / "tests/test_basic.py", test_py, dry_run)
 
@@ -1983,7 +2048,7 @@ RUN apk add --no-cache git gcc musl-dev ca-certificates tzdata
 
 WORKDIR /workspace
 
-# Clone shared library modules for replace directives in builder stage
+# Clone shared library modules for go.work resolution in builder stage
 RUN git clone --depth 1 -b develop https://github.com/Bastien-Antigravity/microservice-toolbox.git /workspace/microservice-toolbox && \\
     git clone --depth 1 -b develop https://github.com/Bastien-Antigravity/distributed-config.git /workspace/distributed-config && \\
     git clone --depth 1 -b develop https://github.com/Bastien-Antigravity/safe-socket.git /workspace/safe-socket && \\
@@ -1994,8 +2059,8 @@ RUN git clone --depth 1 -b develop https://github.com/Bastien-Antigravity/micros
 WORKDIR /workspace/{name}
 COPY . .
 
-# Ensure dependencies are tidy and build binary
-RUN go mod tidy && \\
+# Initialize go.work across cloned /workspace modules and build binary
+RUN go work init /workspace/{name} /workspace/microservice-toolbox /workspace/distributed-config /workspace/safe-socket /workspace/universal-logger /workspace/flexible-logger && \\
     VERSION=$(cat VERSION.txt) && \\
     CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w -X 'github.com/Bastien-Antigravity/microservice-toolbox/go/pkg/version.BuildVersion=${{VERSION}}'" -o /{name}-bin ./cmd/{name}
 
@@ -2015,7 +2080,7 @@ ENTRYPOINT ["/{name}/{name}"]
 """
     elif lang == "rust":
         dockerfile = f"""# === BUILD STAGE ===
-FROM rust:1.80-alpine AS builder
+FROM rust:1.91-alpine AS builder
 
 LABEL org.opencontainers.image.source="https://github.com/Bastien-Antigravity/{name}"
 
@@ -2044,11 +2109,16 @@ ENTRYPOINT ["/{name}/{name}"]
         dockerfile = f"""# === BUILD STAGE (Compile CGO shared libraries + C++ binary) ===
 FROM golang:1.25-alpine AS go-builder
 
+LABEL org.opencontainers.image.source="https://github.com/Bastien-Antigravity/{name}"
+
 WORKDIR /workspace
 RUN apk add --no-cache git gcc musl-dev libc-dev
 RUN git clone --depth 1 -b develop https://github.com/Bastien-Antigravity/microservice-toolbox.git /workspace/microservice-toolbox && \\
     git clone --depth 1 -b develop https://github.com/Bastien-Antigravity/distributed-config.git /workspace/distributed-config && \\
+    git clone --depth 1 -b develop https://github.com/Bastien-Antigravity/safe-socket.git /workspace/safe-socket && \\
     git clone --depth 1 -b develop https://github.com/Bastien-Antigravity/universal-logger.git /workspace/universal-logger && \\
+    git clone --depth 1 -b develop https://github.com/Bastien-Antigravity/flexible-logger.git /workspace/flexible-logger && \\
+    go work init /workspace/microservice-toolbox /workspace/distributed-config /workspace/safe-socket /workspace/universal-logger /workspace/flexible-logger && \\
     cd /workspace/distributed-config && go build -buildmode=c-shared -o /workspace/libdistconf.so ./cmd/libdistconf && \\
     cd /workspace/universal-logger && go build -buildmode=c-shared -o /workspace/libunilog.so ./src/cgo_bridge
 
@@ -2078,6 +2148,8 @@ ENTRYPOINT ["/{name}/{name}"]
         dockerfile = f"""# === BUILD STAGE (Compile CGO libunilog.so) ===
 FROM golang:1.25-alpine AS go-builder
 
+LABEL org.opencontainers.image.source="https://github.com/Bastien-Antigravity/{name}"
+
 WORKDIR /workspace
 
 RUN apk add --no-cache git gcc musl-dev libc-dev
@@ -2087,6 +2159,7 @@ RUN git clone --depth 1 -b develop https://github.com/Bastien-Antigravity/micros
     git clone --depth 1 -b develop https://github.com/Bastien-Antigravity/safe-socket.git /workspace/safe-socket && \\
     git clone --depth 1 -b develop https://github.com/Bastien-Antigravity/universal-logger.git /workspace/universal-logger && \\
     git clone --depth 1 -b develop https://github.com/Bastien-Antigravity/flexible-logger.git /workspace/flexible-logger && \\
+    go work init /workspace/microservice-toolbox /workspace/distributed-config /workspace/safe-socket /workspace/universal-logger /workspace/flexible-logger && \\
     cd /workspace/universal-logger && \\
     go build -buildmode=c-shared -o /workspace/libunilog.so ./src/cgo_bridge
 
@@ -2590,6 +2663,7 @@ clean:
         ci_content = ci_template_path.read_text(encoding="utf-8")
     except (FileNotFoundError, OSError):
         ci_content = """# [FLEET-ARCHITECT] Continuous Integration
+# Sync-ID: 2026-11-23-GLOBAL-001
 name: Fleet CI
 on:
   push:
@@ -2603,6 +2677,29 @@ jobs:
     secrets: inherit
 """
     create_file(target_dir / ".github" / "workflows" / "ci.yml", ci_content, dry_run)
+
+    docker_pub_template_path = templates_dir / "Microservice" / "docker-publish.yml"
+    try:
+        docker_pub_content = docker_pub_template_path.read_text(encoding="utf-8")
+    except (FileNotFoundError, OSError):
+        docker_pub_content = """# [FLEET-ARCHITECT] Centralized GHCR Container Image Build & Publish
+# Sync-ID: 2026-11-23-GHCR-001
+name: Publish Docker Image
+
+on:
+  workflow_run:
+    workflows: ["Fleet CI"]
+    types: [completed]
+    branches: [develop]
+  workflow_dispatch:
+
+jobs:
+  docker-publish:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    uses: Bastien-Antigravity/fleet-operation-brain/.github/workflows/master-docker-publish.yml@develop
+    secrets: inherit
+"""
+    create_file(target_dir / ".github" / "workflows" / "docker-publish.yml", docker_pub_content, dry_run)
 
     dep_template_path = templates_dir / "Microservice" / "dependabot.yml"
     try:

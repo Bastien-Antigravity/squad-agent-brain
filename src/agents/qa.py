@@ -161,6 +161,8 @@ class QAAgent(BaseAgent):
             return await super().execute_tool("execute_shell_command", {"command": cmd_arg})
 
         if name == "probe_service_health":
+            if self.worktree_sandbox_mode:
+                return f"Error: Tool '{name}' is disabled in isolated worktree sandbox mode."
             raw_url = str(args.get("url", ""))
             is_allowed, detail = _validate_internal_probe_url(raw_url)
             if not is_allowed:

@@ -591,6 +591,36 @@ def process_item():
         py_rules = [v["rule"] for v in py_violations]
         self.assertIn("BARE_EXCEPT_PASS", py_rules)
 
+    def test_scaffolded_repositories_pass_compliance_in_local_and_docker_modes(self):
+        """Verifies scaffold_microservice.py generates 100% compliant Go, Python, Rust, and C++ repos in both local and docker modes."""
+        from src.lifecycle.scaffold_microservice import (
+            generate_common_files,
+            generate_cpp_scaffold,
+            generate_go_scaffold,
+            generate_python_scaffold,
+            generate_rust_scaffold,
+        )
+
+        generators = [
+            ("go", generate_go_scaffold),
+            ("python", generate_python_scaffold),
+            ("rust", generate_rust_scaffold),
+            ("cpp", generate_cpp_scaffold),
+        ]
+        for fleet_mode in ("local", "docker"):
+            for lang, gen_fn in generators:
+                svc_name = f"sample-{lang}-{fleet_mode}"
+                svc_dir = self.test_dir / svc_name
+                gen_fn(svc_dir, svc_name, 8195, "Test scaffolded service", False, layer="L3", brain_name="obsidian-brain")
+                generate_common_files(svc_dir, svc_name, lang, 8195, "Test scaffolded service", False, layer="L3", fleet_mode=fleet_mode)
+
+                violations = self.auditor.audit_path(svc_dir)
+                self.assertEqual(
+                    violations,
+                    [],
+                    f"Expected 0 compliance violations for scaffolded {lang} repo in {fleet_mode} mode, got: {violations}",
+                )
+
 
 if __name__ == "__main__":
     unittest.main()
