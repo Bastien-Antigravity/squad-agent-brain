@@ -309,6 +309,30 @@ def connect():
         self.assertIn("DIRECT_YAML_PARSE", rules)
         self.assertIn("HARDCODED_PORT", rules)
 
+    def test_catches_plaintext_secret_logging(self):
+        """Verifies that plaintext logging of secret config parameters is caught."""
+        bad_file = self.test_dir / "bot_leak.go"
+        bad_file.write_text("""package main
+
+/*
+ESSENTIAL PROCESS:
+Bot test.
+
+DATA FLOW:
+1. Log.
+
+KEY PARAMETERS:
+- None.
+*/
+
+func Run(bot *Bot) {
+	bot.Log.Info("Telebot starting polling...", "chatID", bot.Cfg.ChatID)
+}
+""")
+        violations = self.auditor.audit_file(bad_file)
+        rules = [v["rule"] for v in violations]
+        self.assertIn("PLAINTEXT_SECRET_LOGGING", rules)
+
     def test_catches_python_granular_import_and_alias_violations(self):
         """Verifies that whole-module imports and unaliased stdlib imports are flagged in strict mode."""
         bad_py = self.test_dir / "unaliased_worker.py"

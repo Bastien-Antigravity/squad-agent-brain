@@ -1,47 +1,21 @@
+# [FLEET-ARCHITECT] Continuous Delivery — GHCR Container Publish
+# Sync-ID: 2026-11-23-GHCR-001
 name: Build & Publish Docker Image to GHCR
 
 on:
-  push:
+  workflow_run:
+    workflows: ["Fleet CI"]
+    types: [completed]
     branches: [ develop, main ]
   workflow_dispatch:
 
-env:
-  REGISTRY: ghcr.io
-
 jobs:
-  build-and-push:
-    runs-on: ubuntu-latest
+  ghcr-publish:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     permissions:
       contents: read
       packages: write
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata (tags, labels)
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: |
-            ${{ env.REGISTRY }}/${{ github.repository }}
-            ${{ env.REGISTRY }}/bastien-antigravity/squad-agent
-          tags: |
-            type=ref,event=branch
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
-
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./Dockerfile
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+    uses: Bastien-Antigravity/fleet-operation-brain/.github/workflows/master-docker-publish.yml@develop
+    with:
+      package_name: squad-agent
+    secrets: inherit

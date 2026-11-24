@@ -12,9 +12,10 @@ RUN git clone --depth 1 -b develop https://github.com/Bastien-Antigravity/safe-s
 RUN git clone --depth 1 -b develop https://github.com/Bastien-Antigravity/universal-logger.git /workspace/universal-logger
 RUN git clone --depth 1 -b develop https://github.com/Bastien-Antigravity/flexible-logger.git /workspace/flexible-logger
 
-WORKDIR /workspace/universal-logger
-RUN go mod tidy && \
-    CGO_ENABLED=1 CGO_CFLAGS="-D_GNU_SOURCE -std=gnu11" GOWORK=off go build -v -buildmode=c-shared -o /workspace/libunilog.so ./src/cgo_bridge
+WORKDIR /workspace
+RUN go work init ./microservice-toolbox ./distributed-config ./safe-socket ./universal-logger ./flexible-logger && \
+    cd /workspace/universal-logger && \
+    CGO_ENABLED=1 CGO_CFLAGS="-D_GNU_SOURCE -std=gnu11" go build -v -buildmode=c-shared -o /workspace/libunilog.so ./src/cgo_bridge
 
 # === PYTHON RUNTIME STAGE ===
 FROM python:3.12-slim-bookworm

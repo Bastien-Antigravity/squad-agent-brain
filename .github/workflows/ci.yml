@@ -1,10 +1,11 @@
 # [FLEET-ARCHITECT] Continuous Integration
+# Sync-ID: 2026-05-11-GLOBAL-001
 name: Fleet CI
 on:
   push:
-    branches: [ develop ]
+    branches: [ develop, main ]
   pull_request:
-    branches: [ develop ]
+    branches: [ develop, main ]
 
 jobs:
   fleet-ci:

@@ -17,6 +17,7 @@ Scans source code files across the Bastien-Antigravity fleet to verify strict ad
   10. Dynamic Versioning Invariant (No manual directory loops for VERSION.txt)
   11. Platform Schema SSoT Invariant (logger.capnp & notifier.capnp exclusively in microservice-toolbox; no legacy local schema imports)
   12. Polyglot Local-First Workspace Resolution (Zero local filesystem path overrides in go.mod, Cargo.toml, pyproject.toml, requirements*.txt, or CMakeLists.txt)
+  13. Secret Invariant (Encrypted parameters, tokens, and passwords must never be logged in plaintext)
 
 DATA FLOW:
 1. Receives file path or directory path (or reads git staged files).
@@ -54,7 +55,7 @@ from re import (
     sub as reSub,
 )
 from subprocess import run as subprocessRun
-from sys import exit as sysExit
+from sys import exit as sysExit, path as sysPath
 from typing import (
     Any as typeAny,
     Dict as typeDict,
@@ -136,6 +137,9 @@ class ComplianceAuditor:
         except SyntaxError:
             return violations
 
+        squad_root = str(Path(__file__).resolve().parent.parent.parent)
+        if squad_root not in sysPath:
+            sysPath.insert(0, squad_root)
         from src.lib.improved_transformer import CodeTransformer
 
         # Identify line where bootstrap_microservice / ensure_virtualenv finishes (if entrypoint)
@@ -648,6 +652,213 @@ class ComplianceAuditor:
 
     # -----------------------------------------------------------------------------------------------
 
+    def audit_dockerfile(self, file_path: Path) -> typeList[typeDict[str, typeAny]]:
+        """
+        Audits a Dockerfile for ecosystem baseline runtime pinning (Go 1.25, Python 3.12, Rust 1.91,
+        Alpine 3.20), OCI source labels, VERSION.txt packaging, and go.work workspace initialization
+        when cloning sibling Go modules.
+        """
+        violations: typeList[typeDict[str, typeAny]] = []
+        try:
+            content = file_path.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            return violations
+
+        lines = content.splitlines()
+        has_oci_label = False
+        clones_toolbox = "/workspace/microservice-toolbox" in content
+        has_gowork_init = "go work init" in content
+
+        for idx, line in enumerate(lines, 1):
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+
+            if "org.opencontainers.image.source" in stripped:
+                has_oci_label = True
+
+            from_match = reMatch(r"^FROM\s+([^\s]+)", stripped, flags=reIgnoreCase)
+            if from_match:
+                image_ref = from_match.group(1)
+                if image_ref.startswith("golang:") and not image_ref.startswith("golang:1.25"):
+                    violations.append({
+                        "file": str(file_path),
+                        "line": idx,
+                        "rule": "DOCKERFILE_RUNTIME_PIN_DRIFT",
+                        "message": f"Go image '{image_ref}' violates Fixed Version Rule (must pin to golang:1.25*).",
+                    })
+                elif image_ref.startswith("python:") and not image_ref.startswith("python:3.12"):
+                    violations.append({
+                        "file": str(file_path),
+                        "line": idx,
+                        "rule": "DOCKERFILE_RUNTIME_PIN_DRIFT",
+                        "message": f"Python image '{image_ref}' violates Fixed Version Rule (must pin to python:3.12*).",
+                    })
+                elif image_ref.startswith("rust:") and not image_ref.startswith("rust:1.91"):
+                    violations.append({
+                        "file": str(file_path),
+                        "line": idx,
+                        "rule": "DOCKERFILE_RUNTIME_PIN_DRIFT",
+                        "message": f"Rust image '{image_ref}' violates Fixed Version Rule (must pin to rust:1.91*).",
+                    })
+                elif image_ref.startswith("alpine:") and not image_ref.startswith("alpine:3.20"):
+                    violations.append({
+                        "file": str(file_path),
+                        "line": idx,
+                        "rule": "DOCKERFILE_RUNTIME_PIN_DRIFT",
+                        "message": f"Alpine base '{image_ref}' violates Fixed Version Rule (must pin to alpine:3.20).",
+                    })
+
+            if clones_toolbox and "GOWORK=off" in stripped:
+                violations.append({
+                    "file": str(file_path),
+                    "line": idx,
+                    "rule": "DOCKERFILE_GOWORK_DISABLED",
+                    "message": (
+                        "Dockerfile clones sibling Go modules into /workspace/* but disables go.work via GOWORK=off. "
+                        "Initialize go.work with 'go work init' so cloned develop modules are used."
+                    ),
+                })
+
+        is_helper_or_test_dockerfile = (
+            file_path.name != "Dockerfile"
+            or "scripts" in file_path.parts
+            or "00-Environment" in file_path.parts
+            or "sandbox-testing" in file_path.parts
+        )
+        if not has_oci_label and not is_helper_or_test_dockerfile:
+            violations.append({
+                "file": str(file_path),
+                "line": 1,
+                "rule": "DOCKERFILE_MISSING_OCI_LABEL",
+                "message": "Dockerfile is missing 'LABEL org.opencontainers.image.source=\"https://github.com/Bastien-Antigravity/...\"' for GHCR package linkage.",
+            })
+
+        if clones_toolbox and not has_gowork_init:
+            violations.append({
+                "file": str(file_path),
+                "line": 1,
+                "rule": "DOCKERFILE_MISSING_GOWORK",
+                "message": (
+                    "Dockerfile clones sibling Go repositories into /workspace/* without running 'go work init'. "
+                    "Because go.mod has no local replace directives, 'go work init' is required to resolve cloned /workspace modules."
+                ),
+            })
+
+        return violations
+
+    # -----------------------------------------------------------------------------------------------
+
+    def audit_github_workflow(self, file_path: Path) -> typeList[typeDict[str, typeAny]]:
+        """
+        Audits .github/workflows/*.yml files in consumer repositories to ensure mandatory
+        [FLEET-ARCHITECT] and Sync-ID headers and delegation to centralized reusable workflows
+        in fleet-operation-brain (master-ci.yml / master-docker-publish.yml).
+        """
+        violations: typeList[typeDict[str, typeAny]] = []
+        parts = file_path.parts
+        if "05-Fleet-Operation" in parts or "04-Templates" in parts:
+            return violations
+
+        try:
+            content = file_path.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            return violations
+
+        filename = file_path.name
+        if "[FLEET-ARCHITECT]" not in content or "Sync-ID:" not in content:
+            violations.append({
+                "file": str(file_path),
+                "line": 1,
+                "rule": "WORKFLOW_HEADER_MISSING",
+                "message": (
+                    f"GitHub workflow '{filename}' is missing mandatory '# [FLEET-ARCHITECT]' or '# Sync-ID:' governance headers."
+                ),
+            })
+
+        if filename == "ci.yml":
+            if "Bastien-Antigravity/fleet-operation-brain/.github/workflows/master-ci.yml" not in content:
+                violations.append({
+                    "file": str(file_path),
+                    "line": 1,
+                    "rule": "WORKFLOW_NOT_DELEGATED",
+                    "message": "ci.yml must delegate exclusively to 'Bastien-Antigravity/fleet-operation-brain/.github/workflows/master-ci.yml@develop'.",
+                })
+        elif filename == "docker-publish.yml":
+            if "Bastien-Antigravity/fleet-operation-brain/.github/workflows/master-docker-publish.yml" not in content:
+                violations.append({
+                    "file": str(file_path),
+                    "line": 1,
+                    "rule": "WORKFLOW_NOT_DELEGATED",
+                    "message": "docker-publish.yml must delegate to centralized 'Bastien-Antigravity/fleet-operation-brain/.github/workflows/master-docker-publish.yml@develop'.",
+                })
+
+        return violations
+
+    # -----------------------------------------------------------------------------------------------
+
+    def _audit_unit_test_isolation(
+        self,
+        *,
+        file_path: Path,
+        ext: str,
+        content: str,
+        lines: typeList[str],
+    ) -> typeList[typeDict[str, typeAny]]:
+        """
+        Audits unit test files outside sandbox-testing to ensure they are 100% self-contained
+        in single-repository GitHub Actions checkouts (no unguarded sibling repo reads or
+        un-fixture'd LoadConfig("standalone") calls that rely on the standalone.yaml symlink).
+        """
+        violations: typeList[typeDict[str, typeAny]] = []
+        if "sandbox-testing" in file_path.parts:
+            return violations
+
+        # 1. Go unit test calling toolbox_config.LoadConfig("standalone" and expecting pre-populated disk config/secrets without a fixture
+        if ext == ".go" and 'LoadConfig("standalone"' in content:
+            expects_disk_secrets_or_local = (
+                "DecryptSecret(" in content
+                and "CONFIG_PATH" not in content
+                and "TempDir" not in content
+            )
+            if expects_disk_secrets_or_local:
+                for idx, line in enumerate(lines, 1):
+                    if 'LoadConfig("standalone"' in line and not line.strip().startswith("//"):
+                        violations.append({
+                            "file": str(file_path),
+                            "line": idx,
+                            "rule": "UNIT_TEST_STANDALONE_SYMLINK_DEPENDENCY",
+                            "message": (
+                                "Unit test calls LoadConfig(\"standalone\", ...) and DecryptSecret(...) without a self-contained CONFIG_PATH temp fixture. "
+                                "In GitHub Actions single-repo checkouts, the standalone.yaml symlink to ../docker-deployment is broken "
+                                "and ~/.bastien/keys/private.pem is absent. Create a temp YAML via t.TempDir() + t.Setenv(\"CONFIG_PATH\", ...) "
+                                "or move multi-repo scenario tests to sandbox-testing."
+                            ),
+                        })
+
+        # 2. Unguarded sibling repository file reads in JS/Go/Python unit tests
+        sibling_escape_re = reCompile(
+            r"""(?:readFileSync|ReadFile|open)\s*\([^)]*(?:\.\./){2,}(?:config-server|watchdog-agent|notif-server|log-server|tele-remote|web-interface|docker-deployment|obsidian-brain)/"""
+        )
+        has_existence_guard = any(g in content for g in ("existsSync", "os.Stat", "osPathExists", ".exists()"))
+        if not has_existence_guard:
+            for idx, line in enumerate(lines, 1):
+                if sibling_escape_re.search(line):
+                    violations.append({
+                        "file": str(file_path),
+                        "line": idx,
+                        "rule": "UNIT_TEST_CROSS_REPO_LEAK",
+                        "message": (
+                            "Unit test directly reads files from a sibling repository ('../../<repo>/...') without an existence guard. "
+                            "Single-repo GitHub Actions checkouts do not contain sibling repositories. "
+                            "Move cross-repository tests to sandbox-testing or guard with an existence check."
+                        ),
+                    })
+
+        return violations
+
+    # -----------------------------------------------------------------------------------------------
+
     def fix_go_mod(self, file_path: Path) -> bool:
         """
         Safely strips local filesystem replace directives from go.mod.
@@ -723,15 +934,25 @@ class ComplianceAuditor:
         ext = file_path.suffix.lower()
         filename = file_path.name
         is_python_manifest = filename == "pyproject.toml" or (filename.startswith("requirements") and filename.endswith(".txt"))
+        is_dockerfile = filename == "Dockerfile" or filename.startswith("Dockerfile.")
+        is_gh_workflow = ext in (".yml", ".yaml") and ".github" in file_path.parts and "workflows" in file_path.parts
         if (
-            ext not in (".go", ".py", ".rs", ".cpp", ".c", ".h", ".hpp", ".sh", ".capnp")
+            ext not in (".go", ".py", ".rs", ".cpp", ".c", ".h", ".hpp", ".sh", ".capnp", ".js")
             and filename != "go.mod"
             and not filename.endswith(".mod")
             and filename != "Cargo.toml"
             and filename != "CMakeLists.txt"
             and not is_python_manifest
+            and not is_dockerfile
+            and not is_gh_workflow
         ):
             return violations
+
+        if is_dockerfile:
+            return self.audit_dockerfile(file_path)
+
+        if is_gh_workflow:
+            return self.audit_github_workflow(file_path)
 
         # Rule PlatformSchemaSSoT: logger.capnp and notifier.capnp must live exclusively in microservice-toolbox
         if ext == ".capnp":
@@ -752,8 +973,11 @@ class ComplianceAuditor:
             filename.endswith("_test.go") or
             filename.startswith("test_") or
             filename.endswith("_test.py") or
+            filename.endswith(".test.js") or
             "tests" in file_path.parts or
-            "test" in file_path.parts
+            "test" in file_path.parts or
+            "examples" in file_path.parts or
+            "integration" in file_path.parts
         )
         is_generated = (
             filename.endswith(".pb.go") or
@@ -761,6 +985,16 @@ class ComplianceAuditor:
             filename.endswith("_pb2.py") or
             filename.endswith("_pb2_grpc.py") or
             "_gen.go" in filename or
+            filename in (
+                "build.rs",
+                "json.hpp",
+                "libunilog.h",
+                "libdistconf.h",
+                "libnotif.h",
+                "libsafesocket.h",
+                "libsafe_socket.h",
+                "safe_socket.h",
+            ) or
             "schemas" in file_path.parts
         )
 
@@ -799,6 +1033,21 @@ class ComplianceAuditor:
         if filename == "CMakeLists.txt":
             return self.audit_cmake_lists(file_path)
 
+        # Rule TestIsolation: Unit tests outside sandbox-testing must be self-contained in single-repo CI
+        if is_test_file:
+            violations.extend(
+                self._audit_unit_test_isolation(
+                    file_path=file_path,
+                    ext=ext,
+                    content=content,
+                    lines=lines,
+                )
+            )
+            if ext == ".js":
+                return violations
+        elif ext == ".js":
+            return violations
+
         # Rule A: /.dockerenv is strictly prohibited in non-test source files
         if not is_test_file:
             violations.extend(
@@ -822,10 +1071,10 @@ class ComplianceAuditor:
                 )
             )
 
-        # 0. Shebang and Encoding Check (All Python files)
-        if ext == ".py":
-            has_shebang = len(lines) >= 1 and lines[0].strip() == "#!/usr/bin/env python"
-            has_encoding = len(lines) >= 2 and lines[1].strip() == "# coding:utf-8"
+        # 0. Shebang and Encoding Check (Non-test Python files excluding __init__.py)
+        if ext == ".py" and not is_test_file and filename != "__init__.py":
+            has_shebang = len(lines) >= 1 and lines[0].strip().startswith("#!/usr/bin/env python")
+            has_encoding = len(lines) >= 2 and "coding:" in lines[1].strip()
             if not (has_shebang and has_encoding):
                 violations.append({
                     "file": str(file_path),
@@ -835,7 +1084,12 @@ class ComplianceAuditor:
                 })
 
         # 0b. Unbootstrapped Entrypoint Check (Go and Python binaries)
-        if not is_test_file and not is_library_repo:
+        is_cgo_or_mock_entrypoint = (
+            any(p.startswith("lib") for p in file_path.parts) or
+            "04-Mock-Provider" in file_path.parts or
+            'import "C"' in content
+        )
+        if not is_test_file and not is_library_repo and not is_cgo_or_mock_entrypoint:
             if filename == "main.go":
                 has_bootstrap = any("BootstrapService" in l and not l.strip().startswith("//") for l in lines)
                 if not has_bootstrap:
@@ -882,8 +1136,8 @@ class ComplianceAuditor:
                 })
 
         # 2. Section Divider Check (Non-test files with > 50 lines)
-        if not is_test_file and total_lines > 50:
-            divider_pattern = reCompile(r'(//|#)\s*-{25,}')
+        if not is_test_file and total_lines > 50 and filename != "__init__.py":
+            divider_pattern = reCompile(r'(//|#)\s*[-=]{25,}')
             has_divider = any(divider_pattern.search(l) for l in lines)
             if not has_divider:
                 violations.append({
@@ -894,14 +1148,18 @@ class ComplianceAuditor:
                 })
 
         # Line-by-line checks
+        in_rust_cfg_test = False
         for idx, line in enumerate(lines, 1):
             stripped = line.strip()
+            if ext == ".rs" and stripped.startswith("#[cfg(test)]"):
+                in_rust_cfg_test = True
+            line_is_test = is_test_file or in_rust_cfg_test
             # Skip pure comment lines for code checks
             if stripped.startswith("//") or stripped.startswith("#") or stripped.startswith("*"):
                 continue
 
             # 2b. Platform Schema SSoT Invariant: Ban legacy local schema imports/embeds in non-test code
-            if not is_test_file and ext in (".go", ".rs", ".py"):
+            if not line_is_test and ext in (".go", ".rs", ".py"):
                 if ext == ".py":
                     code_part = reSplit(r"(?:^|\s)#", line, maxsplit=1)[0]
                 else:
@@ -925,7 +1183,7 @@ class ComplianceAuditor:
                     })
 
             # 3. Dynamic Port Invariant: Flag hardcoded canonical ports in production code
-            if not is_test_file:
+            if not line_is_test:
                 for port_num, port_desc in CANONICAL_PORTS.items():
                     # Look for :port or "port" string literals in networking contexts
                     port_patterns = [
@@ -937,7 +1195,7 @@ class ComplianceAuditor:
                     for pat in port_patterns:
                         if pat in line:
                             # Avoid false positives in config loading keys or comments
-                            if not any(k in line.lower() for k in ("getlistenaddr", "getgrpc", "getrest", "capability", "capabilities", "port_map")):
+                            if not any(k in line.lower() for k in ("getlistenaddr", "getgrpc", "getrest", "capability", "capabilities", "port_map", "defaultport", "default_port")):
                                 violations.append({
                                     "file": str(file_path),
                                     "line": idx,
@@ -947,7 +1205,7 @@ class ComplianceAuditor:
                                 break
 
             # 4. Production Cleanliness Invariant: No test mocks or nil fallbacks in non-test microservice files
-            if not is_test_file and not is_library_repo:
+            if not line_is_test and not is_library_repo:
                 if "EnsureSafeLogger" in line:
                     violations.append({
                         "file": str(file_path),
@@ -983,9 +1241,15 @@ class ComplianceAuditor:
                     "switch_mode.py", "install_git_hooks.py", "fleet_commander.py",
                     "fleet_version.py", "preflight_check.py", "joint_audit_purger.py",
                     "audit_ports.py", "ensure_frontmatter.py", "hardening_yaml.py",
-                    "improved_transformer.py", "debloat_audit.py"
+                    "improved_transformer.py", "debloat_audit.py", "audit_secret_leakage.py",
+                    "archive.py", "scenario_orchestrator.py", "terminal_ui.rs"
                 }
-                allow_print = filename in cli_presenters or any(marker in content[:500] for marker in ("# cli:allow-print", "// cli:allow-print", "/* cli:allow-print */"))
+                allow_print = (
+                    filename in cli_presenters or
+                    "docker-deployment" in file_path.parts or
+                    "04-Mock-Provider" in file_path.parts or
+                    any(marker in content[:1200] for marker in ("# cli:allow-print", "// cli:allow-print", "/* cli:allow-print */"))
+                )
                 if not allow_print:
                     if ext == ".go":
                         if any(p in stripped for p in ("fmt.Println(", "fmt.Printf(", "fmt.Print(", "log.Println(", "log.Printf(", "log.Print(")):
@@ -995,6 +1259,14 @@ class ComplianceAuditor:
                                     "line": idx,
                                     "rule": "BARE_PRINT_PRODUCTION",
                                     "message": "Bare fmt/log print detected in production Go code. Output must route via universal-logger / Logger.<Level>(...)."
+                                })
+                        if any(p in stripped for p in ("log.Fatal(", "log.Fatalf(", "log.Fatalln(", "log.Panic(", "log.Panicf(", "log.Panicln(")):
+                            if not any(k in stripped for k in ("//", "/*")):
+                                violations.append({
+                                    "file": str(file_path),
+                                    "line": idx,
+                                    "rule": "NON_CANONICAL_LOG_CALL",
+                                    "message": "Raw stdlib log.Fatal/log.Panic detected in production Go code. Log via Logger.Critical(...) and exit/return cleanly."
                                 })
                     elif ext == ".rs":
                         if any(p in stripped for p in ("println!(", "eprintln!(")):
@@ -1012,6 +1284,24 @@ class ComplianceAuditor:
                                 "rule": "BARE_PRINT_PRODUCTION",
                                 "message": "Bare print() detected in production Python code. Output must route via UniLog (from universal_logger / microservice_toolbox)."
                             })
+
+                # 5b. Canonical Log Level Invariant: Ban non-canonical level strings (WARN, CRIT, TRACE, FATAL, PANIC, NOTICE, ALERT, EMERG)
+                if ext in (".go", ".py", ".rs", ".cpp"):
+                    non_canonical_match = reSearch(
+                        r"""(?:SetLevel|ParseLevel|SendAlert|send_alert|send_alert_sync|initial_level|InitialLogLevel)\s*\(\s*["'](WARN|CRIT|TRACE|FATAL|PANIC|NOTICE|ALERT|EMERG)["']""",
+                        line,
+                    )
+                    if non_canonical_match:
+                        bad_lvl = non_canonical_match.group(1)
+                        violations.append({
+                            "file": str(file_path),
+                            "line": idx,
+                            "rule": "NON_CANONICAL_LOG_LEVEL",
+                            "message": (
+                                f"Non-canonical log level '{bad_lvl}' detected. "
+                                f"Only the 12 flexible-logger levels exist (NOTSET, DEBUG, STREAM, INFO, LOGON, LOGOUT, TRADE, SCHEDULE, REPORT, WARNING, ERROR, CRITICAL)."
+                            ),
+                        })
 
                 # 6. Legacy Path Climbing Invariant: No manual sys.path manipulation in service code
                 if ext == ".py" and filename not in ("bootstrap.py", "validate_compliance.py"):
@@ -1042,6 +1332,23 @@ class ComplianceAuditor:
                             "rule": "HARDCODED_VERSION_TRAVERSAL",
                             "message": "Ad-hoc directory traversal searching for VERSION.txt detected. Call appConfig.GetVersion() / app_config.get_version() instead."
                         })
+
+                # 8b. Secret Invariant: Plaintext logging of secret/encrypted configuration parameters is banned
+                if ext in (".go", ".py", ".rs"):
+                    if any(log_call in line for log_call in (".Info(", ".Debug(", ".Warn(", ".Warning(", ".Error(", ".Critical(", ".info(", ".debug(", ".warning(", ".error(", ".critical(")):
+                        secret_param_patterns = (
+                            r'\b(bot\.Cfg|cfg|config|appConfig)\.(ChatID|TelegramToken|Token|Password|AuthToken|Secret|APIKey|ApiKey)\b',
+                            r'["\'](chat_id|chatID|token|password|auth_token|secret|api_key|apiKey)["\']\s*,\s*(bot\.Cfg|cfg|config|appConfig)\.',
+                        )
+                        for pattern in secret_param_patterns:
+                            if reSearch(pattern, line, reIgnoreCase):
+                                violations.append({
+                                    "file": str(file_path),
+                                    "line": idx,
+                                    "rule": "PLAINTEXT_SECRET_LOGGING",
+                                    "message": "Plaintext logging of encrypted/secret parameter detected. Sensitive credentials must never be logged in plaintext; redact or mask before logging.",
+                                })
+                                break
 
         # 9. Python Granular Functional Import & camelCase Aliasing Check
         if ext == ".py" and not is_test_file and (strict_imports or "# strict:imports" in content[:500]):
@@ -1084,7 +1391,7 @@ class ComplianceAuditor:
             return self.audit_file(target_path, strict_imports=strict_imports, strict_lean=strict_lean)
 
         for root, dirs, files in osWalk(target_path):
-            dirs[:] = [d for d in dirs if d not in EXCLUDED_DIRS and not d.startswith(".")]
+            dirs[:] = [d for d in dirs if d not in EXCLUDED_DIRS and (not d.startswith(".") or d == ".github")]
             for f in sorted(files):
                 file_path = Path(root) / f
                 all_violations.extend(self.audit_file(file_path, strict_imports=strict_imports, strict_lean=strict_lean))
@@ -1174,10 +1481,14 @@ def main():
 
     if args.fix:
         target = Path(args.path).resolve()
-        from src.lib.improved_transformer import CodeTransformer
-        transformer = CodeTransformer()
-        repaired = transformer.transform_path(target)
-        print(f"🔧 CodeTransformer auto-repaired {repaired} Python file(s).\n")
+        if target.is_dir() or (target.is_file() and target.suffix.lower() == ".py"):
+            squad_agent_root = str(Path(__file__).resolve().parent.parent.parent)
+            if squad_agent_root not in sysPath:
+                sysPath.insert(0, squad_agent_root)
+            from src.lib.improved_transformer import CodeTransformer
+            transformer = CodeTransformer()
+            repaired = transformer.transform_path(target)
+            print(f"🔧 CodeTransformer auto-repaired {repaired} Python file(s).\n")
 
         # Also auto-repair local relative replace directives in go.mod files
         fixed_go_mods = 0

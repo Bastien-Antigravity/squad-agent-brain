@@ -441,6 +441,59 @@ def _check_ecosystem_tooling_parity() -> Tuple[str, List[str]]:
     except Exception as e:
         return "RED", [f"Ecosystem tool compliance check failed: {e}"]
 
+# -----------------------------------------------------------------------------------------------
+
+def _check_ghcr_and_test_isolation() -> Tuple[str, List[str]]:
+    """
+    Gate 10: Verifies GHCR Dockerfile & GitHub Actions workflow compliance across all
+    containerized services and ensures unit tests outside sandbox-testing are self-contained.
+    """
+    messages = []
+    try:
+        from auditing.validate_compliance import ComplianceAuditor
+        auditor = ComplianceAuditor(workspace_root=WORKSPACE_ROOT)
+
+        service_dirs = [
+            WORKSPACE_ROOT / "config-server",
+            WORKSPACE_ROOT / "log-server",
+            WORKSPACE_ROOT / "notif-server",
+            WORKSPACE_ROOT / "tele-remote",
+            WORKSPACE_ROOT / "watchdog-agent",
+            WORKSPACE_ROOT / "web-interface",
+            VAULT_DIR / "08-Squad-Agent",
+            VAULT_DIR / "09-RAG-Engine",
+        ]
+
+        violations = []
+        checked_dockerfiles = 0
+        for svc_dir in service_dirs:
+            if not svc_dir.exists():
+                continue
+            df = svc_dir / "Dockerfile"
+            if df.exists():
+                checked_dockerfiles += 1
+                violations.extend(auditor.audit_file(df))
+            wf_dir = svc_dir / ".github" / "workflows"
+            if wf_dir.exists():
+                for wf in sorted(wf_dir.glob("*.yml")):
+                    violations.extend(auditor.audit_file(wf))
+
+        if violations:
+            messages.append(f"GHCR / Workflow compliance drift ({len(violations)} issue(s)):")
+            for v in violations[:5]:
+                rel = Path(v["file"]).name
+                messages.append(f"  - [{v['rule']}] {rel}:{v['line']} - {v['message']}")
+            if len(violations) > 5:
+                messages.append(f"  - ... and {len(violations) - 5} more.")
+            return "YELLOW", messages
+
+        messages.append(
+            f"All {checked_dockerfiles} containerized services pass GHCR Dockerfile, go.work, and centralized workflow checks."
+        )
+        return "GREEN", messages
+    except Exception as e:
+        return "RED", [f"GHCR & workflow compliance check failed: {e}"]
+
 # ### MAIN ###
 
 def run_preflight(quiet: bool = False) -> bool:
@@ -458,6 +511,7 @@ def run_preflight(quiet: bool = False) -> bool:
         ("4-Layer Port Drift Check", _check_ports_and_capabilities),
         ("Dynamic Versioning Integrity", _check_versioning_integrity),
         ("Ecosystem Tooling & Anti-Pattern Parity", _check_ecosystem_tooling_parity),
+        ("GHCR Container & Workflow Governance", _check_ghcr_and_test_isolation),
     ]
     
     overall = "GREEN"
