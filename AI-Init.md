@@ -2,6 +2,11 @@
 microservice: 08-Squad-Agent
 type: governance
 status: active
+tags:
+- '#service/08-Squad-Agent'
+- '#type/governance'
+- '#state/active'
+- '#zone/3-fleet'
 ---
 
 # ⚡ AI Initialization: 08-Squad-Agent
