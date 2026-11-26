@@ -68,18 +68,6 @@ for i in range(1, len(sys.argv) - 1):
         _profile = sys.argv[i + 1]
         break
 
-if not _profile:
-    _is_docker = osEnviron.get("DOCKER_ENV") == "true"
-    _service_root = _self_dir.parent.parent.parent
-    if _is_docker and (_service_root / "production.yaml").exists():
-        _profile = "production"
-    else:
-        _profile = "standalone"
-
-# Load configuration exactly once
-config = toolboxLoadConfig(_profile, input_args=[])
-config_data = config.data
-
 _OFFLINE_CLI_COMMANDS = frozenset({
     "audit_ports",
     "brain_health_audit",
@@ -114,6 +102,23 @@ if len(sys.argv) >= 2:
     if cmd_arg != "main.py" and not cmd_arg.startswith("_"):
         _cmd_slug = cmd_arg
         _app_name = f"squad_agent_{cmd_arg}"
+
+if not _profile:
+    _env_profile = osEnviron.get("CONFIG_PROFILE", "").strip()
+    _is_docker = osEnviron.get("DOCKER_ENV") == "true"
+    _service_root = _self_dir.parent.parent.parent
+    if _cmd_slug in _OFFLINE_CLI_COMMANDS:
+        _profile = "standalone"
+    elif _env_profile in ("standalone", "production", "staging", "test"):
+        _profile = _env_profile
+    elif _is_docker and (_service_root / "production.yaml").exists():
+        _profile = "production"
+    else:
+        _profile = "standalone"
+
+# Load configuration exactly once
+config = toolboxLoadConfig(_profile, input_args=[])
+config_data = config.data
 
 # Setup UniLog exactly once (offline CLI commands default to 'minimal' to avoid socket stalls)
 _lvl = "debug" if ("-v" in sys.argv or "--verbose" in sys.argv) else "info"

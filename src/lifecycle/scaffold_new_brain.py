@@ -336,7 +336,7 @@ def _build_full_capabilities_yaml(
     caps_src["squad_agent"]["port"] = f"${{SA_PORT:{sa_port}}}"
     caps_src["squad_agent"]["grpc_port"] = f"${{SA_GRPC_PORT:{sa_grpc_port}}}"
     caps_src["squad_agent"]["autorepair"] = {
-        "enabled": "${AUTO_REPAIR_ENABLED:-true}",
+        "enabled": "${AUTO_REPAIR_ENABLED:-false}",
         "watchdog_rest_url": "${WATCHDOG_REST_URL:-http://log-shipper:9095}",
     }
     if "watchdog_agent" in caps_src:

@@ -34,17 +34,9 @@ def install_hooks(vault_root, git_hooks_dir):
 
 cd "$(dirname "$0")/../.."
 
-if [ -f "./09-RAG-Engine/.venv/bin/python3" ]; then
-    PYTHONPATH="./09-RAG-Engine" ./09-RAG-Engine/.venv/bin/python3 ./09-RAG-Engine/main.py index > /dev/null 2>&1 &
-elif [ -f "./09-RAG-Engine/.venv/Scripts/python.exe" ]; then
-    PYTHONPATH="./09-RAG-Engine" ./09-RAG-Engine/.venv/Scripts/python.exe ./09-RAG-Engine/main.py index > /dev/null 2>&1 &
-elif [ -f "./.venv/bin/python3" ]; then
-    PYTHONPATH="./09-RAG-Engine" ./.venv/bin/python3 ./09-RAG-Engine/main.py index > /dev/null 2>&1 &
-elif [ -f "./.venv/Scripts/python.exe" ]; then
-    PYTHONPATH="./09-RAG-Engine" ./.venv/Scripts/python.exe ./09-RAG-Engine/main.py index > /dev/null 2>&1 &
-else
-    PYTHONPATH="./09-RAG-Engine" python3 ./09-RAG-Engine/main.py index > /dev/null 2>&1 &
-fi
+# Note: Do NOT spawn CLI '09-RAG-Engine/main.py index' in the background here.
+# When the fleet is running, rag-engine's UnifiedWatcher indexes changed files incrementally,
+# and spawning 'rag_engine_index' collides with 'rag_engine_server' process locks.
 
 if [ -f "./08-Squad-Agent/.venv/bin/python3" ]; then
     ./08-Squad-Agent/.venv/bin/python3 ./08-Squad-Agent/main.py persona-extractor --daemon > /dev/null 2>&1 &
