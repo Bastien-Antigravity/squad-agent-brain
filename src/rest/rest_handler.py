@@ -254,10 +254,13 @@ class SquadRESTHandler:
                 raise HTTPException(status_code=400, detail="Missing 'message' parameter")
             
             brain_id = body.get("brain_id") or request.query_params.get("brain_id")
+            task_context = body.get("task_context") if isinstance(body.get("task_context"), dict) else None
+            pub_kwargs = {}
             if brain_id:
-                await self.controller.publish_user_message(session_id, message, brain_id=brain_id)
-            else:
-                await self.controller.publish_user_message(session_id, message)
+                pub_kwargs["brain_id"] = brain_id
+            if task_context is not None:
+                pub_kwargs["task_context"] = task_context
+            await self.controller.publish_user_message(session_id, message, **pub_kwargs)
             return {"success": True, "message": "Message published successfully"}
 
         @router.get("/api/v1/squad/incidents")

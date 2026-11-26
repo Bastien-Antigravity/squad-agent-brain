@@ -115,12 +115,14 @@ class MInventoryBuilder:
             status = "⛔ EXCLUDED " if exclude else "✅ COMPLIANT"
             self.logger.info(f"{self.Name} :    {name:<30} {status} [{repo_type}] [{source}]")
 
-        # Step 4: Output
-        payload = {
-            "fleet_name": self.FleetName,
-            "master_branch": self.MasterBranch,
-            "repositories": repositories,
-        }
+        # Step 4: Output (preserving domain_workspace / isolated_sandbox / brain_id / ecosystem metadata)
+        payload: Dict[str, Any] = {}
+        for meta_key in ("ecosystem", "domain_workspace", "isolated_sandbox", "brain_id"):
+            if meta_key in existing:
+                payload[meta_key] = existing[meta_key]
+        payload["fleet_name"] = existing.get("fleet_name", self.FleetName)
+        payload["master_branch"] = existing.get("master_branch", self.MasterBranch)
+        payload["repositories"] = repositories
 
         if dry_run:
             self.logger.info(f"{self.Name} : 🧪 DRY RUN — Would write {len(repositories)} repos.")
@@ -172,14 +174,14 @@ class MInventoryBuilder:
     # -----------------------------------------------------------------------------------------------
 
     def _is_knowledge_base(self, *, repo_path: Path, workspace_root: Path) -> bool:
-        if repo_path == workspace_root / "obsidian-brain":
-            return True
-        obsidian_dir = workspace_root / "obsidian-brain"
-        try:
-            repo_path.relative_to(obsidian_dir)
-            return True
-        except ValueError:
-            pass
+        for kb_candidate in (self.vault_root.resolve(), (workspace_root / "obsidian-brain").resolve()):
+            if repo_path.resolve() == kb_candidate:
+                return True
+            try:
+                repo_path.resolve().relative_to(kb_candidate)
+                return True
+            except ValueError:
+                continue
         return False
 
     # -----------------------------------------------------------------------------------------------

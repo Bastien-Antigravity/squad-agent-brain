@@ -709,6 +709,44 @@ def _seed_workspace_cargo_config(
 
 # -----------------------------------------------------------------------------------------------
 
+def _seed_workspace_go_work(
+    workspace_dest: pathPath,
+    core_workspace_root: pathPath,
+    dry_run: bool = False
+) -> None:
+    """
+    Seeds workspace_dest/go.work referencing local core Go SDK modules (when reachable)
+    so domain Go microservices resolve local Bastien-Antigravity SDKs without go.mod replace pollution.
+    """
+    core_sdk_dirs = (
+        "microservice-toolbox",
+        "distributed-config",
+        "safe-socket",
+        "flexible-logger",
+        "universal-logger",
+        "notif-server",
+    )
+    use_entries: typeList[str] = []
+    if core_workspace_root.is_dir():
+        for sdk_name in core_sdk_dirs:
+            sdk_path = core_workspace_root / sdk_name
+            if (sdk_path / "go.mod").is_file():
+                try:
+                    rel_str = osPathRelpath(str(sdk_path.resolve()), str(workspace_dest.resolve()))
+                    use_entries.append(pathPath(rel_str).as_posix())
+                except ValueError:
+                    continue
+
+    use_block = ""
+    if use_entries:
+        formatted = "\n".join(f"\t{e}" for e in use_entries)
+        use_block = f"\nuse (\n{formatted}\n)\n"
+
+    go_work_content = f"go 1.25\n{use_block}"
+    create_file(workspace_dest / "go.work", go_work_content, dry_run)
+
+# -----------------------------------------------------------------------------------------------
+
 def scaffold_workspace(
     target_name: str,
     workspace_dest: pathPath,
@@ -786,6 +824,7 @@ fs_temp/
 """
     create_file(workspace_dest / ".gitignore", workspace_gitignore, dry_run)
     _seed_workspace_cargo_config(workspace_dest, vault_root.parent, dry_run)
+    _seed_workspace_go_work(workspace_dest, vault_root.parent, dry_run)
 
     # Concrete self-contained standalone.yaml (NO cross-workspace symlink!)
     standalone_yaml_text = generate_sandbox_standalone_yaml(
@@ -841,7 +880,7 @@ tags:
 6. **Bastien Formatting & Language Standards**:
    - **Triple-Block Header** (`ESSENTIAL PROCESS`, `DATA FLOW`, `KEY PARAMETERS`) on all non-test source files + horizontal dividers (`77` dashes for Go/C++/SQL, `95` dashes for Python/Rust).
    - **Python**: Shebang + `# coding:utf-8`, granular camelCase stdlib/external aliases (`from os.path import join as osPathJoin`), single-line combined module imports, NO aliasing of local `src.*` imports, One-Class Rule, keyword-only `*` on >1 arg methods, and `self.logger.info(f"{{self.Name}} : {{msg}}")`.
-   - **Go**: 4-block imports, `M` prefix on models, `I` prefix on interfaces, `GOPRIVATE=github.com/Bastien-Antigravity/*`.
+   - **Go**: 4-block imports, idiomatic unprefixed nouns on both models and interfaces (`StatusPayload`, `Service`, `Logger` — no `M` or `I` prefixes), `GOPRIVATE=github.com/Bastien-Antigravity/*`.
    - **Anti-Drift (`11-Code-Doc`) & BDD (`02-Business-BDD`)**: Author `FEAT-*.md` specs in `{target_name}/02-Business-BDD/02-Behavior-Specs/<svc>/` before implementation and hand off to `@obsidian-brain:orchestrator` when coordinating cross-fleet changes.
 """
     create_file(workspace_dest / "AGENTS.md", workspace_agents_md, dry_run)
@@ -1318,7 +1357,6 @@ tags:
 - '#type/rules'
 - '#state/active'
 - '#zone/0-core'
-- '#ai/ignore'
 ---
 
 # AGENTS.md: {target_name}
@@ -1667,7 +1705,8 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="Preview file fabrication without writing to disk")
     parser.add_argument("--docker", action="store_true", help="Automatically launch the newly scaffolded brain in Docker")
     parser.add_argument("--sandbox", "--isolated", dest="sandbox", action="store_true", help="Create an isolated sandbox brain with a self-contained standalone.yaml and isolated inventory")
-    parser.add_argument("--workspace", action="store_true", help="Create a clean zero-mixing external domain workspace container (auto-enabled when --dest is outside Bastien-Antigravity and --sandbox is False)")
+    parser.add_argument("--workspace", action="store_true", default=False, help="Create a clean zero-mixing external domain workspace container (canonical default when --sandbox is False)")
+    parser.add_argument("--legacy-satellite-copy", action="store_true", help="[DEPRECATED] Copy 08-Squad-Agent and 03-Tech-Stack into target directory instead of Zero-Mixing Workspace mode")
     parser.add_argument("--destroy", action="store_true", help="Destroy an isolated sandbox brain or domain workspace and purge its brain_id from RAG/PostgreSQL")
     parser.add_argument("--port", "-p", type=int, default=None, help="Explicit host HTTP port for squad-agent (defaults to auto-allocating 8185+)")
     parser.add_argument("--grpc-port", type=int, default=None, help="Explicit host gRPC port for squad-agent (defaults to port + 2)")
@@ -1688,13 +1727,13 @@ def main() -> None:
     dest_input = args.dest.strip()
     if args.sandbox or args.destroy:
         default_target = (workspace_root / "_sandbox" / target_name).resolve()
-    elif args.workspace:
+    elif not args.legacy_satellite_copy:
         default_target = (workspace_root.parent / f"{target_name}-workspace").resolve()
     else:
         default_target = (workspace_root / target_name).resolve()
 
     if not dest_input:
-        if args.sandbox or args.destroy or args.workspace:
+        if args.sandbox or args.destroy or not args.legacy_satellite_copy:
             target_path = default_target
         else:
             try:
@@ -1713,10 +1752,7 @@ def main() -> None:
         logger.error(f"ScaffoldNewBrain : Path {target_path} already exists.")
         return
 
-    use_workspace = args.workspace or (
-        not args.sandbox
-        and not target_path.resolve().is_relative_to(workspace_root.resolve())
-    )
+    use_workspace = not args.sandbox and not args.legacy_satellite_copy
 
     scaffold_brain(
         target_name,

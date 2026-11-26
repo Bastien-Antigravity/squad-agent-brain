@@ -164,14 +164,27 @@ def normalize_frontmatter(file_path, check_only=False):
 
     required_tags = [svc_tag, type_tag, state_tag]
     
-    # Remove duplicates or slightly malformed representations
+    # Remove duplicates, malformed representations, and misplaced #ai/ignore outside human-only zones
+    is_human_only_zone = any(p in parts for p in ("quick-overview", "99-Humans"))
     cleaned_tags = []
     for tag in tags:
         if isinstance(tag, str):
             cleaned_tag = tag.strip().lower()
+            if cleaned_tag == "#ai/ignore" and not is_human_only_zone:
+                modified = True
+                continue
             if cleaned_tag not in cleaned_tags:
                 cleaned_tags.append(cleaned_tag)
-                
+
+    # Ensure human-only zones carry #ai/ignore, and ensure #zone/ tag exists
+    if is_human_only_zone and "#ai/ignore" not in cleaned_tags:
+        cleaned_tags.append("#ai/ignore")
+        modified = True
+    if not any(t.startswith(("#zone/", "#tech/", "#tier/")) for t in cleaned_tags):
+        default_zone = "#zone/0-core" if path.name == "AGENTS.md" else "#zone/3-fleet"
+        cleaned_tags.append(default_zone)
+        modified = True
+
     # Insert required tags if missing
     for req in required_tags:
         if req.lower() not in cleaned_tags:

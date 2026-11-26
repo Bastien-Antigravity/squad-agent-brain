@@ -10,10 +10,10 @@ Uses AST-based refactoring for robust import management.
 DATA FLOW:
 1. Analyze and clean the header (shebang, encoding).
 2. Validate and format the module triple-block docstring.
-3. Align imports with granular and aliasing standards using AST.
+3. Align imports with granular and aliasing standards using AST span splicing (preserving comments).
 4. Adjust spacing after docstring (exactly 1 empty line).
 5. Standardize method dividers (95 dashes).
-6. Correct logger formatting to use .format(self.Name).
+6. Standardize logger formatting to f"{self.Name} : {msg}".
 
 KEY PARAMETERS:
 - code: String containing the non-compliant Python source code.
@@ -83,7 +83,7 @@ class CodeTransformer:
         # 6. Replace/insert method dividers (exactly 95 dashes)
         code = self._ensure_method_dividers(code)
         
-        # 7. Format logger calls with .format(self.Name)
+        # 7. Format logger calls with f"{self.Name} : {msg}"
         code = self._ensure_logger_formatting(code, class_name)
 
         # 8. Post-transform AST verification: rollback if transformation broke syntax
@@ -297,13 +297,14 @@ class CodeTransformer:
                         from_symbol_to_alias[bound_name] = (mod_name, orig_sym, target_alias)
                         grouped_from_imports.setdefault(mod_name, {})[orig_sym] = target_alias
 
-        # 2. Transform the code (usages) and track which whole-module attributes were used
+        # 2. Collect exact AST source span replacements so comments and formatting are preserved
         outer_self = self
 
-        class UsageTransformer(ast.NodeTransformer):
+        class UsageCollector(ast.NodeVisitor):
             def __init__(self):
                 self.used_from_imports = {}  # module_name -> {orig_sym: target_alias}
                 self.unresolved_whole_modules = set()
+                self.replacements = []  # (lineno, col, end_lineno, end_col, replacement_str)
 
             def _register_used(self, mod_name: str, sym_name: str) -> str:
                 alias = grouped_from_imports.get(mod_name, {}).get(sym_name) or outer_self.make_camel_alias(mod_name, sym_name)
@@ -320,67 +321,108 @@ class CodeTransformer:
                     root_mod = imports_to_replace[node.value.value.id]
                     sub_mod = f"{root_mod}.{node.value.attr}"
                     alias = self._register_used(sub_mod, node.attr)
-                    return ast.Name(id=alias, ctx=node.ctx)
+                    self.replacements.append((node.lineno, node.col_offset, node.end_lineno, node.end_col_offset, alias))
+                    return
 
                 # Check 1-level attributes like json.dumps, time.sleep, re.search, sys.exit
                 if isinstance(node.value, ast.Name) and node.value.id in imports_to_replace:
                     mod_name = imports_to_replace[node.value.id]
                     alias = self._register_used(mod_name, node.attr)
-                    return ast.Name(id=alias, ctx=node.ctx)
+                    self.replacements.append((node.lineno, node.col_offset, node.end_lineno, node.end_col_offset, alias))
+                    return
 
-                return self.generic_visit(node)
+                self.generic_visit(node)
 
             def visit_Name(self, node):
                 if isinstance(node.ctx, ast.Load) and node.id in from_symbol_to_alias:
                     mod_name, orig_sym, target_alias = from_symbol_to_alias[node.id]
                     self.used_from_imports.setdefault(mod_name, {})[orig_sym] = target_alias
-                    return ast.Name(id=target_alias, ctx=node.ctx)
+                    if target_alias != node.id:
+                        self.replacements.append((node.lineno, node.col_offset, node.end_lineno, node.end_col_offset, target_alias))
+                    return
                 if isinstance(node.ctx, ast.Load) and node.id in imports_to_replace:
                     self.unresolved_whole_modules.add(imports_to_replace[node.id])
-                return node
 
-        # Strip leading module docstring (already preserved in header) and top-level imports
-        filtered_body = list(tree.body)
+        # Determine docstring end and non-import body nodes
+        doc_node = None
         if (
-            filtered_body
-            and isinstance(filtered_body[0], ast.Expr)
-            and isinstance(getattr(filtered_body[0], "value", None), ast.Constant)
-            and isinstance(filtered_body[0].value.value, str)
+            tree.body
+            and isinstance(tree.body[0], ast.Expr)
+            and isinstance(getattr(tree.body[0], "value", None), ast.Constant)
+            and isinstance(tree.body[0].value.value, str)
         ):
-            filtered_body = filtered_body[1:]
-        tree.body = [n for n in filtered_body if not isinstance(n, (ast.Import, ast.ImportFrom))]
-        transformer = UsageTransformer()
-        new_tree = transformer.visit(tree)
+            doc_node = tree.body[0]
 
-        # Reconstruct code
-        body_code = ast.unparse(new_tree)
+        import_line_ranges = set()
+        collector = UsageCollector()
+        for node in tree.body:
+            if node is doc_node:
+                continue
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                for ln in range(node.lineno, (node.end_lineno or node.lineno) + 1):
+                    import_line_ranges.add(ln)
+            else:
+                collector.visit(node)
 
-        # Reconstruct header
-        match_doc = reSearch(r'"""(.*?)"""', code, reMULTILINE | reDOTALL)
-        if match_doc:
-            header = code[:match_doc.end()]
-        else:
-            header = "#!/usr/bin/env python\n# coding:utf-8"
+        # Compute 1-based line/byte offsets on original code and apply span replacements bottom-up
+        line_starts = [0]
+        for idx_ch, ch in enumerate(code):
+            if ch == "\n":
+                line_starts.append(idx_ch + 1)
+
+        def _to_offset(lineno: int, col_offset: int) -> int:
+            line_text = code[line_starts[lineno - 1]: (line_starts[lineno] - 1 if lineno < len(line_starts) else len(code))]
+            # col_offset in Python AST is UTF-8 byte offset within the line
+            prefix_str = line_text.encode("utf-8")[:col_offset].decode("utf-8")
+            return line_starts[lineno - 1] + len(prefix_str)
+
+        spliced = code
+        for ln, col, end_ln, end_col, repl in sorted(collector.replacements, reverse=True):
+            start_off = _to_offset(ln, col)
+            end_off = _to_offset(end_ln, end_col)
+            spliced = spliced[:start_off] + repl + spliced[end_off:]
+
+        # Extract header (up to end of module docstring, or encoding line) and remaining body lines (excluding top-level imports)
+        spliced_lines = spliced.splitlines()
+        header_end_line = doc_node.end_lineno if doc_node is not None else 0
+        if header_end_line == 0:
+            for idx_ln, raw_ln in enumerate(spliced_lines, 1):
+                if raw_ln.strip().startswith("#!") or "coding:" in raw_ln:
+                    header_end_line = idx_ln
+                elif raw_ln.strip() == "" and header_end_line > 0:
+                    continue
+                else:
+                    break
+
+        header = "\n".join(spliced_lines[:header_end_line]) if header_end_line > 0 else "#!/usr/bin/env python\n# coding:utf-8"
+        remaining_body_lines = [
+            raw_ln
+            for idx_ln, raw_ln in enumerate(spliced_lines[header_end_line:], header_end_line + 1)
+            if idx_ln not in import_line_ranges
+        ]
+        while remaining_body_lines and remaining_body_lines[0].strip() == "":
+            remaining_body_lines.pop(0)
+        body_code = "\n".join(remaining_body_lines)
 
         # Merge grouped_from_imports that were explicitly declared with those discovered from attribute access
         merged_from = {}
         for mod_name, sym_map in grouped_from_imports.items():
             for sym_name, alias in sym_map.items():
                 # Keep if used in body or if it wasn't a typing-only unused symbol
-                if mod_name in transformer.used_from_imports and sym_name in transformer.used_from_imports[mod_name]:
+                if mod_name in collector.used_from_imports and sym_name in collector.used_from_imports[mod_name]:
                     merged_from.setdefault(mod_name, {})[sym_name] = alias
                 elif mod_name != "typing":
                     merged_from.setdefault(mod_name, {})[sym_name] = alias
-        for mod_name, sym_map in transformer.used_from_imports.items():
+        for mod_name, sym_map in collector.used_from_imports.items():
             for sym_name, alias in sym_map.items():
                 merged_from.setdefault(mod_name, {})[sym_name] = alias
 
         for mod_name in sorted(merged_from.keys()):
             sym_map = merged_from[mod_name]
-            parts = [f"{sym} as { sym_map[sym] }" for sym in sorted(sym_map.keys())]
+            parts = [f"{sym} as {sym_map[sym]}" for sym in sorted(sym_map.keys())]
             external_imports.append(f"from {mod_name} import " + ", ".join(parts))
 
-        for mod_name in sorted(transformer.unresolved_whole_modules):
+        for mod_name in sorted(collector.unresolved_whole_modules):
             external_imports.append(f"import {mod_name}")
 
         final_external = sorted(list(set(external_imports)))
@@ -397,8 +439,7 @@ class CodeTransformer:
 
         final_code = header + "\n"
         if import_lines:
-            # FORCE EXACTLY 3 BLANK LINES (4 newlines)
-            final_code += "\n".join(import_lines) + "\n\n\n\n"
+            final_code += "\n".join(import_lines) + "\n\n"
 
         final_code += body_code
         return final_code
@@ -498,79 +539,74 @@ class CodeTransformer:
     def _ensure_method_dividers(self, code: str) -> str:
         lines = code.splitlines()
         cleaned_lines = []
-        divider = "    # -----------------------------------------------------------------------------------------------"
-        
+        dashes_95 = "-" * 95
+
         idx = 0
         has_seen_code = False
         while idx < len(lines):
             line = lines[idx]
             stripped = line.strip()
-            # Detection of an existing method divider
-            if stripped.startswith("# -") or stripped.startswith("# -"):
+            indent_len = len(line) - len(line.lstrip())
+            divider_for_indent = (" " * indent_len) + f"# {dashes_95}"
+
+            # Normalize existing divider lines (25+ dashes) in place instead of deleting module-level dividers
+            if reMatch(r"^#\s*-{25,}\s*$", stripped):
+                if not cleaned_lines or not cleaned_lines[-1].strip().startswith("# ---"):
+                    cleaned_lines.append(divider_for_indent)
                 idx += 1
                 continue
-                
-            if stripped.startswith("class ") or stripped.startswith("def "):
+
+            is_def = stripped.startswith("def ") or stripped.startswith("async def ")
+            if stripped.startswith("class ") or is_def:
                 if stripped.startswith("class "):
                     has_seen_code = True
-                elif stripped.startswith("def "):
-                    if not stripped.startswith("def __init__") and cleaned_lines and has_seen_code:
-                        # If the previous line is not a divider, add it
+                elif is_def:
+                    is_init = stripped.startswith("def __init__")
+                    if not is_init and cleaned_lines and has_seen_code:
                         prev_line = cleaned_lines[-1].strip()
                         if not prev_line.startswith("# -"):
-                            # If it is an empty line, replace with the divider
                             if prev_line == "":
-                                cleaned_lines[-1] = divider
+                                prev_prev = cleaned_lines[-2].strip() if len(cleaned_lines) >= 2 else ""
+                                if not prev_prev.startswith("# -"):
+                                    cleaned_lines[-1] = divider_for_indent
                             else:
-                                cleaned_lines.append(divider)
+                                cleaned_lines.append(divider_for_indent)
                     has_seen_code = True
-                    
+
             cleaned_lines.append(line)
             idx += 1
-            
+
         return "\n".join(cleaned_lines)
 
     # -----------------------------------------------------------------------------------------------
     def _ensure_logger_formatting(self, code: str, class_name: str) -> str:
-        # Split "self.logger" strings to avoid triggering compliance checks on this class!
-        prefix = "self." + "logger."
-        
-        for level in ["info", "warning", "error", "critical"]:
-            # Replace f-strings in logger calls
-            # with standardized structure using format and self.Name.
-            pattern_f = r'self\.' + r'logger\.' + level + r'\(f"(.*?)"\)'
-            
-            def replace_f(m):
-                content = m.group(1)
-                # Extract variables in braces
-                vars_in_content = reSearch(r"\{(.*?)\}", content)
-                if vars_in_content:
-                    # Transform f-string to format
-                    cleaned_content = content
-                    args = ["self.Name"]
-                    idx = 1
-                    for match_var in reSearch(r"\{(.*?)\}", content).re.finditer(content):
-                        var_expr = match_var.group(1)
-                        cleaned_content = cleaned_content.replace(f"{{{var_expr}}}", f"{{{idx}}}")
-                        args.append(var_expr)
-                        idx += 1
-                    args_str = ", ".join(args)
-                    return "self." + "logger." + level + f'("{{0}} : {cleaned_content}".format({args_str}))'
-                return "self." + "logger." + level + f'("{{0}} : {content}".format(self.Name))'
-                
+        """
+        Standardizes self.logger.<level>(...) calls onto canonical f-strings:
+        `self.logger.<level>(f"{self.Name} : {msg}")`, preserving already-prefixed calls.
+        """
+        for level in ("debug", "info", "warning", "error", "critical"):
+            pattern_f = r"self\.logger\." + level + r'\(f(["\'])(.*?)\1\)'
+
+            def replace_f(m, lvl=level):
+                quote_ch = m.group(1)
+                content = m.group(2)
+                if content.startswith("{self.Name}") or "{self.Name} :" in content:
+                    return m.group(0)
+                return f"self.logger.{lvl}(f{quote_ch}{{self.Name}} : {content}{quote_ch})"
+
             code = reSub(pattern_f, replace_f, code)
-            
-            # Replace simple strings
-            pattern_s = r'self\.' + r'logger\.' + level + r'\("(.*?)"\)'
-            
-            def replace_s(m):
-                content = m.group(1)
-                if ".format(self.Name" in content or "{0}" in content:
-                    return m.group(0) # Already compliant
-                return "self." + "logger." + level + f'("{{0}} : {content}".format(self.Name))'
-                
+
+            pattern_s = r"self\.logger\." + level + r'\((["\'])([^{}"\']*?)\1\)'
+
+            def replace_s(m, lvl=level):
+                quote_ch = m.group(1)
+                content = m.group(2)
+                if content.startswith(f"{class_name} :") or " : " in content[:40]:
+                    return m.group(0)
+                return f"self.logger.{lvl}(f{quote_ch}{{self.Name}} : {content}{quote_ch})"
+
             code = reSub(pattern_s, replace_s, code)
-            
+
         return code
 
     # -----------------------------------------------------------------------------------------------

@@ -154,7 +154,7 @@ class TestScaffoldUnits(unittest.TestCase):
         self.assertTrue(main_py.exists(), "main.py must exist")
         main_content = main_py.read_text(encoding="utf-8")
         self.assertIn("microservice_toolbox.config.loader", main_content)
-        self.assertIn(f'UniLog(app_name="{name}"', main_content)
+        self.assertIn(f'unilogUniLog(app_name="{name}"', main_content)
         self.assertIn("build_service_contracts", main_content)
 
         contracts_py = self.test_dir / "src/rest/contracts.py"
@@ -266,12 +266,36 @@ class TestScaffoldUnits(unittest.TestCase):
         generate_common_files(self.test_dir, name, lang="rust", port=9030, desc="Rust Desc", dry_run=False)
 
         dockerfile = (self.test_dir / "Dockerfile").read_text(encoding="utf-8")
-        self.assertIn("FROM rust:1.80-alpine AS builder", dockerfile)
+        self.assertIn("FROM rust:1.91-alpine AS builder", dockerfile)
         self.assertIn("FROM alpine:3.20", dockerfile)
 
         makefile = (self.test_dir / "Makefile").read_text(encoding="utf-8")
         self.assertIn("cargo build --release", makefile)
         self.assertIn("cargo test", makefile)
+
+    def test_all_scaffolded_languages_pass_strict_compliance_auditor(self):
+        """Golden Scaffolder Gate: every scaffolded language must pass ComplianceAuditor strict checks with 0 violations."""
+        from src.auditing.validate_compliance import ComplianceAuditor
+
+        auditor = ComplianceAuditor(workspace_root=self.test_dir)
+        generators = {
+            "go": generate_go_scaffold,
+            "rust": generate_rust_scaffold,
+            "python": generate_python_scaffold,
+            "cpp": generate_cpp_scaffold,
+        }
+        for idx, (lang, gen_fn) in enumerate(generators.items()):
+            svc_name = f"golden-{lang}-svc"
+            svc_dir = self.test_dir / svc_name
+            port = 18200 + idx
+            gen_fn(svc_dir, svc_name, port, f"Golden {lang} service", dry_run=False)
+            generate_common_files(svc_dir, svc_name, lang=lang, port=port, desc=f"Golden {lang} service", dry_run=False)
+            violations = auditor.audit_path(svc_dir, strict_imports=True, strict_lean=True)
+            self.assertEqual(
+                violations,
+                [],
+                f"Golden {lang} scaffold failed strict compliance audit:\n{auditor.format_report(violations)}",
+            )
 
     def test_generate_bdd_spec(self):
         """Verify BDD spec note creation with frontmatter and Gherkin scenarios."""

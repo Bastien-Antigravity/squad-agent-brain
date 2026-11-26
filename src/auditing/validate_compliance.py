@@ -66,25 +66,76 @@ from typing import (
 
 # -----------------------------------------------------------------------------
 
-CANONICAL_PORTS = {
+_FALLBACK_BASE_PORTS: typeDict[str, str] = {
     "3306": "config_server (TCP)",
     "3307": "config_server (gRPC)",
     "3308": "config_server (REST)",
     "9020": "log_server (SafeSocket TCP)",
+    "9021": "log_server (gRPC)",
     "1026": "notif_server (TCP)",
     "1027": "notif_server (gRPC)",
     "1029": "notif_server (REST)",
     "1863": "tele_remote (gRPC)",
     "5000": "web_interface (HTTP)",
     "8001": "web_interface (gRPC)",
+    "9090": "watchdog_agent (TCP)",
     "9095": "watchdog_agent (HTTP)",
     "4222": "nats_server (Core)",
+    "8222": "nats_server (HTTP)",
     "5432": "timescale_db (PostgreSQL)",
+    "8085": "squad_agent (REST)",
+    "8087": "squad_agent (gRPC)",
+    "8185": "squad_agent (Satellite REST)",
+    "8187": "squad_agent (Satellite gRPC)",
     "8090": "rag_engine (MCP SSE)",
     "8091": "rag_engine (gRPC)",
     "8093": "rag_engine (REST)",
     "8082": "rag_engine (Dashboard)",
+    "9000": "rag_engine (Vector DB)",
 }
+
+
+def load_canonical_ports_from_ssot(workspace_root: typeOptional[Path] = None) -> typeDict[str, str]:
+    """
+    Loads canonical base fleet ports dynamically from the SSoT config file
+    (docker-deployment/modes/local/config/native.yaml) at cold startup, falling back
+    to _FALLBACK_BASE_PORTS only in standalone single-repo CI checkouts where
+    docker-deployment is not checked out.
+    """
+    ports = dict(_FALLBACK_BASE_PORTS)
+    ws_root = workspace_root or Path(__file__).resolve().parents[4]
+    native_yaml = ws_root / "docker-deployment" / "modes" / "local" / "config" / "native.yaml"
+    if not native_yaml.is_file():
+        return ports
+
+    current_cap = "fleet"
+    in_capabilities = False
+    for raw_line in native_yaml.read_text(encoding="utf-8").splitlines():
+        if raw_line.startswith("capabilities:"):
+            in_capabilities = True
+            continue
+        if in_capabilities and raw_line and not raw_line.startswith(" "):
+            in_capabilities = False
+            continue
+        if not in_capabilities:
+            continue
+
+        cap_match = reMatch(r"^    ([a-zA-Z0-9_]+):\s*$", raw_line)
+        if cap_match:
+            current_cap = cap_match.group(1)
+            continue
+
+        port_match = reSearch(
+            r"^\s+([a-z0-9_]*port)\s*:\s*[\"']?\$\{[A-Z0-9_]+:(\d+)\}",
+            raw_line,
+        )
+        if port_match:
+            port_key, port_val = port_match.group(1), port_match.group(2)
+            ports.setdefault(port_val, f"{current_cap} ({port_key})")
+    return ports
+
+
+CANONICAL_PORTS: typeDict[str, str] = load_canonical_ports_from_ssot()
 
 EXCLUDED_DIRS = {
     ".git", ".venv", "venv", "node_modules", "target", "bin",
@@ -225,6 +276,16 @@ class ComplianceAuditor:
                                 "message": (
                                     f"Unaliased import '{alias.name}' from '{mod_name}'. "
                                     f"Use Bastien camelCase aliasing: 'from {mod_name} import {alias.name} as {expected_alias}'."
+                                ),
+                            })
+                        elif "_" in alias.asname or not alias.asname[0].islower() or not any(ch.isupper() for ch in alias.asname):
+                            violations.append({
+                                "file": str(file_path),
+                                "line": node.lineno,
+                                "rule": "PYTHON_UNALIASED_IMPORT",
+                                "message": (
+                                    f"Non-camelCase alias '{alias.asname}' for '{alias.name}' from '{mod_name}'. "
+                                    f"Use Bastien camelCase aliasing (e.g., 'as {expected_alias}')."
                                 ),
                             })
 
@@ -1186,10 +1247,11 @@ class ComplianceAuditor:
             # 3. Dynamic Port Invariant: Flag hardcoded canonical ports in production code
             if not line_is_test:
                 for port_num, port_desc in CANONICAL_PORTS.items():
-                    # Look for :port or "port" string literals in networking contexts
+                    # Look for :port", :port/, or "port" string literals in networking contexts
                     port_patterns = [
                         f':{port_num}"',
-                        f':{port_num}\'',
+                        f":{port_num}'",
+                        f":{port_num}/",
                         f'"{port_num}"',
                         f"'{port_num}'",
                     ]
@@ -1221,7 +1283,9 @@ class ComplianceAuditor:
                         "rule": "PRODUCTION_MOCK_POLLUTION",
                         "message": "Fallback 'decrypt == nil' detected in production code. Standard runtime guarantees non-nil decrypt function via appConfig."
                     })
-                if ext == ".go" and stripped == 'import "testing"':
+
+            if not line_is_test:
+                if ext == ".go" and (stripped == 'import "testing"' or stripped == '"testing"'):
                     violations.append({
                         "file": str(file_path),
                         "line": idx,
@@ -1246,6 +1310,7 @@ class ComplianceAuditor:
                     "archive.py", "scenario_orchestrator.py", "terminal_ui.rs"
                 }
                 allow_print = (
+                    is_library_repo or
                     filename in cli_presenters or
                     "docker-deployment" in file_path.parts or
                     "04-Mock-Provider" in file_path.parts or
@@ -1305,7 +1370,7 @@ class ComplianceAuditor:
                         })
 
                 # 6. Legacy Path Climbing Invariant: No manual sys.path manipulation in service code
-                if ext == ".py" and filename not in ("bootstrap.py", "validate_compliance.py"):
+                if not is_library_repo and ext == ".py" and filename not in ("bootstrap.py", "validate_compliance.py"):
                     if any(p in line for p in ("sys.path.insert(0, str(_src_dir))", "sys.path.insert(0, str(_project_dir))", "_src_dir = _self_dir.parent", "_self_dir = Path(__file__).resolve().parent")):
                         violations.append({
                             "file": str(file_path),
@@ -1315,8 +1380,8 @@ class ComplianceAuditor:
                         })
 
                 # 7. SSoT Configuration Invariant: No direct YAML parsing of standalone.yaml
-                if "standalone.yaml" in line or "native.yaml" in line:
-                    if any(p in line for p in ("yaml.safe_load", "yaml.load", "yaml.Unmarshal")):
+                if not is_library_repo and ("standalone.yaml" in line or "native.yaml" in line):
+                    if any(p in line for p in ("yaml.safe_load", "yaml.load", "yamlSafeLoad", "yamlLoad", "yaml.Unmarshal")):
                         violations.append({
                             "file": str(file_path),
                             "line": idx,
@@ -1325,7 +1390,8 @@ class ComplianceAuditor:
                         })
 
                 # 8. Dynamic Versioning Invariant: No ad-hoc directory crawling for VERSION.txt
-                if filename not in ("fleet_version.py", "preflight_check.py"):
+                is_toolbox_version_ssot = "microservice-toolbox" in file_path.parts and "version" in file_path.parts
+                if not is_toolbox_version_ssot and filename not in ("fleet_version.py", "preflight_check.py"):
                     if "VERSION.txt" in line and any(p in line for p in ("while ", "parents", "[]string", '.parent / "VERSION.txt"')):
                         violations.append({
                             "file": str(file_path),
@@ -1513,7 +1579,7 @@ class ComplianceAuditor:
 
     # -----------------------------------------------------------------------------------------------
 
-    def audit_staged(self) -> typeList[typeDict[str, typeAny]]:
+    def audit_staged(self, strict_imports: bool = False, strict_lean: bool = False) -> typeList[typeDict[str, typeAny]]:
         """Audits git staged files in the current repository / workspace."""
         all_violations = []
         try:
@@ -1525,7 +1591,7 @@ class ComplianceAuditor:
             for sf in staged_files:
                 p = Path(sf).resolve()
                 if p.is_file():
-                    all_violations.extend(self.audit_file(p))
+                    all_violations.extend(self.audit_file(p, strict_imports=strict_imports, strict_lean=strict_lean))
         except Exception as e:
             all_violations.append({
                 "file": "git",
@@ -1577,7 +1643,7 @@ def main():
             print(f"🔧 Cleaned local replace directives from {fixed_go_mods} go.mod file(s).\n")
 
     if args.staged:
-        violations = auditor.audit_staged()
+        violations = auditor.audit_staged(strict_imports=args.strict_imports, strict_lean=args.strict_lean)
     else:
         target = Path(args.path).resolve()
         violations = auditor.audit_path(target, strict_imports=args.strict_imports, strict_lean=args.strict_lean)

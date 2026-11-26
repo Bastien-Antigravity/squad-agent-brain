@@ -51,7 +51,7 @@ _ALLOWED_FLEET_MODES = frozenset({"local", "docker"})
 def scaffold_microservice(
     name: str,
     lang: str = "go",
-    port: int = 8090,
+    port: int = 8190,
     layer: str = "L3",
     brain: str = "",
     dest: str = "",
@@ -92,6 +92,13 @@ class DeveloperAgent(BaseAgent):
         "03-Developer/Squad/Excel-VBA-Specialist.md",
     ]
 
+    LANG_SPECIALIST_MAP = {
+        "go": "03-Developer/Squad/Go-Systems-Specialist.md",
+        "python": "03-Developer/Squad/Python-Integration-Specialist.md",
+        "rust": "03-Developer/Squad/Rust-Safety-Specialist.md",
+        "cpp": "03-Developer/Squad/CPP-Low-Latency-Specialist.md",
+    }
+
     def __init__(
         self,
         *,
@@ -123,6 +130,33 @@ class DeveloperAgent(BaseAgent):
 
     # -----------------------------------------------------------------------------------------------
 
+    def _load_system_prompt(self) -> str:
+        """Scopes specialist prompts dynamically when task_context specifies a target language."""
+        ctx = getattr(self, "current_task_context", None)
+        if type(ctx) is not dict:
+            return super()._load_system_prompt()
+
+        build_spec = ctx.get("build_spec") if type(ctx.get("build_spec")) is dict else {}
+        lang = str(ctx.get("lang") or build_spec.get("lang") or "").strip().lower()
+        primary_spec = self.LANG_SPECIALIST_MAP.get(lang)
+        if not primary_spec:
+            return super()._load_system_prompt()
+
+        scoped_extras = [primary_spec]
+        if ctx.get("expose_openmfe", build_spec.get("expose_openmfe", True)):
+            scoped_extras.append("03-Developer/Squad/Web-UI-Specialist.md")
+        if ctx.get("use_timescale", build_spec.get("use_timescale", False)):
+            scoped_extras.append("03-Developer/Squad/Timescale-Data-Specialist.md")
+
+        prev_extras = self.extra_prompt_files
+        self.extra_prompt_files = scoped_extras
+        try:
+            return super()._load_system_prompt()
+        finally:
+            self.extra_prompt_files = prev_extras
+
+    # -----------------------------------------------------------------------------------------------
+
     async def execute_tool(self, name: str, args: typeDict[str, typeAny]) -> str:
         """Executes DeveloperAgent tools, delegating standard workspace/RAG tools to BaseAgent."""
         if self.read_only and name == "scaffold_microservice":
@@ -145,11 +179,11 @@ class DeveloperAgent(BaseAgent):
             return f"Error: Unsupported layer '{layer}'. Allowed: {sorted(_ALLOWED_LAYERS)}."
 
         try:
-            port = int(args.get("port", 8090))
+            port = int(args.get("port", 0))
         except (TypeError, ValueError):
-            return "Error: 'port' must be an integer between 1 and 65535."
-        if port < 1 or port > 65535:
-            return "Error: 'port' must be between 1 and 65535."
+            return "Error: 'port' must be an integer (0 for auto-allocation or 1..65535)."
+        if port < 0 or port > 65535:
+            return "Error: 'port' must be 0 (auto-allocate) or between 1 and 65535."
 
         ctx = self.current_task_context or {}
         fleet_mode = str(args.get("fleet_mode") or ctx.get("fleet_mode") or "local").strip().lower()
@@ -158,6 +192,12 @@ class DeveloperAgent(BaseAgent):
 
         brain_arg = str(args.get("brain") or ctx.get("target_vault_path") or "").strip()
         active_ws = self._resolve_active_workspace_root()
+        if port == 0:
+            from src.models.build_spec import allocate_domain_port
+            extra_scan = [active_ws]
+            if brain_arg:
+                extra_scan.append(pathPath(brain_arg))
+            port = allocate_domain_port(workspace_root=self.workspace_root, extra_paths=extra_scan)
         central_vault, central_ws = resolve_vault_and_workspace(__file__)
         central_ws_resolved = central_ws.resolve()
 

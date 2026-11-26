@@ -25,8 +25,9 @@ KEY PARAMETERS:
 
 from ast import AsyncFunctionDef as astAsyncFunctionDef, FunctionDef as astFunctionDef, parse as astParse, walk as astWalk
 from asyncio import get_running_loop as asyncioGetRunningLoop, sleep as asyncioSleep, to_thread as asyncioToThread
+from contextvars import ContextVar as ctxContextVar
 from json import dumps as jsonDumps
-from os import environ as osEnviron, getenv as osGetenv, walk as osWalk
+from os import environ as osEnviron, fsync as osFsync, getenv as osGetenv, walk as osWalk
 from pathlib import Path as pathPath
 from re import findall as reFindall, search as reSearch, split as reSplit, sub as reSub
 from shlex import split as shlexSplit
@@ -122,6 +123,23 @@ _LIST_EXCLUDED_DIRS = frozenset({
 })
 
 _MAX_LISTED_FILES = 500
+_MAX_TOOL_OUTPUT_CHARS = 64000
+_SCRUBBED_SUBPROCESS_SECRETS = frozenset({
+    "GEMINI_API_KEY",
+    "GITHUB_TOKEN",
+    "GHCR_TOKEN",
+    "DISCORD_BOT_TOKEN",
+    "LLM_API_KEY",
+})
+_AUDITED_FILENAMES = frozenset({
+    "go.mod",
+    "cargo.toml",
+    "pyproject.toml",
+    "dockerfile",
+})
+_AUDITED_EXTENSIONS = frozenset({
+    ".py", ".go", ".rs", ".cpp", ".c", ".cc", ".h", ".hpp", ".js", ".html", ".capnp", ".proto",
+})
 
 # -----------------------------------------------------------------------------------------------
 
@@ -487,8 +505,12 @@ class BaseAgent:
         self.domain_workspace_root: typeOptional[pathPath] = (
             pathPath(domain_workspace_root).resolve() if domain_workspace_root else None
         )
-        self.current_source_brain: typeOptional[str] = None
-        self.current_task_context: typeOptional[typeDict[str, typeAny]] = None
+        self._ctx_source_brain: ctxContextVar[typeOptional[str]] = ctxContextVar(
+            f"{self.Name}_{self.role_name}_source_brain", default=None
+        )
+        self._ctx_task_context: ctxContextVar[typeOptional[typeDict[str, typeAny]]] = ctxContextVar(
+            f"{self.Name}_{self.role_name}_task_context", default=None
+        )
 
         # Resolve target_brain_id (explicit kwarg > AppConfig > env > obsidian-brain)
         if isinstance(target_brain_id, str) and target_brain_id.strip():
@@ -552,6 +574,26 @@ class BaseAgent:
                 write_workspace_file,
                 execute_shell_command,
             ]
+
+    # -----------------------------------------------------------------------------------------------
+
+    @property
+    def current_source_brain(self) -> typeOptional[str]:
+        """Task-isolated active source brain identifier (race-free across concurrent async turns)."""
+        return self._ctx_source_brain.get()
+
+    @current_source_brain.setter
+    def current_source_brain(self, value: typeOptional[str]) -> None:
+        self._ctx_source_brain.set(value)
+
+    @property
+    def current_task_context(self) -> typeOptional[typeDict[str, typeAny]]:
+        """Task-isolated active cross-brain context dictionary (race-free across concurrent async turns)."""
+        return self._ctx_task_context.get()
+
+    @current_task_context.setter
+    def current_task_context(self, value: typeOptional[typeDict[str, typeAny]]) -> None:
+        self._ctx_task_context.set(value)
 
     # -----------------------------------------------------------------------------------------------
 
@@ -845,18 +887,22 @@ class BaseAgent:
         lower_content = content.lower()
         is_addressed = f"@{self.role_name}" in lower_content or f":{self.role_name}" in lower_content
 
-        # Safeguard: Orchestrator coordinates on user input, or on bounded task_context handoffs (hops < 3)
-        if is_orchestrator and sender != "user":
-            if not task_context:
-                return
-            try:
-                hops = int(task_context.get("handoff_hops", 0))
-            except (TypeError, ValueError):
-                return
-            if hops >= 3:
-                return
-            if "@" in lower_content and not is_addressed:
-                return
+        # Safeguard: Orchestrator coordinates on untagged/@orchestrator user input, or bounded task_context handoffs (hops < 3)
+        if is_orchestrator:
+            if sender == "user":
+                if "@" in lower_content and not is_addressed:
+                    return
+            else:
+                if not task_context:
+                    return
+                try:
+                    hops = int(task_context.get("handoff_hops", 0))
+                except (TypeError, ValueError):
+                    return
+                if hops >= 3:
+                    return
+                if "@" in lower_content and not is_addressed:
+                    return
 
         if not is_orchestrator and not is_addressed:
             return
@@ -1166,6 +1212,8 @@ class BaseAgent:
                 extra_dir = pathPath(extra_dir_raw).resolve()
                 if extra_dir in candidate.parents and candidate != extra_dir:
                     return True
+            if (candidate / "standalone.yaml").is_file() and (candidate / "AGENTS.md").is_file():
+                return True
             return False
 
         if candidate == pathPath.home().resolve():
@@ -1205,6 +1253,26 @@ class BaseAgent:
 
     # -----------------------------------------------------------------------------------------------
 
+    def _resolve_guarded_workspace_root(self) -> pathPath:
+        """Resolves active workspace root for tool calls, failing fast if explicit target_workspace_path is invalid."""
+        ctx = self.current_task_context or {}
+        raw_target_ws = ctx.get("target_workspace_path")
+        if isinstance(raw_target_ws, str) and raw_target_ws.strip():
+            central_vault_root, central_workspace_root = resolve_vault_and_workspace(__file__)
+            candidate = pathPath(raw_target_ws.strip()).resolve()
+            if not self._is_valid_domain_workspace(
+                candidate=candidate,
+                central_vault_root=central_vault_root.resolve(),
+                central_workspace_root=central_workspace_root.resolve(),
+            ):
+                raise PermissionError(
+                    f"Fail-Fast Workspace Guard — target_workspace_path '{raw_target_ws}' is invalid or unregistered."
+                )
+            return candidate
+        return self._resolve_active_workspace_root()
+
+    # -----------------------------------------------------------------------------------------------
+
     def _validate_mutation_target(
         self,
         *,
@@ -1215,6 +1283,21 @@ class BaseAgent:
         cleaned_rel = (path_arg or "").strip()
         if not cleaned_rel:
             return None, "Error: Non-empty relative file 'path' is required."
+
+        ctx = self.current_task_context or {}
+        raw_target_ws = ctx.get("target_workspace_path")
+        if isinstance(raw_target_ws, str) and raw_target_ws.strip():
+            central_vault_root, central_workspace_root = resolve_vault_and_workspace(__file__)
+            candidate_ws = pathPath(raw_target_ws.strip()).resolve()
+            if not self._is_valid_domain_workspace(
+                candidate=candidate_ws,
+                central_vault_root=central_vault_root.resolve(),
+                central_workspace_root=central_workspace_root.resolve(),
+            ):
+                return (
+                    None,
+                    f"Error: Fail-Fast Workspace Guard — target_workspace_path '{raw_target_ws}' is invalid or unregistered; refusing to mutate central workspace.",
+                )
 
         lexical_target = active_workspace_root / cleaned_rel
         if self.worktree_sandbox_mode and lexical_target.is_symlink():
@@ -1250,9 +1333,35 @@ class BaseAgent:
 
     # -----------------------------------------------------------------------------------------------
 
+    def _write_atomic_synced(self, *, file_path: pathPath, content: str) -> None:
+        """Atomically persists file contents via .tmp write + fsync + os.replace with guaranteed cleanup."""
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = file_path.parent / f".{file_path.name}.squad.tmp"
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as handle:
+                handle.write(content)
+                handle.flush()
+                osFsync(handle.fileno())
+            tmp_path.replace(file_path)
+        except Exception:
+            try:
+                if tmp_path.exists():
+                    tmp_path.unlink()
+            except OSError:
+                pass
+            raise
+
+    # -----------------------------------------------------------------------------------------------
+
     def _audit_written_file(self, *, file_path: pathPath, path_arg: str, action_label: str) -> str:
-        """Runs ComplianceAuditor on newly written/edited source files and formats feedback."""
-        if file_path.suffix.lower() in (".py", ".go", ".rs", ".cpp", ".h", ".hpp"):
+        """Runs ComplianceAuditor on newly written/edited source and manifest files and formats feedback."""
+        fname_lower = file_path.name.lower()
+        should_audit = (
+            file_path.suffix.lower() in _AUDITED_EXTENSIONS
+            or fname_lower in _AUDITED_FILENAMES
+            or (fname_lower.startswith("requirements") and fname_lower.endswith(".txt"))
+        )
+        if should_audit:
             try:
                 _, central_workspace_root = resolve_vault_and_workspace(__file__)
                 from src.auditing.validate_compliance import ComplianceAuditor
@@ -1369,7 +1478,10 @@ class BaseAgent:
 
         elif name == "list_workspace_files":
             path_arg = str(args.get("path", ".") or ".").strip()
-            active_workspace_root = self._resolve_active_workspace_root()
+            try:
+                active_workspace_root = self._resolve_guarded_workspace_root()
+            except PermissionError as guard_err:
+                return f"Error: {guard_err}"
             target_path = (active_workspace_root / path_arg).resolve()
 
             try:
@@ -1407,7 +1519,10 @@ class BaseAgent:
         elif name == "read_workspace_file":
             path_arg = args.get("path", "")
             fold_bodies_arg = args.get("fold_bodies", False)
-            active_workspace_root = self._resolve_active_workspace_root()
+            try:
+                active_workspace_root = self._resolve_guarded_workspace_root()
+            except PermissionError as guard_err:
+                return f"Error: {guard_err}"
             file_path = (active_workspace_root / path_arg).resolve()
 
             try:
@@ -1423,6 +1538,8 @@ class BaseAgent:
                         content = _fold_python_code(content)
                     elif ext in ("js", "ts", "go", "rs", "cpp", "h", "hpp", "cc"):
                         content = _fold_generic_code(content)
+                if len(content) > _MAX_TOOL_OUTPUT_CHARS:
+                    content = content[:_MAX_TOOL_OUTPUT_CHARS] + "\n... [truncated at 64KB]"
                 return content
             except Exception as e:
                 return f"Error reading file {path_arg}: {e}"
@@ -1439,7 +1556,10 @@ class BaseAgent:
                     f"placeholders ('... folded ...'). Re-read the file with fold_bodies=False first."
                 )
 
-            active_workspace_root = self._resolve_active_workspace_root()
+            try:
+                active_workspace_root = self._resolve_guarded_workspace_root()
+            except PermissionError as guard_err:
+                return f"Error: {guard_err}"
             file_path, rel_or_err = self._validate_mutation_target(
                 path_arg=path_arg,
                 active_workspace_root=active_workspace_root,
@@ -1458,10 +1578,8 @@ class BaseAgent:
                 return f"Error: Target block not found in {path_arg}. Read the exact file lines before editing."
 
             updated_content = existing_content.replace(target_arg, replacement_arg)
-            tmp_path = file_path.parent / f".{file_path.name}.squad.tmp"
             try:
-                tmp_path.write_text(updated_content, encoding="utf-8")
-                tmp_path.replace(file_path)
+                self._write_atomic_synced(file_path=file_path, content=updated_content)
                 self.mutated_files.add(rel_or_err)
                 return self._audit_written_file(file_path=file_path, path_arg=path_arg, action_label="editing")
             except Exception as exc:
@@ -1475,7 +1593,10 @@ class BaseAgent:
                     f"Error: Refusing to write {path_arg} because content contains folded-body "
                     f"placeholders ('... folded ...'). Re-read the file with fold_bodies=False first."
                 )
-            active_workspace_root = self._resolve_active_workspace_root()
+            try:
+                active_workspace_root = self._resolve_guarded_workspace_root()
+            except PermissionError as guard_err:
+                return f"Error: {guard_err}"
             file_path, rel_or_err = self._validate_mutation_target(
                 path_arg=path_arg,
                 active_workspace_root=active_workspace_root,
@@ -1484,10 +1605,7 @@ class BaseAgent:
                 return rel_or_err
 
             try:
-                file_path.parent.mkdir(parents=True, exist_ok=True)
-                tmp_path = file_path.parent / f".{file_path.name}.squad.tmp"
-                tmp_path.write_text(content_arg, encoding="utf-8")
-                tmp_path.replace(file_path)
+                self._write_atomic_synced(file_path=file_path, content=content_arg)
                 self.mutated_files.add(rel_or_err)
                 return self._audit_written_file(file_path=file_path, path_arg=path_arg, action_label="writing to")
             except Exception as e:
@@ -1495,20 +1613,29 @@ class BaseAgent:
 
         elif name == "execute_shell_command":
             cmd_arg = str(args.get("command", ""))
-            active_workspace_root = self._resolve_active_workspace_root()
+            try:
+                active_workspace_root = self._resolve_guarded_workspace_root()
+            except PermissionError as guard_err:
+                return f"Error: {guard_err}"
             if self.worktree_sandbox_mode:
                 return await self._execute_sandboxed_command(
                     cmd_arg=cmd_arg,
                     active_workspace_root=active_workspace_root,
                 )
 
+            if "$(" in cmd_arg or "`" in cmd_arg:
+                return "Error: Command substitution ($() or backticks) is prohibited for safety."
+
             blocked_commands = [
                 "rm", "rmdir", "chmod", "chown", "sudo", "su", "curl", "wget",
-                "scp", "ssh", "sftp", "ftp", "/etc/", "/var/", "mv", "dd",
-                "mkfs", "tftp",
+                "scp", "ssh", "sftp", "ftp", "/etc/", "/var/", "/system/", "mv", "dd",
+                "mkfs", "tftp", "kill", "pkill", "killall", "shutdown", "reboot",
             ]
             cleaned_cmd = cmd_arg.lower().replace("'", "").replace('"', "").replace("\\", "")
-            cmd_parts = reSplit(r"[;&|`\n\r]", cleaned_cmd)
+            if "git reset --hard" in cleaned_cmd or "git clean" in cleaned_cmd or "git push --force" in cleaned_cmd:
+                return "Error: Destructive git history/working-tree commands are prohibited."
+
+            cmd_parts = reSplit(r"[;&|\n\r]", cleaned_cmd)
             for part in cmd_parts:
                 part_strip = part.strip()
                 for kw in blocked_commands:
@@ -1519,6 +1646,14 @@ class BaseAgent:
                         if reSearch(r"\b" + kw + r"\b", part_strip):
                             return f"Error: Command execution blocked for safety. Command '{kw}' is prohibited."
 
+            scrubbed_env = {
+                k: v for k, v in osEnviron.items() if k not in _SCRUBBED_SUBPROCESS_SECRETS
+            }
+            ctx = self.current_task_context or {}
+            mission_id = str(ctx.get("mission_id") or "").strip()
+            if mission_id:
+                scrubbed_env["X_BASTIEN_MISSION_ID"] = mission_id
+
             try:
                 proc = await asyncioToThread(
                     subprocessRun,
@@ -1527,9 +1662,12 @@ class BaseAgent:
                     capture_output=True,
                     text=True,
                     cwd=str(active_workspace_root),
+                    env=scrubbed_env,
                     timeout=30,
                 )
-                return f"Stdout:\n{proc.stdout}\nStderr:\n{proc.stderr}\nExit Code: {proc.returncode}"
+                out = proc.stdout[:_MAX_TOOL_OUTPUT_CHARS]
+                err_out = proc.stderr[:_MAX_TOOL_OUTPUT_CHARS]
+                return f"Stdout:\n{out}\nStderr:\n{err_out}\nExit Code: {proc.returncode}"
             except subprocessTimeoutExpired:
                 return "Error: Command execution timed out after 30 seconds."
             except Exception as e:
@@ -1682,6 +1820,10 @@ class BaseAgent:
                     )
                 conn.commit()
             except Exception as e:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
                 self.logger.error(f"{self.Name} : Failed to insert squad_chat_logs: {e}")
             finally:
                 self.pool.putconn(conn)

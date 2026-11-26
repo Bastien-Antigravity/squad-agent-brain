@@ -182,7 +182,7 @@ class LocalEventBus:
                 else:
                     targets.append(f"{topic}.agent.{tag_clean}")
                 
-            if sender == "user" and "orchestrator" not in [t.split(":")[-1].lower() for t in tags]:
+            if sender == "user" and not tags:
                 targets.append(f"{topic}.agent.orchestrator")
                 
             if not targets:
