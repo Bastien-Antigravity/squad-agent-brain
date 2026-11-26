@@ -24,7 +24,21 @@ from os import environ as osEnviron, symlink as osSymlink
 from os.path import relpath as osPathRelpath
 from pathlib import Path as pathPath
 from re import DOTALL as reDotAll, findall as reFindall, search as reSearch, sub as reSub
-from typing import List as typeList, Optional as typeOptional, Set as typeSet
+from typing import Any as typeAny, List as typeList, Optional as typeOptional, Set as typeSet
+
+# -----------------------------------------------------------------------------------------------
+
+_logger: typeAny = None
+
+
+def _get_logger() -> typeAny:
+    """Lazily resolves the 08-Squad-Agent UniLog singleton from src.bootstrap."""
+    global _logger
+    if _logger is None:
+        import src.bootstrap as bootstrap
+        _logger = bootstrap.logger
+    return _logger
+
 
 # -----------------------------------------------------------------------------------------------
 
@@ -71,24 +85,24 @@ def resolve_workspace_root() -> pathPath:
 def create_file(path: pathPath, content: str, dry_run: bool = False) -> None:
     """Creates a file with parent directory creation, respecting dry-run mode."""
     if dry_run:
-        print(f"  [DRY-RUN] Would create file: {path}")
+        _get_logger().info(f"Scaffolder : [DRY-RUN] Would create file: {path}")
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
-    print(f"  ✅ Created: {path}")
+    _get_logger().info(f"Scaffolder : ✅ Created: {path}")
 # -----------------------------------------------------------------------------------------------
 
 def create_symlink(target_path: pathPath, link_target: str, dry_run: bool = False) -> None:
     """Creates a symbolic link, respecting dry-run mode."""
     if dry_run:
-        print(f"  [DRY-RUN] Would symlink: {target_path} -> {link_target}")
+        _get_logger().info(f"Scaffolder : [DRY-RUN] Would symlink: {target_path} -> {link_target}")
         return
     target_path.parent.mkdir(parents=True, exist_ok=True)
     if target_path.is_symlink() or target_path.exists():
         target_path.unlink()
     osSymlink(link_target, target_path)
-    print(f"  🔗 Symlinked: {target_path} -> {link_target}")
+    _get_logger().info(f"Scaffolder : 🔗 Symlinked: {target_path} -> {link_target}")
 # -----------------------------------------------------------------------------------------------
 
 def _is_core_workspace(target_dir: pathPath, workspace_root: pathPath) -> bool:
@@ -125,9 +139,9 @@ def _register_in_go_work(workspace_root: pathPath, target_dir: pathPath) -> None
                 new_lines.append(line)
             if inserted:
                 go_work_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
-                print(f"  🔗 Registered in {go_work_path.name}: {entry}")
+                _get_logger().info(f"Scaffolder : 🔗 Registered in {go_work_path.name}: {entry}")
     except Exception as e:
-        print(f"  ⚠️ Warning: Could not register in go.work: {e}")
+        _get_logger().warning(f"Scaffolder : Could not register in go.work: {e}")
 # -----------------------------------------------------------------------------------------------
 
 def _discover_rust_library_crates(workspace_root: pathPath) -> typeList[str]:
@@ -176,7 +190,7 @@ def _register_in_cargo_config(workspace_root: pathPath, target_dir: pathPath) ->
             if target_rel not in discovered:
                 discovered.append(target_rel)
     except (OSError, ValueError) as exc:
-        print(f"  ⚠️ Warning: Skipping target crate path resolution for .cargo/config.toml: {exc}")
+        _get_logger().warning(f"Scaffolder : Skipping target crate path resolution for .cargo/config.toml: {exc}")
 
     existing_paths: typeList[str] = []
     existing_content = ""
@@ -187,7 +201,7 @@ def _register_in_cargo_config(workspace_root: pathPath, target_dir: pathPath) ->
             if paths_match:
                 existing_paths = reFindall(r'["\']([^"\']+)["\']', paths_match.group(1))
         except Exception as e:
-            print(f"  ⚠️ Warning: Could not read .cargo/config.toml: {e}")
+            _get_logger().warning(f"Scaffolder : Could not read .cargo/config.toml: {e}")
             return
     elif not discovered:
         return
@@ -231,9 +245,9 @@ def _register_in_cargo_config(workspace_root: pathPath, target_dir: pathPath) ->
 
         cargo_config_path.parent.mkdir(parents=True, exist_ok=True)
         cargo_config_path.write_text(updated_content, encoding="utf-8")
-        print(f"  🔗 Registered local Rust crates in .cargo/config.toml ({len(merged_paths)} path(s))")
+        _get_logger().info(f"Scaffolder : 🔗 Registered local Rust crates in .cargo/config.toml ({len(merged_paths)} path(s))")
     except Exception as e:
-        print(f"  ⚠️ Warning: Could not update .cargo/config.toml: {e}")
+        _get_logger().warning(f"Scaffolder : Could not update .cargo/config.toml: {e}")
 # -----------------------------------------------------------------------------------------------
 
 def _is_external_domain_workspace(brain_dir: pathPath, workspace_root: pathPath) -> bool:
@@ -1275,7 +1289,7 @@ def register_sandbox_service(
     env_port_key = f"{name.upper().replace('-', '_')}_PORT"
 
     if dry_run:
-        print(f"  [DRY-RUN] Would register capability '{cap_name}' (port {port}) in {standalone_path}")
+        _get_logger().info(f"Scaffolder : [DRY-RUN] Would register capability '{cap_name}' (port {port}) in {standalone_path}")
         return
 
     if f"    {cap_name}:" not in raw_yaml:
@@ -1289,14 +1303,14 @@ def register_sandbox_service(
         else:
             raw_yaml = raw_yaml.rstrip() + f"\n\ncapabilities:\n{cap_snippet}"
         standalone_path.write_text(raw_yaml, encoding="utf-8")
-        print(f"  ✅ Registered capability '{cap_name}' (port {port}) in {standalone_path}")
+        _get_logger().info(f"Scaffolder : ✅ Registered capability '{cap_name}' (port {port}) in {standalone_path}")
 
     repo_ctrl = brain_dir / "05-Fleet-Operation" / "00-Repo-Control"
     inv_file = repo_ctrl / "inventory.json"
     try:
         inv_raw = inv_file.read_text(encoding="utf-8")
     except (FileNotFoundError, OSError) as exc:
-        print(f"  ℹ️ Sandbox inventory not updated ({exc})")
+        _get_logger().info(f"Scaffolder : Sandbox inventory not updated ({exc})")
         inv_raw = ""
 
     if inv_raw:
@@ -1320,13 +1334,13 @@ def register_sandbox_service(
                     })
                     inv_file.write_text(jsonDumps(inv_data, indent=2) + "\n", encoding="utf-8")
         except Exception as e:
-            print(f"  ⚠️ Sandbox inventory update skipped: {e}")
+            _get_logger().warning(f"Scaffolder : Sandbox inventory update skipped: {e}")
 
     reg_file = repo_ctrl / "service-registry.json"
     try:
         reg_raw = reg_file.read_text(encoding="utf-8")
     except (FileNotFoundError, OSError) as exc:
-        print(f"  ℹ️ Sandbox service-registry not updated ({exc})")
+        _get_logger().info(f"Scaffolder : Sandbox service-registry not updated ({exc})")
         reg_raw = ""
 
     if reg_raw:
@@ -1345,4 +1359,4 @@ def register_sandbox_service(
                 })
                 reg_file.write_text(jsonDumps(reg_data, indent=2) + "\n", encoding="utf-8")
         except Exception as e:
-            print(f"  ⚠️ Sandbox service-registry update skipped: {e}")
+            _get_logger().warning(f"Scaffolder : Sandbox service-registry update skipped: {e}")
